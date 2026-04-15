@@ -36,7 +36,13 @@ const FIREBASE_REQUIRED_FIELDS = ['apiKey', 'authDomain', 'projectId', 'storageB
 const FIREBASE_CONFIGURED = FIREBASE_REQUIRED_FIELDS.every((field) => Boolean(FIREBASE_WEB_CONFIG[field]));
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim() || 'gemini-2.5-flash';
 const GEMINI_ALLOWED_RESPONSE_MIME_TYPES = new Set(['application/json', 'text/plain']);
-const GEMINI_ALLOWED_CONFIG_KEYS = new Set(['maxOutputTokens', 'temperature', 'topP', 'responseMimeType']);
+const GEMINI_ALLOWED_CONFIG_KEYS = new Set([
+  'maxOutputTokens',
+  'temperature',
+  'topP',
+  'responseMimeType',
+  'responseSchema',
+]);
 const AI_ACTIONS = new Set(['roadmap', 'tasks', 'task_audit', 'goals_review', 'note_process', 'chat']);
 const ACTION_MAX_OUTPUT_TOKENS = {
   roadmap: 2200,
@@ -291,6 +297,37 @@ function safePayloadForLogs(payload) {
   };
 }
 
+function sanitizeResponseSchemaNode(node) {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) {
+    return undefined;
+  }
+
+  const safeType = typeof node.type === 'string' ? node.type : 'object';
+
+  if (safeType === 'array') {
+    const safeItems = sanitizeResponseSchemaNode(node.items);
+    return safeItems
+      ? { type: 'array', items: safeItems }
+      : { type: 'array', items: { type: 'string' } };
+  }
+
+  if (safeType === 'object') {
+    const sourceProperties = node.properties && typeof node.properties === 'object' && !Array.isArray(node.properties)
+      ? node.properties
+      : {};
+    const safeProperties = {};
+
+    Object.entries(sourceProperties).forEach(([key, value]) => {
+      const sanitized = sanitizeResponseSchemaNode(value);
+      safeProperties[key] = sanitized || { type: 'string' };
+    });
+
+    return { type: 'object', properties: safeProperties };
+  }
+
+  return { type: safeType };
+}
+
 function sanitizeGenerationConfig({ opts, action, effectiveMaxTokens }) {
   const generationConfig = {
     maxOutputTokens: effectiveMaxTokens,
@@ -307,7 +344,7 @@ function sanitizeGenerationConfig({ opts, action, effectiveMaxTokens }) {
     generationConfig.topP = Math.min(1, Math.max(0, opts.topP));
   }
 
-  if (typeof opts.responseMimeType === 'string' && opts.responseMimeType.length <= 120) {
+  if (action !== 'roadmap' && typeof opts.responseMimeType === 'string' && opts.responseMimeType.length <= 120) {
     if (GEMINI_ALLOWED_RESPONSE_MIME_TYPES.has(opts.responseMimeType)) {
       generationConfig.responseMimeType = opts.responseMimeType;
     } else {
@@ -315,8 +352,14 @@ function sanitizeGenerationConfig({ opts, action, effectiveMaxTokens }) {
     }
   }
 
-  if (opts.responseSchema || opts.responseJsonSchema) {
-    warnings.push('response schema config dropped for stability');
+  const responseSchema = opts.responseSchema || opts.responseJsonSchema;
+  if (
+    action !== 'roadmap'
+    && responseSchema
+    && typeof responseSchema === 'object'
+    && !Array.isArray(responseSchema)
+  ) {
+    generationConfig.responseSchema = sanitizeResponseSchemaNode(responseSchema);
   }
 
   return { generationConfig, warnings };
@@ -355,6 +398,16 @@ function validateGeminiRequestPayload({ model, fullPrompt, generationConfig, act
   }
   if (generationConfig.responseMimeType !== undefined && !GEMINI_ALLOWED_RESPONSE_MIME_TYPES.has(generationConfig.responseMimeType)) {
     errors.push('generationConfig.responseMimeType is invalid');
+  }
+  if (
+    generationConfig.responseSchema !== undefined
+    && (
+      typeof generationConfig.responseSchema !== 'object'
+      || generationConfig.responseSchema === null
+      || Array.isArray(generationConfig.responseSchema)
+    )
+  ) {
+    errors.push('generationConfig.responseSchema must be an object');
   }
   return { valid: errors.length === 0, errors };
 }
