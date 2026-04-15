@@ -39,8 +39,8 @@ const GEMINI_ALLOWED_RESPONSE_MIME_TYPES = new Set(['application/json', 'text/pl
 const GEMINI_ALLOWED_CONFIG_KEYS = new Set(['maxOutputTokens', 'temperature', 'topP', 'responseMimeType']);
 const AI_ACTIONS = new Set(['roadmap', 'tasks', 'task_audit', 'goals_review', 'note_process', 'chat']);
 const ACTION_MAX_OUTPUT_TOKENS = {
-  roadmap: 1400,
-  tasks: 900,
+  roadmap: 2200,
+  tasks: 1200,
   task_audit: 700,
   goals_review: 500,
   note_process: 700,
@@ -100,6 +100,77 @@ const roadmapInFlightByFingerprint = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function stripCodeFences(raw) {
+  return String(raw || '').replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+}
+
+function extractJsonChunk(raw) {
+  const text = stripCodeFences(raw);
+  const start = [text.indexOf('['), text.indexOf('{')].filter((i) => i >= 0).sort((a, b) => a - b)[0];
+  if (start === undefined) return '';
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{' || ch === '[') depth += 1;
+    if (ch === '}' || ch === ']') depth -= 1;
+    if (depth === 0) return text.slice(start, i + 1);
+  }
+  return text.slice(start);
+}
+
+function repairTruncatedJsonCandidate(raw) {
+  let text = String(raw || '').trim();
+  if (!text) return '';
+  let inString = false;
+  let escaped = false;
+  const stack = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{' || ch === '[') { stack.push(ch); continue; }
+    if (ch === '}' || ch === ']') {
+      const top = stack[stack.length - 1];
+      if ((ch === '}' && top === '{') || (ch === ']' && top === '[')) stack.pop();
+    }
+  }
+  if (inString) text += '"';
+  while (stack.length) {
+    const open = stack.pop();
+    text += open === '{' ? '}' : ']';
+  }
+  return text.replace(/,\s*([}\]])/g, '$1');
+}
+
+function parseJsonWithRepair(raw) {
+  const variants = [stripCodeFences(raw), extractJsonChunk(raw)].filter(Boolean);
+  const repaired = variants.map((v) => repairTruncatedJsonCandidate(v)).filter(Boolean);
+  const all = [...variants, ...repaired];
+  for (const candidate of all) {
+    try {
+      JSON.parse(candidate);
+      return { usable: true, repairedText: candidate };
+    } catch (_err) {
+      // no-op
+    }
+  }
+  return { usable: false, repairedText: '' };
 }
 
 function classifyFailure({ timedOut, parseFailed, upstreamStatus, upstreamErrorCode, finishReason }) {
@@ -201,11 +272,14 @@ function safePayloadForLogs(payload) {
   const cfg = payload?.generationConfig && typeof payload.generationConfig === 'object'
     ? payload.generationConfig
     : {};
+  const promptPreview = text.length <= 700
+    ? text
+    : `${text.slice(0, 500)}\n...[truncated for logs]...\n${text.slice(-180)}`;
   return {
     contentsCount: Array.isArray(payload?.contents) ? payload.contents.length : 0,
     contentRoles: Array.isArray(payload?.contents) ? payload.contents.map((item) => String(item?.role || '')) : [],
     promptChars: text.length,
-    promptPreview: text.slice(0, 200),
+    promptPreview,
     generationConfig: {
       maxOutputTokens: Number.isFinite(cfg.maxOutputTokens) ? cfg.maxOutputTokens : null,
       temperature: Number.isFinite(cfg.temperature) ? cfg.temperature : null,
@@ -268,10 +342,10 @@ function validateGeminiRequestPayload({ model, fullPrompt, generationConfig, act
     errors.push('generationConfig.maxOutputTokens must be an integer');
   } else if (generationConfig.maxOutputTokens < 1 || generationConfig.maxOutputTokens > 8192) {
     errors.push('generationConfig.maxOutputTokens out of range');
-  } else if (action === 'roadmap' && (generationConfig.maxOutputTokens < 900 || generationConfig.maxOutputTokens > 1400)) {
-    errors.push('roadmap maxOutputTokens must be 900-1400');
-  } else if (action === 'tasks' && (generationConfig.maxOutputTokens < 600 || generationConfig.maxOutputTokens > 900)) {
-    errors.push('tasks maxOutputTokens must be 600-900');
+  } else if (action === 'roadmap' && (generationConfig.maxOutputTokens < 1200 || generationConfig.maxOutputTokens > 2200)) {
+    errors.push('roadmap maxOutputTokens must be 1200-2200');
+  } else if (action === 'tasks' && (generationConfig.maxOutputTokens < 400 || generationConfig.maxOutputTokens > 1200)) {
+    errors.push('tasks maxOutputTokens must be 400-1200');
   }
   if (generationConfig.temperature !== undefined && (!Number.isFinite(generationConfig.temperature) || generationConfig.temperature < 0 || generationConfig.temperature > 2)) {
     errors.push('generationConfig.temperature must be 0-2');
@@ -399,6 +473,18 @@ function logGeminiRequest(fields) {
     logInfo(payload);
     return;
   }
+  if (
+    fields?.logType === 'truncated_response_detected' ||
+    fields?.logType === 'truncated_response_usable' ||
+    fields?.logType === 'truncated_response_invalid'
+  ) {
+    if (fields?.logType === 'truncated_response_invalid') {
+      logWarn(payload);
+      return;
+    }
+    logInfo(payload);
+    return;
+  }
   logInfo(payload);
 }
 
@@ -478,6 +564,12 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
     baseLog.action = safeAction || 'chat';
     baseLog.logType = 'request_received';
     const clientRequestId = String(opts?.clientRequestId || '').trim().slice(0, 120);
+    const contextFields = Array.isArray(opts?.contextFields)
+      ? opts.contextFields.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 24)
+      : [];
+    const missingContextFields = Array.isArray(opts?.missingContextFields)
+      ? opts.missingContextFields.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 24)
+      : [];
     const userId = String(opts?.userId || req.get('x-user-id') || '').trim().slice(0, 120);
     Object.assign(
       baseLog,
@@ -513,9 +605,9 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
 
     const requestedMaxTokens = Math.min(8192, Math.max(1, Math.floor(maxTokens)));
     const normalizedRequestedMaxTokens = safeAction === 'roadmap'
-      ? Math.min(1400, Math.max(900, requestedMaxTokens))
+      ? Math.min(2200, Math.max(1200, requestedMaxTokens))
       : safeAction === 'tasks'
-        ? Math.min(900, Math.max(600, requestedMaxTokens))
+        ? Math.min(1200, Math.max(400, requestedMaxTokens))
         : requestedMaxTokens;
     const actionCap = ACTION_MAX_OUTPUT_TOKENS[safeAction] || ACTION_MAX_OUTPUT_TOKENS.chat;
     const effectiveMaxTokens = Math.min(normalizedRequestedMaxTokens, actionCap);
@@ -527,7 +619,11 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
     baseLog.promptChars = promptChars;
     baseLog.systemChars = systemChars;
     baseLog.totalChars = totalChars;
-    baseLog.promptPreview = trimmedCtx.prompt.slice(0, 200);
+    baseLog.promptPreview = trimmedCtx.prompt.length <= 700
+      ? trimmedCtx.prompt
+      : `${trimmedCtx.prompt.slice(0, 500)}\n...[truncated for logs]...\n${trimmedCtx.prompt.slice(-180)}`;
+    baseLog.contextFields = contextFields;
+    baseLog.missingContextFields = missingContextFields;
     baseLog.approxInputTokens = approxInputTokens(totalChars);
     baseLog.requestedMaxTokens = requestedMaxTokens;
     baseLog.effectiveMaxTokens = effectiveMaxTokens;
@@ -655,6 +751,66 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
         }
         const result = await callGemini({ model: GEMINI_MODEL, fullPrompt, generationConfig });
         if (result.success && String(result.text || '').trim()) {
+          if (result.finishReason === 'MAX_TOKENS') {
+            logGeminiRequest({
+              ...baseLog,
+              logType: 'truncated_response_detected',
+              upstreamStatus: result.upstreamStatus,
+              upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
+              finishReason: result.finishReason || '',
+              attempt: providerAttempt,
+              chainAttempt: attemptIndex + 1,
+              retryAttempt: retryIndex,
+              latencyMs: Date.now() - attemptStartedAt,
+            });
+            const repaired = parseJsonWithRepair(result.text || '');
+            if (repaired.usable) {
+              logGeminiRequest({
+                ...baseLog,
+                logType: 'truncated_response_usable',
+                upstreamStatus: result.upstreamStatus,
+                upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
+                finishReason: result.finishReason || '',
+                attempt: providerAttempt,
+                chainAttempt: attemptIndex + 1,
+                retryAttempt: retryIndex,
+                latencyMs: Date.now() - attemptStartedAt,
+              });
+              baseLog.logType = 'success';
+              baseLog.upstreamStatus = result.upstreamStatus;
+              baseLog.upstreamErrorCode = result.upstreamErrorCode;
+              baseLog.finishReason = result.finishReason;
+              baseLog.latencyMs = Date.now() - startedAt;
+              baseLog.attempt = providerAttempt;
+              baseLog.chainAttempt = attemptIndex + 1;
+              baseLog.retryAttempt = retryIndex;
+              lastRetryAttempt = retryIndex;
+              logGeminiRequest(baseLog);
+              return res.json({
+                text: repaired.repairedText || result.text || '',
+                finishReason: result.finishReason || '',
+                requestId,
+                status: 'degraded_success',
+                degraded: true,
+                truncated: true,
+              });
+            }
+            logGeminiRequest({
+              ...baseLog,
+              logType: 'truncated_response_invalid',
+              upstreamStatus: result.upstreamStatus,
+              upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
+              finishReason: result.finishReason || '',
+              attempt: providerAttempt,
+              chainAttempt: attemptIndex + 1,
+              retryAttempt: retryIndex,
+              latencyMs: Date.now() - attemptStartedAt,
+            });
+            const failure = classifyFailure(result);
+            lastFailure = { ...result, ...failure };
+            lastRetryAttempt = retryIndex;
+            break;
+          }
           baseLog.logType = 'success';
           baseLog.upstreamStatus = result.upstreamStatus;
           baseLog.upstreamErrorCode = result.upstreamErrorCode;

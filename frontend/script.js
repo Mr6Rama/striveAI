@@ -325,44 +325,308 @@ function parseJSON(raw,opts={}){
   console.warn('Gemini JSON parse failed',raw,lastErr);
   throw new Error('Модель вернула повреждённый JSON. Попробуй ещё раз.');
 }
-const ROADMAP_PHASE_TITLES=Object.freeze(['MVP build','Launch + feedback','Traction push']);
 const ROADMAP_MIN_STAGES=2;
 const ROADMAP_MAX_STAGES=4;
+const ROADMAP_DEFAULT_MAX_TOKENS = 2000;
+const TASKS_DEFAULT_MAX_TOKENS = 1000;
+const ROADMAP_SKELETON_MAX_TOKENS = 1600;
+const ACTIVE_STAGE_ENRICH_MAX_TOKENS = 180;
+const MVP_STAGE_DETAILS_DEFAULTS=Object.freeze({
+  whyThisStageMatters:'This stage moves the project toward the current goal.',
+  completionCriteria:[
+    'All stage tasks are completed',
+    'There is a visible milestone outcome'
+  ],
+  executionFocus:'Focus only on actions that advance this milestone.'
+});
+function buildFallbackStageTitle(index,goal=''){
+  const safeGoal=clipText(goal,48);
+  if(safeGoal){
+    const prefixes=['Foundation for','Execution for','Scale for','Optimization for'];
+    const prefix=prefixes[index]||`Stage ${index+1} for`;
+    return clipText(`${prefix} ${safeGoal}`,80);
+  }
+  return `Stage ${index+1}`;
+}
 function summarizeRoadmapStagesForLog(stages=[]){
   return (Array.isArray(stages)?stages:[]).map((stage,index)=>({
     stageIndex:index,
     title:clipText(stage?.title||'',80),
     objective:clipText(stage?.objective||'',140),
     outcome:clipText(stage?.outcome||extractOutcomeFromObjective(stage?.objective||''),120),
+    reasoning:clipText(stage?.reasoning||'',160),
     status:String(stage?.status||'')
   }));
 }
+function applyMvpStageDetailsDefaults(stage){
+  if(!stage||typeof stage!=='object') return stage;
+  const why=clipText(stage.whyThisStageMatters||stage.reasoning||'',220);
+  const criteria=normalizeCompletionCriteria(stage.completionCriteria||stage.completion_criteria||[],stage.objective||'');
+  const focus=clipText(stage.executionFocus||stage.execution_focus||'',160);
+  stage.whyThisStageMatters=why||MVP_STAGE_DETAILS_DEFAULTS.whyThisStageMatters;
+  stage.reasoning=clipText(stage.reasoning||stage.whyThisStageMatters||'',220)||MVP_STAGE_DETAILS_DEFAULTS.whyThisStageMatters;
+  stage.completionCriteria=criteria.length
+    ? criteria.slice(0,4)
+    : [...MVP_STAGE_DETAILS_DEFAULTS.completionCriteria];
+  stage.executionFocus=focus||MVP_STAGE_DETAILS_DEFAULTS.executionFocus;
+  return stage;
+}
+function logRoadmapPipelineEvent(action,meta={}){
+  const stages=getExecutionStages();
+  const fallbackStageCount=Array.isArray(S.roadmap)?S.roadmap.length:0;
+  const activeIndex=Number.isFinite(Number(meta.activeStageIndex))
+    ? Number(meta.activeStageIndex)
+    : (stages.length?getExecutionActiveStageIndex():0);
+  const activeStage=Number.isFinite(activeIndex)&&stages.length?getExecutionStage(activeIndex):null;
+  const payload={
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'roadmap_pipeline',
+    action,
+    requestId:String(meta.requestId||''),
+    stageCount:Number.isFinite(Number(meta.stageCount))?Number(meta.stageCount):(stages.length||fallbackStageCount),
+    activeStageId:String(meta.activeStageId||activeStage?.id||''),
+    activeStageIndex:Number.isFinite(Number(activeIndex))?Number(activeIndex):0,
+    promptChars:Number.isFinite(Number(meta.promptChars))?Number(meta.promptChars):0,
+    requestedMaxTokens:Number.isFinite(Number(meta.requestedMaxTokens))?Number(meta.requestedMaxTokens):0,
+    finishReason:String(meta.finishReason||''),
+    contextFields:Array.isArray(meta.contextFields)?meta.contextFields:undefined,
+    taskCount:Number.isFinite(Number(meta.taskCount))?Number(meta.taskCount):undefined,
+    errorMessage:meta.errorMessage?String(meta.errorMessage):undefined
+  };
+  const warnActions=new Set([
+    'roadmap_skeleton_parse_failed',
+    'active_stage_enrichment_failed'
+  ]);
+  if(warnActions.has(action)) logWarn(payload);
+  else logInfo(payload);
+}
 function parseObjectiveOutcome(rawObjective='',rawOutcome=''){
-  const objectiveText=clipText(rawObjective,220);
-  const outcomeText=clipText(rawOutcome,180);
-  let objective=objectiveText;
-  let outcome=outcomeText;
-  if(objectiveText.includes('|')){
-    const parts=objectiveText.split('|').map((part)=>part.trim()).filter(Boolean);
-    parts.forEach((part)=>{
-      const lower=part.toLowerCase();
-      if(lower.startsWith('objective:')){
-        objective=clipText(part.replace(/objective:/i,''),180);
-      }else if(lower.startsWith('outcome:')){
-        outcome=clipText(part.replace(/outcome:/i,''),140);
-      }else if(!objective){
-        objective=clipText(part,180);
-      }else if(!outcome){
-        outcome=clipText(part,140);
-      }
-    });
-  }else{
-    if(/^objective:/i.test(objectiveText)) objective=clipText(objectiveText.replace(/objective:/i,''),180);
-    if(/^outcome:/i.test(objectiveText)&&!outcome) outcome=clipText(objectiveText.replace(/outcome:/i,''),140);
+  const objectiveText=String(rawObjective||'').replace(/\s+/g,' ').trim();
+  const outcomeText=String(rawOutcome||'').replace(/\s+/g,' ').trim();
+  let objective='';
+  let outcome='';
+  const combined=[objectiveText,outcomeText].filter(Boolean).join(' | ');
+  const normalizedCombined=combined
+    .replace(/objective:\s*objective:/gi,'objective:')
+    .replace(/outcome:\s*outcome:/gi,'outcome:')
+    .trim();
+  const objectiveMatch=normalizedCombined.match(/objective:\s*([^|]+?)(?=\s*\|\s*outcome:|$)/i);
+  const outcomeMatch=normalizedCombined.match(/outcome:\s*([^|]+?)(?=\s*\|\s*objective:|$)/i);
+  if(objectiveMatch&&objectiveMatch[1]) objective=clipText(objectiveMatch[1],180);
+  if(outcomeMatch&&outcomeMatch[1]) outcome=clipText(outcomeMatch[1],140);
+  if(!objective){
+    const splitOnOutcome=normalizedCombined.split(/\|\s*outcome:/i)[0];
+    objective=clipText(splitOnOutcome.replace(/^objective:/i,''),180);
   }
-  if(!objective) objective=clipText(objectiveText||'достичь ключевого результата этапа',180);
+  if(!outcome){
+    const splitOnObjective=normalizedCombined.split(/\|\s*objective:/i);
+    const tail=splitOnObjective.length>1?splitOnObjective[splitOnObjective.length-1]:'';
+    outcome=clipText(tail.replace(/^outcome:/i,''),140);
+  }
+  if(!objective) objective='достичь ключевого результата этапа';
   if(!outcome) outcome=clipText(outcomeText||extractOutcomeFromObjective(objective),140);
   return {objective,outcome};
+}
+function dedupeTextSegments(value,max=180){
+  const raw=String(value||'').replace(/\s+/g,' ').trim();
+  if(!raw) return '';
+  const parts=raw
+    .split('|')
+    .map((part)=>part.replace(/^(objective|outcome)\s*:/i,'').trim())
+    .filter(Boolean);
+  const unique=[];
+  parts.forEach((part)=>{
+    const normalized=part.toLowerCase();
+    if(!unique.some((candidate)=>candidate.toLowerCase()===normalized)) unique.push(part);
+  });
+  const joined=unique.length?unique.join(' | '):raw;
+  return clipText(joined,max);
+}
+function splitUniqueSegments(value,maxLen=120){
+  const cleaned=String(value||'')
+    .replace(/\s+/g,' ')
+    .replace(/\s*\|\s*/g,'|')
+    .trim();
+  if(!cleaned) return [];
+  const parts=cleaned
+    .split('|')
+    .map((part)=>part.replace(/^(objective|outcome)\s*:/i,'').trim())
+    .filter(Boolean);
+  const unique=[];
+  parts.forEach((part)=>{
+    const normalized=part.toLowerCase();
+    if(!unique.some((item)=>item.toLowerCase()===normalized)){
+      unique.push(clipText(part,maxLen));
+    }
+  });
+  return unique;
+}
+function normalizeStageForEnrichment(stageLike={},fallbackIndex=0){
+  const rawTitle=clipText(stageLike?.title||`Stage ${fallbackIndex+1}`,80)||`Stage ${fallbackIndex+1}`;
+  const objectiveSource=dedupeTextSegments(stageLike?.objective||'',220);
+  const outcomeSource=dedupeTextSegments(stageLike?.outcome||'',180);
+  const objectiveSegments=splitUniqueSegments(objectiveSource,160);
+  const outcomeSegments=splitUniqueSegments(outcomeSource,140);
+
+  // Prefer a single crisp objective segment; avoid carrying concatenated objective|outcome blobs.
+  let objective=clipText(objectiveSegments[0]||'',180);
+  if(!objective){
+    const parsed=parseObjectiveOutcome(objectiveSource,outcomeSource);
+    objective=clipText(parsed.objective||'',180);
+  }
+  objective=objective.replace(/\|\s*.*$/,'').replace(/^objective\s*:/i,'').trim();
+
+  // Outcome: first outcome segment different from objective, else fallback to secondary objective segment.
+  let outcome='';
+  for(const segment of outcomeSegments){
+    if(segment.toLowerCase()!==objective.toLowerCase()){
+      outcome=segment;
+      break;
+    }
+  }
+  if(!outcome&&objectiveSegments.length>1){
+    outcome=objectiveSegments.find((segment)=>segment.toLowerCase()!==objective.toLowerCase())||'';
+  }
+  if(!outcome){
+    const parsed=parseObjectiveOutcome(objectiveSource,outcomeSource);
+    outcome=clipText(parsed.outcome||'',140);
+  }
+  if(outcome&&/[|]/.test(outcome)){
+    outcome=splitUniqueSegments(outcome,140)[0]||outcome;
+  }
+  if(!outcome) outcome=clipText(extractOutcomeFromObjective(objective),140);
+  if(!objective) objective='достичь измеримого прогресса по текущему этапу';
+  if(outcome.toLowerCase()===objective.toLowerCase()){
+    outcome=clipText(extractOutcomeFromObjective(objective),140);
+  }
+  outcome=outcome.replace(/\|\s*.*$/,'').replace(/^outcome\s*:/i,'').trim();
+  return {
+    title:clipText(rawTitle,80),
+    objective:clipText(objective,180),
+    outcome:clipText(outcome,140)
+  };
+}
+function sanitizeStageForEnrichment(stageLike={},fallbackIndex=0){
+  return normalizeStageForEnrichment(stageLike,fallbackIndex);
+}
+function fallbackEnrichmentPayload(){
+  return {
+    why_this_stage_matters:'Этот этап нужен, чтобы создать измеримый прогресс по текущей цели и подтвердить реальный спрос.',
+    completion_criteria:[
+      'Все ключевые задачи этапа завершены',
+      'Есть измеримый результат по milestone'
+    ],
+    execution_focus:'Сконцентрироваться только на действиях, которые двигают текущий этап.'
+  };
+}
+function normalizeEnrichmentPayload(raw={},fallback={}){
+  const base={...fallbackEnrichmentPayload(),...(fallback||{})};
+  const why=clipText(raw?.why_this_stage_matters||raw?.whyThisStageMatters||base.why_this_stage_matters,220);
+  const criteria=normalizeCompletionCriteria(raw?.completion_criteria||raw?.completionCriteria||base.completion_criteria,why);
+  const focus=clipText(raw?.execution_focus||raw?.executionFocus||base.execution_focus,160);
+  return {
+    why_this_stage_matters:why||base.why_this_stage_matters,
+    completion_criteria:criteria.length?criteria:base.completion_criteria,
+    execution_focus:focus||base.execution_focus
+  };
+}
+function tryExtractJsonStringField(raw,key,maxLen=220){
+  const text=String(raw||'');
+  if(!text) return '';
+  const strict=new RegExp(`"${key}"\\s*:\\s*"([\\s\\S]*?)"(?=\\s*,\\s*"|\\s*\\}|$)`,'i');
+  const loose=new RegExp(`"${key}"\\s*:\\s*"([\\s\\S]{1,500})`,'i');
+  const strictMatch=text.match(strict);
+  const looseMatch=text.match(loose);
+  const candidate=(strictMatch&&strictMatch[1])||(looseMatch&&looseMatch[1])||'';
+  if(!candidate) return '';
+  const cleaned=candidate
+    .replace(/\\n/g,' ')
+    .replace(/\\"/g,'"')
+    .replace(/"\s*,?\s*$/,'')
+    .replace(/}\s*$/,'')
+    .replace(/\s+/g,' ')
+    .trim();
+  return clipText(cleaned,maxLen);
+}
+function tryExtractJsonArrayField(raw,key,maxItems=4,maxLen=100){
+  const text=String(raw||'');
+  if(!text) return [];
+  const match=text.match(new RegExp(`"${key}"\\s*:\\s*\\[([\\s\\S]*?)\\]`,'i'));
+  if(!match||!match[1]) return [];
+  const chunk=match[1];
+  const items=[];
+  const regex=/"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+  let current;
+  while((current=regex.exec(chunk))!==null){
+    const value=clipText(String(current[1]||'').replace(/\\n/g,' ').replace(/\\"/g,'"').trim(),maxLen);
+    if(value) items.push(value);
+    if(items.length>=maxItems) break;
+  }
+  return items;
+}
+function salvageEnrichmentFromRaw(raw){
+  const why=tryExtractJsonStringField(raw,'why_this_stage_matters',220);
+  const focus=tryExtractJsonStringField(raw,'execution_focus',160);
+  const criteria=tryExtractJsonArrayField(raw,'completion_criteria',4,100);
+  const hasAny=Boolean(why||focus||criteria.length);
+  if(!hasAny) return null;
+  return {
+    why_this_stage_matters:why,
+    completion_criteria:criteria,
+    execution_focus:focus
+  };
+}
+function hasEnrichmentSignal(payload){
+  if(!payload||typeof payload!=='object'||Array.isArray(payload)) return false;
+  const why=clipText(payload?.why_this_stage_matters||payload?.whyThisStageMatters||'',220);
+  const focus=clipText(payload?.execution_focus||payload?.executionFocus||'',160);
+  const criteria=normalizeCompletionCriteria(payload?.completion_criteria||payload?.completionCriteria||[],why);
+  return Boolean(why||focus||criteria.length);
+}
+function normalizeEnrichmentResponsePayload(response){
+  let parsed=null;
+  let salvaged=null;
+  try{
+    parsed=parseJSON(response.text,{allowPartial:response.finishReason==='MAX_TOKENS'});
+  }catch(_parseError){
+    salvaged=salvageEnrichmentFromRaw(response.text);
+  }
+  if(!salvaged&&response.finishReason==='MAX_TOKENS'){
+    salvaged=salvageEnrichmentFromRaw(response.text);
+  }
+  const parsedObject=(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))?parsed:{};
+  const salvagedObject=(salvaged&&typeof salvaged==='object'&&!Array.isArray(salvaged))?salvaged:{};
+  const mergedPayload={...parsedObject,...salvagedObject};
+  const signalPresent=hasEnrichmentSignal(mergedPayload);
+  return {
+    normalized:normalizeEnrichmentPayload(signalPresent?mergedPayload:{},fallbackEnrichmentPayload()),
+    usedFallback:!signalPresent||response.finishReason==='MAX_TOKENS',
+    usedSalvage:hasEnrichmentSignal(salvagedObject),
+    fallbackReason:response.finishReason==='MAX_TOKENS'?'finish_reason_max_tokens':'fallback_payload_used'
+  };
+}
+function logEnrichmentFallbackContinuation(meta){
+  logRoadmapPipelineEvent('active_stage_enrichment_fallback_used',{
+    requestId:meta.requestId||'',
+    stageCount:getExecutionStages().length,
+    activeStageId:meta.activeStageId||'',
+    activeStageIndex:meta.activeStageIndex,
+    promptChars:meta.promptChars||0,
+    requestedMaxTokens:meta.requestedMaxTokens||0,
+    finishReason:meta.finishReason||'',
+    errorMessage:meta.errorMessage||undefined
+  });
+  logRoadmapPipelineEvent('active_stage_enrichment_failed_but_pipeline_continues',{
+    requestId:meta.requestId||'',
+    stageCount:getExecutionStages().length,
+    activeStageId:meta.activeStageId||'',
+    activeStageIndex:meta.activeStageIndex,
+    promptChars:meta.promptChars||0,
+    requestedMaxTokens:meta.requestedMaxTokens||0,
+    finishReason:meta.finishReason||'',
+    errorMessage:meta.errorMessage||undefined
+  });
 }
 function formatObjectiveOutcome(objective='',outcome=''){
   return `objective: ${clipText(objective,180)} | outcome: ${clipText(outcome,140)}`;
@@ -372,12 +636,19 @@ function splitObjectiveOutcomeText(value=''){
   return parsed;
 }
 function getStageObjectiveText(stageLike){
+  const direct=clipText(stageLike?.objective||'',180);
+  if(direct&&!/objective:|outcome:/i.test(direct)) return direct;
   const parsed=splitObjectiveOutcomeText(stageLike?.objective||'');
-  return clipText(parsed.objective||stageLike?.objective||'',180);
+  return clipText(parsed.objective||direct,180);
 }
 function getStageOutcomeText(stageLike){
+  const direct=clipText(stageLike?.outcome||'',140);
+  if(direct) return direct;
   const parsed=splitObjectiveOutcomeText(stageLike?.objective||'');
-  return clipText(stageLike?.outcome||parsed.outcome||'',140);
+  return clipText(parsed.outcome||'',140);
+}
+function getStageReasoningText(stageLike){
+  return clipText(stageLike?.whyThisStageMatters||stageLike?.reasoning||stageLike?.why||'',220);
 }
 function getRoadmapWindowDays(deadline){
   if(!deadline) return 10;
@@ -433,32 +704,38 @@ function tasksToDays(tasks,totalDays,duration='2-3ч'){
   }));
 }
 function fallbackRoadmapForMvp(){
-  const project=clipText((S?.user?.project||S?.user?.idea||''),70)||'MVP стартап';
-  const goal=clipText((S?.user?.goal||''),70)||'запуск продукта';
+  const project=clipText((S?.user?.project||S?.user?.idea||''),70)||'проект';
+  const goal=clipText((S?.user?.goal||''),70)||'ключевой цели';
   const horizon=getRoadmapWindowDays(S?.user?.deadline);
   const activeTasks=[
     `запустить лендинг ${project} и собрать 20 регистраций`,
     'провести 5 интервью и зафиксировать 3 ключевые боли',
-    'выпустить MVP v1 и закрыть 10 критичных сценариев',
+    'выпустить рабочую версию и закрыть 10 критичных сценариев',
     'получить 1 платящего пользователя или LOI'
   ];
   return [
     {
       week:1,
-      title:ROADMAP_PHASE_TITLES[0],
-      objective:`objective: ${goal} | outcome: MVP + 20 лидов за ${horizon} дней`,
+      title:buildFallbackStageTitle(0,goal),
+      objective:goal,
+      outcome:`MVP + 20 лидов за ${horizon} дней`,
+      reasoning:'Создаёт стартовую базу исполнения: проверка спроса и первый измеримый сигнал.',
       days:tasksToDays(activeTasks,horizon,'2-4ч')
     },
     {
       week:2,
-      title:ROADMAP_PHASE_TITLES[1],
-      objective:'objective: запуск беты | outcome: 15 ответов фидбэка и 3 улучшения',
+      title:buildFallbackStageTitle(1,goal),
+      objective:'запуск беты',
+      outcome:'15 ответов фидбэка и 3 улучшения',
+      reasoning:'Переводит гипотезы из планирования в реальные пользовательские реакции.',
       days:[{day:'W2',task:'открыть бета-доступ и собрать 15 ответов от пользователей',duration:'focus'}]
     },
     {
       week:3,
-      title:ROADMAP_PHASE_TITLES[2],
-      objective:'objective: масштабировать приток | outcome: 5 платящих пользователей',
+      title:buildFallbackStageTitle(2,goal),
+      objective:'масштабировать приток',
+      outcome:'5 платящих пользователей',
+      reasoning:'Показывает, что продукт можно конвертировать в устойчивый денежный сигнал.',
       days:[{day:'W3',task:'включить 1 канал привлечения и довести до 5 оплат',duration:'focus'}]
     }
   ];
@@ -483,14 +760,14 @@ function normalizeBetaRoadmap(raw){
     const candidate=source[index]||{};
     const rawTitle=clipText(candidate?.title||'',80);
     const fallbackBase=base[index]||base[base.length-1]||{};
-    const title=rawTitle||clipText(fallbackBase?.title||ROADMAP_PHASE_TITLES[index]||`Stage ${index+1}`,80)||`Stage ${index+1}`;
-    const objectiveRaw=clipText(candidate?.objective||'',150);
-    const outcomeRaw=clipText(candidate?.outcome||extractOutcomeFromObjective(objectiveRaw),140);
-    const objectiveCore=objectiveRaw||fallbackBase.objective||'';
-    const parsedObjective=objectiveCore.toLowerCase().includes('objective:')||objectiveCore.toLowerCase().includes('outcome:')
-      ? splitObjectiveOutcomeText(objectiveCore)
-      : parseObjectiveOutcome(objectiveCore,outcomeRaw||extractOutcomeFromObjective(fallbackBase.objective||''));
-    const objective=formatObjectiveOutcome(parsedObjective.objective,parsedObjective.outcome);
+    const title=rawTitle||clipText(fallbackBase?.title||buildFallbackStageTitle(index,S?.user?.goal||''),80)||`Stage ${index+1}`;
+    const objectiveRaw=clipText(candidate?.objective||'',180);
+    const outcomeRaw=clipText(candidate?.outcome||'',140);
+    const reasoningRaw=clipText(candidate?.reasoning||'',220);
+    const parsedObjective=parseObjectiveOutcome(objectiveRaw||fallbackBase.objective||'',outcomeRaw||fallbackBase.outcome||'');
+    const objective=clipText(parsedObjective.objective||'достичь измеримого прогресса этапа',180);
+    const outcome=clipText(parsedObjective.outcome||extractOutcomeFromObjective(objective),140);
+    const reasoning=reasoningRaw||clipText(fallbackBase?.reasoning||`Этот этап нужен, чтобы подготовить входные условия для следующего шага после "${title}".`,220);
     const criteriaFromResponse=(Array.isArray(candidate?.completion_criteria)?candidate.completion_criteria:[])
       .map((item)=>clipText(item,80))
       .filter(Boolean);
@@ -506,11 +783,16 @@ function normalizeBetaRoadmap(raw){
         });
       }
       strong=strong.slice(0,4);
+      const completionCriteria=strong.slice(0,4);
       return {
         week:index+1,
         title,
         objective,
-        days:tasksToDays(strong,activeWindow,'2-4ч')
+        outcome,
+        reasoning,
+        completion_criteria:completionCriteria,
+        target_date:toIsoDateOnly(candidate?.target_date||''),
+        days:tasksToDays(completionCriteria,activeWindow,'2-4ч')
       };
     }
     const firstHighLevel=clipText(criteriaFromResponse[0]||extracted[0]||'',80);
@@ -520,6 +802,10 @@ function normalizeBetaRoadmap(raw){
       week:index+1,
       title,
       objective,
+      outcome,
+      reasoning,
+      completion_criteria:[clipText(task,90)],
+      target_date:toIsoDateOnly(candidate?.target_date||''),
       days:[{
         day:`W${index+1}`,
         task:clipText(task,80),
@@ -581,7 +867,7 @@ function spreadTaskDeadlines(deadline,count){
   }
   return out;
 }
-function fallbackFounderTaskBlueprints({goal='',stageObjective='',deadline='',stageLabel='MVP build'}={}){
+function fallbackFounderTaskBlueprints({goal='',stageObjective='',deadline='',stageLabel='Stage 1'}={}){
   const safeGoal=clipText(goal,80)||'запуск продукта';
   const safeObjective=clipText(stageObjective,120)||'проверить спрос и запустить MVP';
   const dates=spreadTaskDeadlines(deadline,5);
@@ -646,7 +932,7 @@ function fallbackFounderTaskBlueprints({goal='',stageObjective='',deadline='',st
 function normalizeFounderTask(raw,options={}){
   const stageObjective=clipText(options.stageObjective||raw?.stageObjective||'',150);
   const stageIndex=Number.isFinite(Number(raw?.linked_stage??raw?.linkedStage))?Number(raw?.linked_stage??raw?.linkedStage):Number(options.stageIndex||0);
-  const stageLabel=clipText(options.stageTitle||'',40)||'MVP build';
+  const stageLabel=clipText(options.stageTitle||'',40)||'Stage 1';
   const title=getTaskTitle(raw);
   const normalized={
     id:Number(raw?.id)||0,
@@ -684,7 +970,7 @@ function normalizeFounderTasks(raw,options={}){
       ? raw.tasks
       : [];
   const stageObjective=clipText(options.stageObjective||'',150);
-  const stageTitle=clipText(options.stageTitle||'',40)||'MVP build';
+  const stageTitle=clipText(options.stageTitle||'',40)||'Stage 1';
   const fallback=fallbackFounderTaskBlueprints({
     goal:S?.user?.goal||'',
     stageObjective,
@@ -804,7 +1090,7 @@ function resolvePhaseCompletionCriteria(phase){
 function normalizeExecutionTask(task,stage){
   const safe=normalizeFounderTask(task,{
     stageIndex:Math.max(0,(stage?.index||1)-1),
-    stageTitle:stage?.title||'MVP build',
+    stageTitle:stage?.title||'Stage 1',
     stageObjective:stage?.objective||'',
     deadline:S.user.deadline||''
   });
@@ -819,8 +1105,10 @@ function normalizeExecutionTask(task,stage){
     text:getTaskTitle(safe),
     description:clipText(task?.description||safe.description||'',220),
     whyItMatters:clipText(task?.whyItMatters||task?.why_it_matters||safe.whyItMatters||'',200),
+    why_it_matters:clipText(task?.whyItMatters||task?.why_it_matters||safe.whyItMatters||'',200),
     deliverable:clipText(task?.deliverable||safe.deliverable||'',200),
     doneDefinition:clipText(task?.doneDefinition||task?.done_definition||safe.doneDefinition||'',200),
+    done_definition:clipText(task?.doneDefinition||task?.done_definition||safe.doneDefinition||'',200),
     priority:normalizeTaskPriority(task?.priority??task?.prio??safe.prio),
     prio:normalizeTaskPriority(task?.priority??task?.prio??safe.prio),
     deadline:normalizeTaskDeadlineValue(task?.deadline||safe.deadline||''),
@@ -830,7 +1118,8 @@ function normalizeExecutionTask(task,stage){
     completedAt:isDone?String(task?.completedAt||nowIso()):'',
     created:String(task?.created||new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short'})).trim(),
     stageTitle:stage?.title||'',
-    stageObjective:stage?.objective||''
+    stageObjective:stage?.objective||'',
+    linked_stage:Math.max(1,(Number(task?.linkedStageIndex)||Math.max(0,(stage?.index||1)-1))+1)
   };
 }
 function isExecutionStateObject(value){
@@ -857,7 +1146,7 @@ function createExecutionRoadmapFromPhases(phases){
     const parsed=splitObjectiveOutcomeText(phase?.objective||'');
     const objectiveClean=clipText(parsed.objective||phase?.objective||'',180)||`этап ${index+1}: измеримый прогресс`;
     const outcomeClean=clipText(phase?.outcome||parsed.outcome||extractOutcomeFromObjective(objectiveClean),140);
-    const objective=formatObjectiveOutcome(objectiveClean,outcomeClean);
+    const reasoningClean=clipText(phase?.whyThisStageMatters||phase?.reasoning||'',220);
     const aiTargetDate=toIsoDateOnly(phase?.target_date||'');
     const targetDate=aiTargetDate||(
       hasDeadline
@@ -867,15 +1156,22 @@ function createExecutionRoadmapFromPhases(phases){
     return {
       id:stageId,
       index:index+1,
-      title:clipText(phase?.title||`Stage ${index+1}`,80),
-      objective,
+      title:clipText(phase?.title||buildFallbackStageTitle(index,S?.user?.goal||''),80),
+      objective:objectiveClean,
       outcome:outcomeClean,
+      whyThisStageMatters:reasoningClean,
+      reasoning:reasoningClean,
       startDate:index===0?toDateInputValue(baseDate):'',
       targetDate,
       status:index===0?'active':'locked',
-      completionCriteria:resolvePhaseCompletionCriteria(phase),
+      completionCriteria:Array.isArray(phase?.completion_criteria)
+        ? phase.completion_criteria.map((item)=>clipText(item,90)).filter(Boolean).slice(0,4)
+        : resolvePhaseCompletionCriteria(phase),
+      executionFocus:clipText(phase?.executionFocus||phase?.execution_focus||'',160),
       tasksGenerated:false,
       tasksGeneratedAt:'',
+      detailsGenerated:false,
+      detailsGeneratedAt:'',
       progress:0,
       taskIds:[]
     };
@@ -951,6 +1247,27 @@ function logStageTaskSnapshot(action,stageIndex,extra={}){
     tasksByIdCount:getAllExecutionTasks().length,
     ...extra
   });
+}
+function logExecutionFlowEvent(action,stageIndex,extra={}){
+  const stages=getExecutionStages();
+  const safeStageIndex=Number.isFinite(Number(stageIndex))
+    ? Math.max(0,Math.min(Math.max(0,stages.length-1),Number(stageIndex)))
+    : getExecutionActiveStageIndex();
+  const stage=getExecutionStage(safeStageIndex);
+  const stageTasks=stage?getTasksForStage(safeStageIndex,{includeArchived:false}):[];
+  const payload={
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'execution_flow',
+    action,
+    stageCount:stages.length,
+    activeStageId:stage?.id||'',
+    taskCount:stageTasks.length,
+    ...extra
+  };
+  if(action==='stage_tasks_missing'||action==='recovery_attempt') logWarn(payload);
+  else if(action==='fallback_used') logWarn(payload);
+  else logInfo(payload);
 }
 function getTasksForStage(stageIndex,opts={}){
   const stage=getExecutionStage(stageIndex);
@@ -1048,6 +1365,12 @@ function initializeExecutionFromRoadmap(options={}){
     stage.taskIds=[];
     stage.tasksGenerated=false;
     stage.tasksGeneratedAt='';
+    stage.detailsGenerated=false;
+    stage.detailsGeneratedAt='';
+    stage.whyThisStageMatters=clipText(stage.whyThisStageMatters||stage.reasoning||'',220);
+    stage.executionFocus=clipText(stage.executionFocus||'',160);
+    stage.completionCriteria=Array.isArray(stage.completionCriteria)?stage.completionCriteria:[];
+    applyMvpStageDetailsDefaults(stage);
   });
   if(options.resetVisibleTasks!==false) S.tasks=[];
   refreshExecutionProgress();
@@ -1116,7 +1439,11 @@ function ensureExecutionState(options={}){
   }
   const stages=getExecutionStages();
   const globalTaskRefs=new Set();
-  stages.forEach((stage)=>{
+  stages.forEach((stage,idx)=>{
+    if(!stage.id){
+      stage.id=createClientRequestId(`stage${idx+1}`);
+      changed=true;
+    }
     if(!Array.isArray(stage.taskIds)){
       stage.taskIds=[];
       changed=true;
@@ -1127,8 +1454,14 @@ function ensureExecutionState(options={}){
       stage.status=rawStatus==='completed'||rawStatus==='active'||rawStatus==='locked'?rawStatus:'locked';
     }
     stage.tasksGenerated=Boolean(stage.tasksGenerated);
+    stage.detailsGenerated=Boolean(stage.detailsGenerated);
+    stage.detailsGeneratedAt=String(stage.detailsGeneratedAt||'');
     stage.progress=Number(stage.progress)||0;
-    stage.completionCriteria=normalizeCompletionCriteria(stage.completionCriteria||[],stage.objective||'');
+    stage.whyThisStageMatters=clipText(stage.whyThisStageMatters||stage.reasoning||'',220);
+    stage.reasoning=clipText(stage.reasoning||stage.whyThisStageMatters||'',220);
+    stage.completionCriteria=normalizeCompletionCriteria(stage.completionCriteria||stage.completion_criteria||[],stage.objective||'');
+    stage.executionFocus=clipText(stage.executionFocus||stage.execution_focus||'',160);
+    applyMvpStageDetailsDefaults(stage);
     stage.taskIds=stage.taskIds.filter((id)=>{
       const key=String(id);
       const task=S.execution.tasksById[key];
@@ -1197,6 +1530,11 @@ function setStageTasks(stageIndex,tasks,opts={}){
 }
 async function generateTasksForStage(stageIndex,options={}){
   if(!ensureExecutionState()){
+    logRoadmapPipelineEvent('active_stage_task_generation_skipped_execution_uninitialized',{
+      stageCount:getExecutionStages().length,
+      activeStageId:'',
+      activeStageIndex:stageIndex
+    });
     logWarn({
       area:'frontend',
       module:'frontend/script.js',
@@ -1208,6 +1546,11 @@ async function generateTasksForStage(stageIndex,options={}){
   }
   const stage=getExecutionStage(stageIndex);
   if(!stage){
+    logRoadmapPipelineEvent('active_stage_task_generation_skipped_no_stage',{
+      stageCount:getExecutionStages().length,
+      activeStageId:'',
+      activeStageIndex:stageIndex
+    });
     logWarn({
       area:'frontend',
       module:'frontend/script.js',
@@ -1218,6 +1561,11 @@ async function generateTasksForStage(stageIndex,options={}){
     return [];
   }
   if(!stage.id){
+    logRoadmapPipelineEvent('active_stage_task_generation_skipped_missing_stage_id',{
+      stageCount:getExecutionStages().length,
+      activeStageId:'',
+      activeStageIndex:stageIndex
+    });
     logWarn({
       area:'frontend',
       module:'frontend/script.js',
@@ -1239,6 +1587,12 @@ async function generateTasksForStage(stageIndex,options={}){
   }
   const existing=getTasksForStage(stageIndex,{includeArchived:false});
   if(existing.length&&stage.tasksGenerated&&!options.force){
+    logRoadmapPipelineEvent('active_stage_task_generation_skipped_already_generated',{
+      stageCount:getExecutionStages().length,
+      activeStageId:stage.id,
+      activeStageIndex:stageIndex,
+      taskCount:existing.length
+    });
     logInfo({
       area:'frontend',
       module:'frontend/script.js',
@@ -1254,26 +1608,52 @@ async function generateTasksForStage(stageIndex,options={}){
     force:Boolean(options.force),
     reason:String(options.reason||'unspecified')
   });
+  logExecutionFlowEvent('generate_tasks_called',stageIndex,{
+    force:Boolean(options.force),
+    reason:String(options.reason||'unspecified')
+  });
   const taskPromise=(async ()=>{
     const phase=S.roadmap?.[stageIndex]||{};
+    const normalizedStage=normalizeStageForEnrichment({
+      title:stage?.title||phase?.title||`Stage ${stageIndex+1}`,
+      objective:stage?.objective||phase?.objective||'',
+      outcome:stage?.outcome||phase?.outcome||''
+    },stageIndex);
     const intensityDesc='рабочий сбалансированный темп';
     const clientRequestId=createClientRequestId(`tasks-s${stageIndex+1}`);
+    const contextMapping=roadmapContextPresence(buildRoadmapOnboardingContext());
+    const tasksPrompt=buildMilestoneTasksPrompt(normalizedStage,'3-5',intensityDesc,{
+      stageIndex,
+      context:buildRoadmapOnboardingContext()
+    });
+    logRoadmapPipelineEvent('active_stage_task_generation_started',{
+      requestId:clientRequestId,
+      stageCount:getExecutionStages().length,
+      activeStageId:stage.id,
+      activeStageIndex:stageIndex,
+      promptChars:tasksPrompt.length,
+      requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS
+    });
     try{
-      const generated=await geminiJSON(
-        buildMilestoneTasksPrompt(phase,'3-5',intensityDesc),
+      const generatedResult=await geminiJSON(
+        tasksPrompt,
         milestoneTasksResponseJsonSchema(),
-        780,
+        TASKS_DEFAULT_MAX_TOKENS,
         '',
         {
           temperature:0.2,
           clientRequestId,
-          stageObjective:phase?.objective||stage.objective||'',
-          stageTitle:phase?.title||stage.title||`Stage ${stageIndex+1}`,
+          stageObjective:normalizedStage.objective||stage.objective||'',
+          stageTitle:normalizedStage.title||stage.title||`Stage ${stageIndex+1}`,
           stageIndex,
-          deadline:S.user.deadline||''
+          deadline:S.user.deadline||'',
+          returnMeta:true,
+          contextFields:contextMapping.present,
+          missingContextFields:contextMapping.missing
         },
         'tasks'
       );
+      const generated=generatedResult?.data||[];
       const normalized=normalizeFounderTasks(generated,{
         stageObjective:phase?.objective||stage.objective||'',
         stageTitle:phase?.title||stage.title||`Stage ${stageIndex+1}`,
@@ -1282,6 +1662,28 @@ async function generateTasksForStage(stageIndex,options={}){
       }).slice(0,5);
       const persisted=setStageTasks(stageIndex,normalized,{replace:true});
       logStageTaskSnapshot('stage_tasks_generated',stageIndex,{generatedCount:normalized.length});
+      logExecutionFlowEvent('tasks_generated_count',stageIndex,{generatedCount:persisted.length,fallback:false});
+      logExecutionFlowEvent('tasks_saved',stageIndex,{savedCount:persisted.length});
+      logRoadmapPipelineEvent('active_stage_tasks_generated',{
+        requestId:generatedResult?.meta?.requestId||clientRequestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        promptChars:generatedResult?.meta?.promptChars||tasksPrompt.length,
+        requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS,
+        finishReason:generatedResult?.meta?.finishReason||'',
+        taskCount:persisted.length
+      });
+      logRoadmapPipelineEvent('active_stage_tasks_saved',{
+        requestId:generatedResult?.meta?.requestId||clientRequestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        promptChars:generatedResult?.meta?.promptChars||tasksPrompt.length,
+        requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS,
+        finishReason:generatedResult?.meta?.finishReason||'',
+        taskCount:persisted.length
+      });
       saveTasks();
       saveAll();
       return persisted;
@@ -1294,6 +1696,29 @@ async function generateTasksForStage(stageIndex,options={}){
       });
       const persisted=setStageTasks(stageIndex,fallback,{replace:true});
       logStageTaskSnapshot('stage_tasks_generated',stageIndex,{generatedCount:persisted.length,fallback:true,errorMessage:String(error?.message||'')});
+      logExecutionFlowEvent('fallback_used',stageIndex,{reason:'tasks_generation_failed',errorMessage:String(error?.message||'')});
+      logExecutionFlowEvent('tasks_generated_count',stageIndex,{generatedCount:persisted.length,fallback:true});
+      logExecutionFlowEvent('tasks_saved',stageIndex,{savedCount:persisted.length,fallback:true});
+      logRoadmapPipelineEvent('active_stage_tasks_generated',{
+        requestId:clientRequestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        promptChars:tasksPrompt.length,
+        requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS,
+        finishReason:'',
+        taskCount:persisted.length
+      });
+      logRoadmapPipelineEvent('active_stage_tasks_saved',{
+        requestId:clientRequestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        promptChars:tasksPrompt.length,
+        requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS,
+        finishReason:'',
+        taskCount:persisted.length
+      });
       saveTasks();
       saveAll();
       if(options.silentFallback!==true){
@@ -1332,20 +1757,8 @@ async function ensureActiveStageTasks(options={}){
   const generated=await generateTasksForStage(activeIndex,options);
   const activeTasks=getTasksForStage(activeIndex,{includeArchived:false});
   if(!activeTasks.length){
-    logWarn({
-      area:'frontend',
-      module:'frontend/script.js',
-      function:'ensureActiveStageTasks',
-      action:'stage_tasks_missing_after_roadmap',
-      stageIndex:activeIndex
-    });
-    logWarn({
-      area:'frontend',
-      module:'frontend/script.js',
-      function:'ensureActiveStageTasks',
-      action:'stage_tasks_recovery_triggered',
-      stageIndex:activeIndex
-    });
+    logExecutionFlowEvent('stage_tasks_missing',activeIndex,{reason:String(options.reason||'')});
+    logExecutionFlowEvent('recovery_attempt',activeIndex,{reason:String(options.reason||'')});
     const recovered=await generateTasksForStage(activeIndex,{...options,force:true,reason:'recovery_after_empty_stage'});
     const recoveredCount=Array.isArray(recovered)?recovered.length:0;
     logInfo({
@@ -1358,6 +1771,555 @@ async function ensureActiveStageTasks(options={}){
     });
   }
   return generated;
+}
+function applyActiveStageEnrichment(stageIndex,enrichment,opts={}){
+  const stage=getExecutionStage(stageIndex);
+  if(!stage) return false;
+  const why=clipText(enrichment?.why_this_stage_matters||enrichment?.whyThisStageMatters||stage.whyThisStageMatters||stage.reasoning||'',220);
+  const criteria=normalizeCompletionCriteria(enrichment?.completion_criteria||stage.completionCriteria||[],stage.objective||'');
+  const focus=clipText(enrichment?.execution_focus||enrichment?.executionFocus||stage.executionFocus||'',160);
+  stage.whyThisStageMatters=why;
+  stage.reasoning=why;
+  stage.completionCriteria=criteria;
+  stage.executionFocus=focus;
+  stage.detailsGenerated=!opts.fromFallback;
+  stage.detailsGeneratedAt=nowIso();
+  if(Array.isArray(S.roadmap)&&S.roadmap[stageIndex]){
+    const wk=S.roadmap[stageIndex];
+    wk.reasoning=why;
+    wk.completion_criteria=criteria;
+    wk.days=criteria.map((item,idx)=>({day:`C${idx+1}`,task:clipText(item,90),duration:'criteria'}));
+  }
+  return true;
+}
+async function enrichActiveStage(stageIndex,options={}){
+  const stage=getExecutionStage(stageIndex);
+  if(!stage){
+    logRoadmapPipelineEvent('active_stage_enrichment_skipped_no_stage',{
+      stageCount:getExecutionStages().length,
+      activeStageId:'',
+      activeStageIndex:stageIndex
+    });
+    return null;
+  }
+  if(stage.detailsGenerated&&!options.force){
+    logRoadmapPipelineEvent('active_stage_enrichment_skipped_already_generated',{
+      stageCount:getExecutionStages().length,
+      activeStageId:stage.id,
+      activeStageIndex:stageIndex
+    });
+    return {
+    why_this_stage_matters:stage.whyThisStageMatters||stage.reasoning||'',
+    completion_criteria:Array.isArray(stage.completionCriteria)?stage.completionCriteria:[],
+    execution_focus:stage.executionFocus||''
+    };
+  }
+  const context=options.context||buildRoadmapOnboardingContext();
+  const contextMapping=roadmapContextPresence(context);
+  logRoadmapPipelineEvent('active_stage_before_sanitize',{
+    stageCount:getExecutionStages().length,
+    activeStageId:stage.id,
+    activeStageIndex:stageIndex
+  });
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'enrichActiveStage',
+    action:'active_stage_before_sanitize',
+    title:clipText(stage?.title||'',80),
+    objective:clipText(stage?.objective||'',180),
+    outcome:clipText(stage?.outcome||'',140)
+  });
+  const cleanedStage=sanitizeStageForEnrichment(stage,stageIndex);
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'enrichActiveStage',
+    action:'active_stage_after_sanitize',
+    title:cleanedStage.title,
+    objective:cleanedStage.objective,
+    outcome:cleanedStage.outcome
+  });
+  logRoadmapPipelineEvent('active_stage_after_sanitize',{
+    stageCount:getExecutionStages().length,
+    activeStageId:stage.id,
+    activeStageIndex:stageIndex
+  });
+  const prompt=buildActiveStageEnrichmentPrompt(cleanedStage,{context});
+  const requestedMaxTokens=ACTIVE_STAGE_ENRICH_MAX_TOKENS;
+  const clientRequestId=createClientRequestId(`stage-enrich-${stageIndex+1}`);
+  logRoadmapPipelineEvent('active_stage_enrichment_started',{
+    requestId:clientRequestId,
+    stageCount:getExecutionStages().length,
+    activeStageId:stage.id,
+    activeStageIndex:stageIndex,
+    promptChars:prompt.length,
+    requestedMaxTokens
+  });
+  let responseMeta={
+    requestId:clientRequestId,
+    finishReason:'',
+    promptChars:prompt.length
+  };
+  try{
+    const response=await geminiRequest(
+      prompt,
+      '',
+      requestedMaxTokens,
+      {
+        temperature:0.2,
+        responseMimeType:'application/json',
+        clientRequestId,
+        contextFields:contextMapping.present,
+        missingContextFields:contextMapping.missing
+      },
+      'chat'
+    );
+    responseMeta={
+      requestId:response.requestId||clientRequestId,
+      finishReason:response.finishReason||'',
+      promptChars:prompt.length
+    };
+    const parsedPayload=normalizeEnrichmentResponsePayload(response);
+    const normalized=parsedPayload.normalized;
+    const usedFallback=parsedPayload.usedFallback;
+    const usedSalvage=parsedPayload.usedSalvage;
+    applyActiveStageEnrichment(stageIndex,normalized,{fromFallback:usedFallback});
+    if(usedFallback){
+      logEnrichmentFallbackContinuation({
+        requestId:responseMeta.requestId,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        promptChars:responseMeta.promptChars,
+        requestedMaxTokens,
+        finishReason:responseMeta.finishReason,
+        errorMessage:parsedPayload.fallbackReason
+      });
+      logRoadmapPipelineEvent('active_stage_enriched',{
+        requestId:responseMeta.requestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        promptChars:responseMeta.promptChars,
+        requestedMaxTokens,
+        finishReason:responseMeta.finishReason,
+        errorMessage:'fallback_applied'
+      });
+    }else if(usedSalvage){
+      logEnrichmentFallbackContinuation({
+        requestId:responseMeta.requestId,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        promptChars:responseMeta.promptChars,
+        requestedMaxTokens,
+        finishReason:responseMeta.finishReason,
+        errorMessage:'partial_enrichment_salvaged'
+      });
+      logRoadmapPipelineEvent('active_stage_enriched',{
+        requestId:responseMeta.requestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        promptChars:responseMeta.promptChars,
+        requestedMaxTokens,
+        finishReason:responseMeta.finishReason
+      });
+    }else{
+      logRoadmapPipelineEvent('active_stage_enriched',{
+        requestId:responseMeta.requestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        promptChars:responseMeta.promptChars,
+        requestedMaxTokens,
+        finishReason:responseMeta.finishReason
+      });
+    }
+    return normalized;
+  }catch(error){
+    const fallback=normalizeEnrichmentPayload({},fallbackEnrichmentPayload());
+    applyActiveStageEnrichment(stageIndex,fallback,{fromFallback:true});
+    logRoadmapPipelineEvent('active_stage_enrichment_failed',{
+      requestId:responseMeta.requestId||clientRequestId,
+      stageCount:getExecutionStages().length,
+      activeStageId:stage.id,
+      activeStageIndex:stageIndex,
+      promptChars:responseMeta.promptChars||prompt.length,
+      requestedMaxTokens,
+      finishReason:responseMeta.finishReason||'',
+      errorMessage:String(error?.message||'')
+    });
+    logEnrichmentFallbackContinuation({
+      requestId:responseMeta.requestId||clientRequestId,
+      activeStageId:stage.id,
+      activeStageIndex:stageIndex,
+      promptChars:responseMeta.promptChars||prompt.length,
+      requestedMaxTokens,
+      finishReason:responseMeta.finishReason||'',
+      errorMessage:String(error?.message||'')
+    });
+    logRoadmapPipelineEvent('active_stage_enriched',{
+      requestId:responseMeta.requestId||clientRequestId,
+      stageCount:getExecutionStages().length,
+      activeStageId:stage.id,
+      activeStageIndex:stageIndex,
+      promptChars:responseMeta.promptChars||prompt.length,
+      requestedMaxTokens,
+      finishReason:responseMeta.finishReason||'',
+      errorMessage:'fallback_applied'
+    });
+    return fallback;
+  }
+}
+async function enrichActiveStageBestEffort(stageIndex,options={}){
+  try{
+    return await enrichActiveStage(stageIndex,options);
+  }catch(error){
+    const stage=getExecutionStage(stageIndex);
+    const fallback=normalizeEnrichmentPayload({},fallbackEnrichmentPayload());
+    if(stage){
+      applyActiveStageEnrichment(stageIndex,fallback,{fromFallback:true});
+    }
+    logRoadmapPipelineEvent('active_stage_enrichment_fallback_used',{
+      stageCount:getExecutionStages().length,
+      activeStageId:stage?.id||'',
+      activeStageIndex:stageIndex,
+      requestedMaxTokens:ACTIVE_STAGE_ENRICH_MAX_TOKENS,
+      errorMessage:String(error?.message||'best_effort_wrapper')
+    });
+    logRoadmapPipelineEvent('active_stage_enrichment_failed_but_pipeline_continues',{
+      stageCount:getExecutionStages().length,
+      activeStageId:stage?.id||'',
+      activeStageIndex:stageIndex,
+      requestedMaxTokens:ACTIVE_STAGE_ENRICH_MAX_TOKENS,
+      errorMessage:String(error?.message||'best_effort_wrapper')
+    });
+    logRoadmapPipelineEvent('active_stage_enriched',{
+      stageCount:getExecutionStages().length,
+      activeStageId:stage?.id||'',
+      activeStageIndex:stageIndex,
+      requestedMaxTokens:ACTIVE_STAGE_ENRICH_MAX_TOKENS,
+      errorMessage:'fallback_applied'
+    });
+    return fallback;
+  }
+}
+function prepareRoadmapSkeletonRequest(options={}){
+  const context=options.context||buildRoadmapOnboardingContext();
+  const contextMapping=options.contextMapping||roadmapContextPresence(context);
+  const weeksCount=Math.max(1,Number(options.weeksCount)||2);
+  const strategyDesc=String(options.strategyDesc||'').trim();
+  const prompt=buildRoadmapSkeletonPrompt({weeksCount,strategyDesc,context});
+  return {
+    context,
+    contextMapping,
+    weeksCount,
+    strategyDesc,
+    prompt,
+    requestedMaxTokens:ROADMAP_SKELETON_MAX_TOKENS,
+    clientRequestId:createClientRequestId('roadmap-skeleton')
+  };
+}
+async function generateStageTasksAfterRoadmap(activeIndex,activeStage,reason){
+  const stages=getExecutionStages();
+  logExecutionFlowEvent('generate_tasks_called',activeIndex,{reason});
+  let generated=await generateTasksForStage(activeIndex,{force:true,silentFallback:false,reason:`${reason}_initial`});
+  let taskCount=Array.isArray(generated)?generated.length:0;
+  logExecutionFlowEvent('tasks_generated_count',activeIndex,{generatedCount:taskCount});
+  if(taskCount===0){
+    logRoadmapPipelineEvent('active_stage_task_generation_recovery_started',{
+      stageCount:stages.length,
+      activeStageId:activeStage?.id||'',
+      activeStageIndex:activeIndex,
+      taskCount
+    });
+    logWarn({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'bootstrapExecutionAfterRoadmap',
+      action:'stage_tasks_missing_after_roadmap',
+      stageCount:stages.length,
+      activeStageId:activeStage?.id||'',
+      taskCount
+    });
+    logExecutionFlowEvent('stage_tasks_missing',activeIndex,{reason});
+    logWarn({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'bootstrapExecutionAfterRoadmap',
+      action:'stage_tasks_recovery_triggered',
+      stageCount:stages.length,
+      activeStageId:activeStage?.id||'',
+      taskCount
+    });
+    logExecutionFlowEvent('recovery_attempt',activeIndex,{reason});
+    generated=await generateTasksForStage(activeIndex,{force:true,silentFallback:false,reason:`${reason}_recovery`});
+    taskCount=Array.isArray(generated)?generated.length:0;
+    logExecutionFlowEvent('tasks_generated_count',activeIndex,{generatedCount:taskCount,recovery:true});
+    if(taskCount===0){
+      const fallbackTasks=normalizeFounderTasks([],{
+        stageObjective:activeStage.objective||'',
+        stageTitle:activeStage.title||`Stage ${activeIndex+1}`,
+        stageIndex:activeIndex,
+        deadline:S.user.deadline||''
+      });
+      const persistedFallback=setStageTasks(activeIndex,fallbackTasks,{replace:true});
+      taskCount=Array.isArray(persistedFallback)?persistedFallback.length:0;
+      if(taskCount>0){
+        generated=persistedFallback;
+        logRoadmapPipelineEvent('active_stage_task_generation_recovery_succeeded',{
+          stageCount:stages.length,
+          activeStageId:activeStage?.id||'',
+          activeStageIndex:activeIndex,
+          taskCount
+        });
+      }
+    }
+    if(taskCount===0){
+      logError({
+        area:'frontend',
+        module:'frontend/script.js',
+        function:'bootstrapExecutionAfterRoadmap',
+        action:'stage_tasks_missing_after_recovery',
+        stageCount:stages.length,
+        activeStageId:activeStage?.id||'',
+        taskCount
+      });
+      throw new Error('Stage 1 tasks generation failed after recovery');
+    }
+  }
+  return {generated,taskCount};
+}
+async function generateRoadmapSkeleton(options={}){
+  const prepared=prepareRoadmapSkeletonRequest(options);
+  const {
+    context,
+    contextMapping,
+    prompt,
+    requestedMaxTokens,
+    clientRequestId
+  }=prepared;
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'generateRoadmapSkeleton',
+    action:'roadmap_context_metadata_built',
+    contextFields:contextMapping.present,
+    missingContextFields:contextMapping.missing,
+    contextKeys:Object.keys(context||{})
+  });
+  logRoadmapPipelineEvent('roadmap_skeleton_generation_started',{
+    requestId:clientRequestId,
+    stageCount:0,
+    activeStageId:'',
+    activeStageIndex:0,
+    promptChars:prompt.length,
+    requestedMaxTokens,
+    contextFields:contextMapping.present
+  });
+  try{
+    const result=await geminiJSON(
+      prompt,
+      roadmapSkeletonResponseJsonSchema(),
+      requestedMaxTokens,
+      '',
+      {
+        temperature:0.2,
+        clientRequestId,
+        roadmapMode:'skeleton',
+        returnMeta:true,
+        contextFields:contextMapping.present,
+        missingContextFields:contextMapping.missing
+      },
+      'roadmap'
+    );
+    const skeleton=normalizeRoadmapSkeleton(result?.data||{});
+    logRoadmapPipelineEvent('roadmap_skeleton_generated',{
+      requestId:result?.meta?.requestId||clientRequestId,
+      stageCount:skeleton.length,
+      activeStageId:'',
+      activeStageIndex:0,
+      promptChars:result?.meta?.promptChars||prompt.length,
+      requestedMaxTokens,
+      finishReason:result?.meta?.finishReason||'',
+      contextFields:contextMapping.present
+    });
+    return skeleton;
+  }catch(error){
+    logRoadmapPipelineEvent('roadmap_skeleton_parse_failed',{
+      requestId:clientRequestId,
+      stageCount:0,
+      activeStageId:'',
+      activeStageIndex:0,
+      promptChars:prompt.length,
+      requestedMaxTokens,
+      errorMessage:String(error?.message||'')
+    });
+    throw error;
+  }
+}
+async function bootstrapExecutionAfterRoadmap(reason='roadmap_created'){
+  if(!ensureExecutionState({mergeLegacyTasks:false})){
+    throw new Error('Execution state was not initialized from roadmap');
+  }
+  const stages=getExecutionStages();
+  if(!stages.length) throw new Error('Roadmap has no stages');
+  S.execution.currentStageIndex=0;
+  const firstStage=stages[0];
+  if(firstStage&&!firstStage.id){
+    firstStage.id=createClientRequestId('stage1');
+  }
+  if(firstStage) firstStage.status='active';
+  stages.forEach((stage,idx)=>{
+    if(idx>0&&stage.status!=='completed') stage.status='locked';
+  });
+  normalizeExecutionStatuses();
+  refreshExecutionProgress();
+  syncActiveTasksFromExecution();
+  let activeIndex=getExecutionActiveStageIndex();
+  let activeStage=getExecutionStage(activeIndex);
+  if(!activeStage||!activeStage.id){
+    S.execution.currentStageIndex=0;
+    activeIndex=0;
+    activeStage=getExecutionStage(0);
+    if(activeStage&&!activeStage.id){
+      activeStage.id=createClientRequestId('stage1-recovered');
+    }
+  }
+  if(!activeStage||!activeStage.id){
+    throw new Error('Active stage resolution failed after skeleton initialization');
+  }
+  logExecutionFlowEvent('roadmap_generated',activeIndex,{reason});
+  logExecutionFlowEvent('roadmap_normalized',activeIndex,{reason});
+  logExecutionFlowEvent('active_stage_set',activeIndex,{stageId:activeStage?.id||''});
+  logRoadmapPipelineEvent('active_stage_set',{
+    stageCount:stages.length,
+    activeStageId:activeStage?.id||'',
+    activeStageIndex:activeIndex
+  });
+  logRoadmapPipelineEvent('active_stage_enrichment_skipped_mvp_mode',{
+    stageCount:stages.length,
+    activeStageId:activeStage?.id||'',
+    activeStageIndex:activeIndex
+  });
+  const taskBootstrapResult=await generateStageTasksAfterRoadmap(activeIndex,activeStage,reason);
+  const generated=taskBootstrapResult.generated;
+  const taskCount=taskBootstrapResult.taskCount;
+  saveTasks();
+  saveAll();
+  logExecutionFlowEvent('tasks_saved',activeIndex,{savedCount:taskCount});
+  return generated;
+}
+async function runRoadmapPipeline(options={}){
+  const weeksCount=Math.max(1,Number(options.weeksCount)||2);
+  const strategyDesc=String(options.strategyDesc||'').trim();
+  const reason=String(options.reason||'roadmap_pipeline');
+  const context=options.context||buildRoadmapOnboardingContext();
+  const contextMapping=roadmapContextPresence(context);
+  logRoadmapPipelineEvent('roadmap_pipeline_started',{
+    requestId:createClientRequestId('roadmap-pipeline'),
+    stageCount:0,
+    activeStageId:'',
+    activeStageIndex:0,
+    contextFields:contextMapping.present
+  });
+  S.roadmap=await generateRoadmapSkeleton({
+    weeksCount,
+    strategyDesc,
+    context,
+    contextMapping
+  });
+  logRoadmapPipelineEvent('roadmap_skeleton_normalized',{
+    stageCount:Array.isArray(S.roadmap)?S.roadmap.length:0,
+    activeStageId:'',
+    activeStageIndex:0,
+    contextFields:contextMapping.present
+  });
+  const initialized=initializeExecutionFromRoadmap({resetVisibleTasks:true});
+  logRoadmapPipelineEvent('execution_state_initialized',{
+    roadmapId:S.execution?.id||'',
+    stageCount:getExecutionStages().length,
+    activeStageId:getExecutionStage(0)?.id||'',
+    activeStageIndex:0,
+    contextFields:contextMapping.present
+  });
+  if(!initialized){
+    throw new Error('Execution state initialization failed');
+  }
+  const activeStageIndex=getExecutionActiveStageIndex();
+  const activeStage=getExecutionStage(activeStageIndex);
+  logRoadmapPipelineEvent('active_stage_resolved',{
+    roadmapId:S.execution?.id||'',
+    stageCount:getExecutionStages().length,
+    activeStageId:activeStage?.id||'',
+    activeStageIndex,
+    contextFields:contextMapping.present
+  });
+  try{
+    await bootstrapExecutionAfterRoadmap(reason);
+  }catch(primaryError){
+    logRoadmapPipelineEvent('roadmap_pipeline_recovery_started',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length,
+      activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+      activeStageIndex:getExecutionActiveStageIndex(),
+      errorMessage:String(primaryError?.message||''),
+      contextFields:contextMapping.present
+    });
+    try{
+      ensureExecutionState({mergeLegacyTasks:false});
+      const recoverIndex=getExecutionActiveStageIndex();
+      const recoverStage=getExecutionStage(recoverIndex);
+      if(!recoverStage) throw new Error('Recovery failed: active stage missing');
+      logRoadmapPipelineEvent('active_stage_enrichment_skipped_mvp_mode',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length,
+        activeStageId:recoverStage.id,
+        activeStageIndex:recoverIndex,
+        contextFields:contextMapping.present
+      });
+      const recoveredTasks=await generateTasksForStage(recoverIndex,{force:true,silentFallback:false,reason:`${reason}_recovery_manual`});
+      const recoveredCount=Array.isArray(recoveredTasks)?recoveredTasks.length:0;
+      if(recoveredCount<=0) throw new Error('Recovery failed: no active stage tasks');
+      syncActiveTasksFromExecution();
+      saveTasks();
+      saveAll();
+      logRoadmapPipelineEvent('roadmap_pipeline_recovery_succeeded',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length,
+        activeStageId:recoverStage.id,
+        activeStageIndex:recoverIndex,
+        taskCount:recoveredCount,
+        contextFields:contextMapping.present
+      });
+    }catch(recoveryError){
+      logRoadmapPipelineEvent('roadmap_pipeline_recovery_failed',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length,
+        activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+        activeStageIndex:getExecutionActiveStageIndex(),
+        errorMessage:String(recoveryError?.message||''),
+        contextFields:contextMapping.present
+      });
+      logRoadmapPipelineEvent('roadmap_pipeline_failed_recovery',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length,
+        activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+        activeStageIndex:getExecutionActiveStageIndex(),
+        errorMessage:String(primaryError?.message||''),
+        contextFields:contextMapping.present
+      });
+      throw primaryError;
+    }
+  }
+  logRoadmapPipelineEvent('roadmap_pipeline_completed',{
+    roadmapId:S.execution?.id||'',
+    stageCount:getExecutionStages().length,
+    activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+    activeStageIndex:getExecutionActiveStageIndex(),
+    taskCount:getTasksForStage(getExecutionActiveStageIndex(),{includeArchived:false}).length,
+    contextFields:contextMapping.present
+  });
 }
 async function advanceRoadmapStage(options={}){
   if(stageAdvanceInFlight||!ensureExecutionState()) return false;
@@ -1392,6 +2354,11 @@ async function advanceRoadmapStage(options={}){
     S.execution.currentStageIndex=nextIndex;
     S.execution.status='active';
     S.execution.updatedAt=nowIso();
+    logRoadmapPipelineEvent('active_stage_enrichment_skipped_mvp_mode',{
+      stageCount:getExecutionStages().length,
+      activeStageId:stages[nextIndex]?.id||'',
+      activeStageIndex:nextIndex
+    });
     refreshExecutionProgress();
     syncActiveTasksFromExecution();
     saveTasks();
@@ -1414,6 +2381,12 @@ async function maybeAutoAdvanceRoadmapStage(){
 async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx='',opts={},action='chat'){
   const callOpts={...opts,responseMimeType:'application/json'};
   const response=await geminiRequest(prompt,systemCtx,maxTokens,callOpts,action);
+  const meta={
+    requestId:response.requestId||'',
+    finishReason:response.finishReason||'',
+    promptChars:String(prompt||'').length,
+    requestedMaxTokens:Number(maxTokens)||0
+  };
   const taskNormalizationContext={
     stageObjective:clipText(opts?.stageObjective||'',150),
     stageTitle:clipText(opts?.stageTitle||'',40),
@@ -1434,37 +2407,46 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
     }
     const parsed=parseJSON(response.text,{allowPartial:response.finishReason==='MAX_TOKENS'});
     if(action==='roadmap'){
-      const parsedStages=Array.isArray(parsed)?parsed:(Array.isArray(parsed?.phases)?parsed.phases:[]);
-      logInfo({
-        area:'frontend',
-        module:'frontend/script.js',
-        function:'geminiJSON',
-        action:'roadmap_parsed',
+      const parsedStages=Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.stages)
+          ? parsed.stages
+          : (Array.isArray(parsed?.phases)?parsed.phases:[]);
+      logExecutionFlowEvent('roadmap_parsed',0,{
         requestId:response.requestId||'',
         stages:summarizeRoadmapStagesForLog(parsedStages)
       });
-      const normalized=normalizeBetaRoadmap(parsed);
+      const roadmapMode=String(opts?.roadmapMode||'legacy');
+      const normalized=roadmapMode==='skeleton'
+        ? normalizeRoadmapSkeleton(parsed)
+        : normalizeBetaRoadmap(parsed);
+      logExecutionFlowEvent('roadmap_normalized',0,{
+        requestId:response.requestId||'',
+        stages:summarizeRoadmapStagesForLog(normalized)
+      });
+      if(opts?.returnMeta) return {data:normalized,meta};
       return normalized;
     }
-    if(action==='tasks') return normalizeBetaTasks(parsed,taskNormalizationContext);
+    if(action==='tasks'){
+      const normalizedTasks=normalizeBetaTasks(parsed,taskNormalizationContext);
+      if(opts?.returnMeta) return {data:normalizedTasks,meta};
+      return normalizedTasks;
+    }
+    if(opts?.returnMeta) return {data:parsed,meta};
     return parsed;
   }catch(parseErr){
     if(action==='roadmap'){
       logWarn({area:'frontend',module:'frontend/script.js',function:'geminiJSON',action:'roadmap_partial_fallback',errorMessage:String(parseErr?.message||''),finishReason:response.finishReason||'',requestId:response.requestId||''});
       const fallback=fallbackRoadmapForMvp();
-      logWarn({
-        area:'frontend',
-        module:'frontend/script.js',
-        function:'geminiJSON',
-        action:'fallback_roadmap_used',
-        requestId:response.requestId||'',
-        stages:summarizeRoadmapStagesForLog(fallback)
-      });
+      logExecutionFlowEvent('fallback_used',0,{requestId:response.requestId||'',stages:summarizeRoadmapStagesForLog(fallback)});
+      if(opts?.returnMeta) return {data:fallback,meta};
       return fallback;
     }
     if(action==='tasks'){
       logWarn({area:'frontend',module:'frontend/script.js',function:'geminiJSON',action:'tasks_partial_fallback',errorMessage:String(parseErr?.message||''),finishReason:response.finishReason||'',requestId:response.requestId||''});
-      return fallbackTasksForMvp(taskNormalizationContext);
+      const fallbackTasks=fallbackTasksForMvp(taskNormalizationContext);
+      if(opts?.returnMeta) return {data:fallbackTasks,meta};
+      return fallbackTasks;
     }
     throw parseErr;
   }
@@ -1881,19 +2863,58 @@ function initAuthFlow(){
 
 /* ══ PERSIST ══ */
 function clipText(value,max=160){return String(value||'').replace(/\s+/g,' ').trim().slice(0,max);}
+function buildRoadmapOnboardingContext(){
+  return {
+    project_name:clipText(S.user.project,90),
+    startup_idea:clipText(S.user.idea,220),
+    primary_goal:clipText(S.user.goal,140),
+    current_stage:clipText(S.user.stage,50),
+    built_status:clipText(S.user.built,180),
+    niche:clipText(S.user.niche,90),
+    target_audience:clipText(S.user.audience,120),
+    resources:clipText(S.user.resources,180),
+    blocker:clipText(S.user.blockers,120),
+    daily_hours:clipText(S.user.hours,40),
+    deadline:clipText(S.user.deadline,30)
+  };
+}
+function roadmapContextPresence(context){
+  const required=[
+    'project_name',
+    'startup_idea',
+    'primary_goal',
+    'current_stage',
+    'built_status',
+    'niche',
+    'target_audience',
+    'resources',
+    'blocker',
+    'daily_hours',
+    'deadline'
+  ];
+  const present=required.filter((key)=>Boolean(context?.[key]));
+  const missing=required.filter((key)=>!context?.[key]);
+  return {present,missing};
+}
 function buildContextSummaryFromState(){
-  const projectValue=clipText(S.user.project||S.user.idea,90)||'MVP стартап';
-  const goalValue=clipText(S.user.goal,100)||'запуск продукта';
-  const stageValue=clipText(S.user.stage,40)||'ранняя стадия';
+  const ctx=buildRoadmapOnboardingContext();
+  const projectValue=ctx.project_name||ctx.startup_idea||'MVP стартап';
+  const goalValue=ctx.primary_goal||'запуск продукта';
+  const stageValue=ctx.current_stage||'ранняя стадия';
   const topTasks=(S.tasks||[]).filter(t=>!t.done).slice(0,3).map((t)=>clipText(getTaskTitle(t),60)).join('; ');
   const topGoals=(S.goals||[]).slice(0,2).map(g=>clipText(g.title,60)).join('; ');
-  const topBlockers=clipText(S.user.blockers,90)||'нет явных';
+  const topBlockers=ctx.blocker||'нет явных';
   return [
     `Проект: ${projectValue}`,
+    ctx.startup_idea?`Идея: ${ctx.startup_idea}`:'Идея: не указана',
     `Цель: ${goalValue}`,
     `Стадия: ${stageValue}`,
-    `Дедлайн: ${S.user.deadline||'гибкий'}`,
-    `Часы/день: ${clipText(S.user.hours,30)||'1-2'}`,
+    ctx.built_status?`Уже сделано: ${ctx.built_status}`:'Уже сделано: не указано',
+    ctx.niche?`Ниша: ${ctx.niche}`:'Ниша: не указана',
+    ctx.target_audience?`Аудитория: ${ctx.target_audience}`:'Аудитория: не указана',
+    ctx.resources?`Ресурсы: ${ctx.resources}`:'Ресурсы: не указаны',
+    `Дедлайн: ${ctx.deadline||'гибкий'}`,
+    `Часы/день: ${ctx.daily_hours||'1-2'}`,
     `Блокеры: ${topBlockers}`,
     `Прогресс: ${S.progress.sessions} сессий, streak ${S.progress.streak}`,
     topTasks?`Активные задачи: ${topTasks}`:'Активные задачи: нет',
@@ -1982,8 +3003,9 @@ function normalizeRoadmapVariant(v){
   return ['safe','balanced','aggressive'].includes(safe)?safe:'balanced';
 }
 function roadmapMaxTokens(weeksCount,variant='balanced'){
-  const safeVariant=normalizeRoadmapVariant(variant);
-  return {safe:1000,balanced:1200,aggressive:1300}[safeVariant]||1200;
+  const _safeVariant=normalizeRoadmapVariant(variant);
+  const _weeks=Number(weeksCount)||2;
+  return ROADMAP_DEFAULT_MAX_TOKENS;
 }
 function roadmapResponseJsonSchema(){
   return {
@@ -1998,11 +3020,12 @@ function roadmapResponseJsonSchema(){
         items:{
           type:'object',
           additionalProperties:false,
-          required:['title','objective','outcome','completion_criteria','target_date'],
+          required:['title','objective','outcome','reasoning','completion_criteria','target_date'],
           properties:{
             title:{type:'string',maxLength:64},
             objective:{type:'string',maxLength:180},
             outcome:{type:'string',maxLength:140},
+            reasoning:{type:'string',maxLength:220},
             completion_criteria:{
               type:'array',
               minItems:1,
@@ -2013,6 +3036,48 @@ function roadmapResponseJsonSchema(){
           }
         }
       }
+    }
+  };
+}
+function roadmapSkeletonResponseJsonSchema(){
+  return {
+    type:'object',
+    additionalProperties:false,
+    required:['stages'],
+    properties:{
+      stages:{
+        type:'array',
+        minItems:ROADMAP_MIN_STAGES,
+        maxItems:ROADMAP_MAX_STAGES,
+        items:{
+          type:'object',
+          additionalProperties:false,
+          required:['title','objective','outcome','target_date'],
+          properties:{
+            title:{type:'string',maxLength:64},
+            objective:{type:'string',maxLength:160},
+            outcome:{type:'string',maxLength:140},
+            target_date:{type:'string',maxLength:20}
+          }
+        }
+      }
+    }
+  };
+}
+function activeStageEnrichmentResponseJsonSchema(){
+  return {
+    type:'object',
+    additionalProperties:false,
+    required:['why_this_stage_matters','completion_criteria','execution_focus'],
+    properties:{
+      why_this_stage_matters:{type:'string',maxLength:220},
+      completion_criteria:{
+        type:'array',
+        minItems:1,
+        maxItems:4,
+        items:{type:'string',maxLength:100}
+      },
+      execution_focus:{type:'string',maxLength:160}
     }
   };
 }
@@ -2060,28 +3125,60 @@ function taskAuditResponseJsonSchema(){
   };
 }
 function buildRoadmapPrompt(weeksCount,strategyDesc=''){
-  const summary=clipText(getContextSummary(),520);
-  const deadline=S.user.deadline||'';
+  const ctx=buildRoadmapOnboardingContext();
+  const summary=clipText(getContextSummary(),320);
+  const deadline=ctx.deadline||'';
   const windowDays=getRoadmapPromptWindowDays(deadline);
   const horizonLabel=deadline?`Дедлайн: ${deadline}`:'Дедлайн: в пределах 14 дней';
+  const mapping=roadmapContextPresence(ctx);
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'buildRoadmapPrompt',
+    action:'roadmap_context_built',
+    presentFields:mapping.present,
+    missingFields:mapping.missing
+  });
+  if(mapping.missing.length){
+    logWarn({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'buildRoadmapPrompt',
+      action:'roadmap_context_missing_fields',
+      missingFields:mapping.missing
+    });
+  }
   return `Собери milestone roadmap на ${weeksCount} недель.
 
-Контекст:
+FOUNDERS CONTEXT:
+- Project name: ${ctx.project_name||'не указано'}
+- Startup idea: ${ctx.startup_idea||'не указано'}
+- Primary goal: ${ctx.primary_goal||'не указано'}
+- Current stage: ${ctx.current_stage||'не указано'}
+- Built status: ${ctx.built_status||'не указано'}
+- Niche: ${ctx.niche||'не указано'}
+- Target audience: ${ctx.target_audience||'не указано'}
+- Resources available: ${ctx.resources||'не указано'}
+- Biggest blocker: ${ctx.blocker||'нет явных'}
+- Daily hours: ${ctx.daily_hours||'не указано'}
+- ${horizonLabel}
+- Active horizon: ${windowDays} дней
+${strategyDesc?`- Pace mode: ${strategyDesc}`:''}
+
+Краткая сводка:
 ${summary}
-${strategyDesc?`\nТемп: ${strategyDesc}`:''}
-${horizonLabel}
-Активный горизонт: ${windowDays} дней.
 
 Требования:
 - Верни JSON-объект вида { "stages": [...] }.
-- В массиве stages должно быть 2-4 milestones.
-- Каждый milestone содержит: title, objective, outcome, completion_criteria, target_date.
+- AI сам выбирает 2-4 milestones, названия и структуру по контексту пользователя.
+- Каждый milestone содержит: title, objective, outcome, reasoning, completion_criteria, target_date.
 - Это структура milestones, а не полный список задач.
 
 Формат:
 - title: короткое название фазы (2-5 слов), отражающее контекст пользователя
 - objective: конкретная цель этапа (без префикса "objective:")
 - outcome: измеримый результат этапа (без префикса "outcome:")
+- reasoning: почему этап критичен сейчас и к чему он ведёт дальше
 - completion_criteria: 1-3 коротких критерия завершения
 - target_date: YYYY-MM-DD или ""
 
@@ -2092,23 +3189,121 @@ ${horizonLabel}
 - Без объяснений
 - Только JSON`;
 }
-function buildMilestoneTasksPrompt(ms1,_countDesc,intensityDesc=''){
-  const stageTitle=clipText(ms1?.title||'MVP build',60)||'MVP build';
-  const stageObjective=clipText(getStageObjectiveText(ms1)||'',170)||'проверить спрос и довести MVP до первых пользователей';
-  const goal=clipText(S.user.goal||'',140)||'запуск продукта';
-  const deadline=S.user.deadline||'не задан';
-  const blockers=clipText(S.user.blockers||'',120)||'нет явных';
+function buildRoadmapSkeletonPrompt(context={}){
+  const weeksCount=Math.max(1,Number(context.weeksCount)||2);
+  const strategyDesc=String(context.strategyDesc||'').trim();
+  const ctx=context.context||buildRoadmapOnboardingContext();
+  const summary=clipText(getContextSummary(),280);
+  const deadline=ctx.deadline||S.user.deadline||'';
+  const windowDays=getRoadmapPromptWindowDays(deadline);
+  const horizonLabel=deadline?`Дедлайн: ${deadline}`:'Дедлайн: в пределах 14 дней';
+  return `Собери roadmap skeleton на ${weeksCount} недель.
+
+Контекст основателя:
+- Project: ${ctx.project_name||'не указано'}
+- Idea: ${ctx.startup_idea||'не указано'}
+- Goal: ${ctx.primary_goal||'не указано'}
+- Stage: ${ctx.current_stage||'не указано'}
+- Built: ${ctx.built_status||'не указано'}
+- Niche: ${ctx.niche||'не указано'}
+- Audience: ${ctx.target_audience||'не указано'}
+- Resources: ${ctx.resources||'не указано'}
+- Blocker: ${ctx.blocker||'нет явных'}
+- Daily hours: ${ctx.daily_hours||'не указано'}
+- ${horizonLabel}
+- Active horizon: ${windowDays} дней
+${strategyDesc?`- Pace: ${strategyDesc}`:''}
+
+Краткая сводка:
+${summary}
+
+Верни только JSON:
+{
+  "stages": [
+    {"title":"","objective":"","outcome":"","target_date":""}
+  ]
+}
+
+Правила:
+- 2-4 stages
+- без задач
+- без длинных объяснений
+- без повторяющихся названий
+- title 2-5 слов, конкретный по контексту`;
+}
+function buildActiveStageEnrichmentPrompt(stage,context={}){
+  const ctx=context.context||buildRoadmapOnboardingContext();
+  const normalized=normalizeStageForEnrichment(stage,0);
+  const title=normalized.title;
+  const objective=normalized.objective;
+  const outcome=normalized.outcome;
+  return `Верни JSON для активного milestone.
+Milestone:
+- title: ${title}
+- objective: ${objective}
+- outcome: ${outcome}
+
+Founder constraints:
+- goal: ${ctx.primary_goal||'не указано'}
+- blocker: ${ctx.blocker||'нет явных'}
+- daily_hours: ${ctx.daily_hours||'не указано'}
+
+Schema:
+{"why_this_stage_matters":"","completion_criteria":["",""],"execution_focus":""}
+
+Rules:
+- why_this_stage_matters: <=16 слов
+- completion_criteria: ровно 2 коротких пункта
+- execution_focus: <=10 слов
+- только JSON, без markdown и комментариев`;
+}
+function normalizeRoadmapSkeleton(raw){
+  const source=Array.isArray(raw?.stages)?raw.stages:(Array.isArray(raw)?raw:[]);
+  const fallback=fallbackRoadmapForMvp();
+  const count=Math.max(ROADMAP_MIN_STAGES,Math.min(ROADMAP_MAX_STAGES,source.length||fallback.length));
+  return Array.from({length:count},(_,index)=>{
+    const candidate=source[index]||{};
+    const fallbackStage=fallback[index]||fallback[fallback.length-1]||{};
+    const normalized=normalizeStageForEnrichment({
+      title:candidate?.title||fallbackStage?.title||buildFallbackStageTitle(index,S?.user?.goal||''),
+      objective:candidate?.objective||fallbackStage?.objective||'',
+      outcome:candidate?.outcome||fallbackStage?.outcome||''
+    },index);
+    return {
+      week:index+1,
+      title:normalized.title,
+      objective:normalized.objective,
+      outcome:normalized.outcome,
+      target_date:toIsoDateOnly(candidate?.target_date||fallbackStage?.target_date||''),
+      completion_criteria:[],
+      reasoning:'',
+      days:[]
+    };
+  });
+}
+function buildMilestoneTasksPrompt(ms1,_countDesc,intensityDesc='',options={}){
+  const stage=normalizeStageForEnrichment(ms1||{},Number(options.stageIndex)||0);
+  const stageTitle=clipText(stage.title||'Stage 1',60)||'Stage 1';
+  const stageObjective=clipText(stage.objective||'',170)||'проверить спрос и довести MVP до первых пользователей';
+  const stageOutcome=clipText(stage.outcome||'',130)||'измеримый результат текущего этапа';
+  const context=options.context||buildRoadmapOnboardingContext();
+  const goal=clipText(context.primary_goal||S.user.goal||'',140)||'запуск продукта';
+  const deadline=context.deadline||S.user.deadline||'не задан';
+  const blockers=clipText(context.blocker||S.user.blockers||'',120)||'нет явных';
   const founderContext=clipText([
-    S.user.project||S.user.idea||'',
-    S.user.stage||'',
-    S.user.audience||'',
-    S.user.niche||''
-  ].filter(Boolean).join(' · '),180)||'MVP стартап · ранняя стадия';
+    context.project_name||'',
+    context.startup_idea||'',
+    context.current_stage||'',
+    context.target_audience||'',
+    context.niche||'',
+    context.resources||''
+  ].filter(Boolean).join(' · '),260)||'MVP стартап · ранняя стадия';
   return `Сгенерируй founder-grade execution tasks для активной фазы "${stageTitle}".
 
 Контекст:
 Цель: ${goal}
 Objective фазы: ${stageObjective}
+Outcome фазы: ${stageOutcome}
 Контекст фаундера: ${founderContext}
 Дедлайн: ${deadline}
 Блокеры: ${blockers}
@@ -2127,7 +3322,7 @@ Objective фазы: ${stageObjective}
 - done_definition: как понять, что задача завершена
 - priority: high | med | low
 - deadline: YYYY-MM-DD или ""
-- linked_stage: номер фазы (1..3)
+- linked_stage: номер активной фазы (1..4)
 
 Правила:
 - Без объяснений
@@ -2187,7 +3382,7 @@ function normalizeAiTasks(tasks,options={}){
     const stageIndex=Number.isFinite(stageIdxRaw)?Math.max(0,Math.min(ROADMAP_MAX_STAGES-1,stageIdxRaw-1)):0;
     const normalized=normalizeFounderTask(merged,{
       stageIndex,
-      stageTitle:options.stageTitle||'MVP build',
+      stageTitle:options.stageTitle||'Stage 1',
       stageObjective:options.stageObjective||existing?.stageObjective||'',
       deadline:options.deadline||S.user.deadline||''
     });
@@ -2451,6 +3646,16 @@ function obNext(from){
     S.user.resources=document.getElementById('ob-resources').value.trim();
     S.user.styles=getSelectedPills('ob-pills');
     S.user.win=document.getElementById('ob-win').value.trim();
+    const ctx=buildRoadmapOnboardingContext();
+    const mapping=roadmapContextPresence(ctx);
+    logInfo({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'obNext',
+      action:'onboarding_context_collected',
+      presentFields:mapping.present,
+      missingFields:mapping.missing
+    });
   }
   obGo(from+1);
 }
@@ -2481,38 +3686,14 @@ async function obGenerateRoadmap(){
     syncRoadmapVariantUI();
     const variantDesc={safe:'Консервативный темп: 2-4 часа в день, упор на устойчивость и низкий риск',balanced:'Сбалансированный темп: 4-6 часов в день, сочетание скорости и качества',aggressive:'Агрессивный темп: 8-10 часов в день, высокий фокус на быстрый результат'}[roadmapVariant];
     const weeksCount=calcWeeksFromDeadline(S.user.deadline);
-    const clientRequestId=createClientRequestId('roadmap');
-    S.roadmap=await geminiJSON(
-      buildRoadmapPrompt(weeksCount,variantDesc),
-      roadmapResponseJsonSchema(),
-      roadmapMaxTokens(weeksCount,roadmapVariant),
-      '',
-      {temperature:0.2,clientRequestId},
-      'roadmap'
-    );
-    logInfo({
-      area:'frontend',
-      module:'frontend/script.js',
-      function:'obGenerateRoadmap',
-      action:'roadmap_ai_result_ready',
-      stages:summarizeRoadmapStagesForLog(S.roadmap)
+    const roadmapCtx=buildRoadmapOnboardingContext();
+    await runRoadmapPipeline({
+      weeksCount,
+      strategyDesc:variantDesc,
+      context:roadmapCtx,
+      reason:'post_roadmap_onboarding'
     });
-    initializeExecutionFromRoadmap({resetVisibleTasks:true});
-    const activeIndex=getExecutionActiveStageIndex();
-    logStageTaskSnapshot('active_stage_resolved',activeIndex,{source:'obGenerateRoadmap'});
-    const generatedStageTasks=await generateTasksForStage(activeIndex,{force:true,silentFallback:false,reason:'post_roadmap_onboarding'});
-    if(!Array.isArray(generatedStageTasks)||!generatedStageTasks.length){
-      logWarn({
-        area:'frontend',
-        module:'frontend/script.js',
-        function:'obGenerateRoadmap',
-        action:'stage_tasks_missing_after_roadmap',
-        stageIndex:activeIndex
-      });
-      await ensureActiveStageTasks({force:true,silentFallback:false,reason:'post_roadmap_onboarding_recovery'});
-    }
     syncActiveTasksFromExecution();
-    logStageTaskSnapshot('stage_tasks_saved',activeIndex,{source:'obGenerateRoadmap',taskCount:getTasksForStage(activeIndex,{includeArchived:false}).length});
     saveAll();
     logInfo({
       area:'frontend',
@@ -2525,6 +3706,13 @@ async function obGenerateRoadmap(){
     obShowGoals();
     obGo(3);
   }catch(e){
+    logRoadmapPipelineEvent('roadmap_pipeline_failed_onboarding',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length,
+      activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+      activeStageIndex:getExecutionActiveStageIndex(),
+      errorMessage:String(e?.message||'')
+    });
     toast2('Roadmap generation failed',mapGeminiErrorMessage(e,'roadmap'));
   }finally{
     roadmapRequestInFlight=false;
@@ -2539,10 +3727,11 @@ function obShowGoals(){
   const stageSource=getExecutionStages().length
     ? getExecutionStages().map((stage,index)=>({
       title:stage.title||S.roadmap?.[index]?.title||`Stage ${index+1}`,
-      objective:getStageObjectiveText(stage)||getStageObjectiveText(S.roadmap?.[index]||{})||''
+      objective:getStageObjectiveText(stage)||getStageObjectiveText(S.roadmap?.[index]||{})||'',
+      reasoning:getStageReasoningText(stage)||getStageReasoningText(S.roadmap?.[index]||{})||''
     }))
     : (S.roadmap||[]);
-  const newGoals=stageSource.slice(0,3).map((wk,i)=>({id:Date.now()+i,title:wk.title,deadline:'',desc:wk.objective,pct:0}));
+  const newGoals=stageSource.slice(0,3).map((wk,i)=>({id:Date.now()+i,title:wk.title,deadline:'',desc:[wk.objective,wk.reasoning?`Why this stage matters: ${wk.reasoning}`:''].filter(Boolean).join(' · '),pct:0}));
   S.goals=newGoals;saveGoals();
   const el=document.getElementById('ob-goals-preview');
   el.innerHTML=newGoals.map(g=>`<div style="background:var(--surface);border:1px solid var(--border2);padding:10px;margin-bottom:8px;"><div style="font-family:var(--head);font-size:13px;font-weight:900;color:var(--ink);text-transform:uppercase;">${escHtml(g.title)}</div><div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:3px;">${escHtml(g.desc)}</div></div>`).join('');
@@ -2558,9 +3747,11 @@ function renderOnboardingTaskPreview(){
   const count=activeTasks.length;
   const stageObjective=getStageObjectiveText(milestone);
   const stageOutcome=getStageOutcomeText(milestone);
+  const stageReasoning=getStageReasoningText(milestone);
   el.innerHTML=`<div class="ob-task-preview-meta"><strong>${escHtml(milestone.title||`Этап ${activeIndex+1}`)}</strong><span>Загружено задач: ${count}</span></div>`+
     `${stageObjective?`<div class="ob-task-preview-meta"><strong>Objective:</strong><span>${escHtml(stageObjective)}</span></div>`:''}`+
     `${stageOutcome?`<div class="ob-task-preview-meta"><strong>Outcome:</strong><span>${escHtml(stageOutcome)}</span></div>`:''}`+
+    `${stageReasoning?`<div class="ob-task-preview-meta"><strong>Why this stage matters:</strong><span>${escHtml(stageReasoning)}</span></div>`:''}`+
     `<div class="ob-task-preview-list">`+
     activeTasks.map((task,i)=>`<div class="ob-task-item"><div class="ob-task-index">${i+1}</div><div class="ob-task-body"><div class="ob-task-text">${escHtml(getTaskTitle(task))}</div><div class="ob-task-deadline">${task.deadline?`Дедлайн: ${escHtml(task.deadline)}`:'Дедлайн не назначен'}</div></div><div class="ob-task-prio ${escHtml(task.prio||'med')}">${escHtml(taskPrioLabel(task.prio||'med'))}</div></div>`).join('')+`</div>`;
   logInfo({
@@ -3058,6 +4249,18 @@ function toggleRoadmapTimelineItem(index,dayIndex){
   openRoadmapTimelineKey=openRoadmapTimelineKey===key?'':key;
   renderRM();
 }
+function getRoadmapStageCriteria(index){
+  const stage=getExecutionStage(index);
+  if(stage&&Array.isArray(stage.completionCriteria)&&stage.completionCriteria.length){
+    return stage.completionCriteria.map((item,idx)=>({
+      day:`C${idx+1}`,
+      task:clipText(item,90),
+      duration:'criteria'
+    }));
+  }
+  const wk=S.roadmap?.[index];
+  return Array.isArray(wk?.days)?wk.days:[];
+}
 function buildRoadmapDetailPanel(index){
   if(index===null||index===undefined||!S.roadmap||!S.roadmap[index]) return '';
   const wk=S.roadmap[index];
@@ -3065,11 +4268,13 @@ function buildRoadmapDetailPanel(index){
   const stageTitle=stage?.title||wk.title||`Этап ${index+1}`;
   const stageObjective=getStageObjectiveText(stage||wk)||'';
   const stageOutcome=getStageOutcomeText(stage||wk)||'';
+  const stageReasoning=getStageReasoningText(stage||wk)||'';
   const pct=getRoadmapStagePct(index);
   const related=getRoadmapRelatedTasks(index).slice(0,6);
-  const criteriaCount=Math.max(1,(wk.days||[]).length);
+  const stageCriteria=getRoadmapStageCriteria(index);
+  const criteriaCount=Math.max(1,stageCriteria.length);
   const criteriaDone=Math.round((pct/100)*criteriaCount);
-  const checklist=(wk.days||[]).slice(0,4).map((day,dayIndex)=>{
+  const checklist=stageCriteria.slice(0,4).map((day,dayIndex)=>{
     let status='pending';
     if(getRoadmapStageStatus(index)==='done') status='done';
     else if(getRoadmapStageStatus(index)==='active'){
@@ -3083,13 +4288,14 @@ function buildRoadmapDetailPanel(index){
       <div class="rm-detail-kicker">Milestone Detail</div>
       <div class="rm-detail-title">${escHtml(stageTitle)}</div>
       <div class="rm-detail-copy">${escHtml(stageObjective)}${stageOutcome?` · Outcome: ${escHtml(stageOutcome)}`:''}</div>
+      ${stageReasoning?`<div class="rm-detail-copy"><strong>Why this stage matters:</strong> ${escHtml(stageReasoning)}</div>`:''}
     </div>
     <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${index})">Close</button>
   </div>
   <div class="rm-detail-grid">
     <div class="rm-detail-stat"><strong>${pct}%</strong><span>Progress</span></div>
     <div class="rm-detail-stat"><strong>${escHtml(getRoadmapTargetDate(index,S.roadmap.length))}</strong><span>Target date</span></div>
-    <div class="rm-detail-stat"><strong>${(wk.days||[]).length}</strong><span>Requirements</span></div>
+    <div class="rm-detail-stat"><strong>${stageCriteria.length}</strong><span>Requirements</span></div>
   </div>
   <div class="rm-detail-list">
     <div>
@@ -3121,38 +4327,14 @@ async function genVariants(){
     const weeksCount=calcWeeksFromDeadline(S.user.deadline);
     const roadmapVariant=BETA_ALLOWED_ROADMAP_VARIANT;
     const variantDesc={safe:'Консервативный темп: 2-4 часа в день, упор на устойчивость и низкий риск',balanced:'Сбалансированный темп: 4-6 часов в день, сочетание скорости и качества',aggressive:'Агрессивный темп: 8-10 часов в день, высокий фокус на быстрый результат'}[roadmapVariant];
-    const clientRequestId=createClientRequestId('roadmap');
-    S.roadmap=await geminiJSON(
-      buildRoadmapPrompt(weeksCount,variantDesc),
-      roadmapResponseJsonSchema(),
-      roadmapMaxTokens(weeksCount,roadmapVariant),
-      '',
-      {temperature:0.2,clientRequestId},
-      'roadmap'
-    );
-    logInfo({
-      area:'frontend',
-      module:'frontend/script.js',
-      function:'genVariants',
-      action:'roadmap_ai_result_ready',
-      stages:summarizeRoadmapStagesForLog(S.roadmap)
+    const roadmapCtx=buildRoadmapOnboardingContext();
+    await runRoadmapPipeline({
+      weeksCount,
+      strategyDesc:variantDesc,
+      context:roadmapCtx,
+      reason:'post_roadmap_rebuild'
     });
-    initializeExecutionFromRoadmap({resetVisibleTasks:true});
-    const activeIndex=getExecutionActiveStageIndex();
-    logStageTaskSnapshot('active_stage_resolved',activeIndex,{source:'genVariants'});
-    const generatedStageTasks=await generateTasksForStage(activeIndex,{force:true,silentFallback:false,reason:'post_roadmap_rebuild'});
-    if(!Array.isArray(generatedStageTasks)||!generatedStageTasks.length){
-      logWarn({
-        area:'frontend',
-        module:'frontend/script.js',
-        function:'genVariants',
-        action:'stage_tasks_missing_after_roadmap',
-        stageIndex:activeIndex
-      });
-      await ensureActiveStageTasks({force:true,silentFallback:false,reason:'post_roadmap_rebuild_recovery'});
-    }
     syncActiveTasksFromExecution();
-    logStageTaskSnapshot('stage_tasks_saved',activeIndex,{source:'genVariants',taskCount:getTasksForStage(activeIndex,{includeArchived:false}).length});
     saveAll();
     logInfo({
       area:'frontend',
@@ -3166,6 +4348,13 @@ async function genVariants(){
     updRoadmapProgress();
     toast2('Roadmap готов',`Построен план на ${weeksCount} нед.`);
   }catch(e){
+    logRoadmapPipelineEvent('roadmap_pipeline_failed_rebuild',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length,
+      activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+      activeStageIndex:getExecutionActiveStageIndex(),
+      errorMessage:String(e?.message||'')
+    });
     if(previousRoadmap){
       S.roadmap=previousRoadmap;
       S.execution=previousExecution;
@@ -3210,6 +4399,7 @@ function renderRM(){
   const focusTitle=(focusedStage?.title||focusedMilestone.title||`Stage ${focusedRoadmapStageIndex+1}`);
   const focusObjective=getStageObjectiveText(focusedStage||focusedMilestone)||'Execution objective not specified yet.';
   const focusOutcome=getStageOutcomeText(focusedStage||focusedMilestone);
+  const focusReasoning=getStageReasoningText(focusedStage||focusedMilestone);
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
@@ -3249,6 +4439,7 @@ function renderRM(){
       <div class="rm-focus-kicker">${focusedStatus==='active'?'FOCUSING PHASE':'STAGE OVERVIEW'}</div>
       <h2 class="rm-focus-title">${escHtml(focusTitle)}</h2>
       <p class="rm-focus-copy">${escHtml(focusObjective)}${focusOutcome?` · Outcome: ${escHtml(focusOutcome)}`:''}</p>
+      ${focusReasoning?`<p class="rm-focus-copy"><strong>Why this stage matters:</strong> ${escHtml(focusReasoning)}</p>`:''}
       <div class="rm-focus-actions">
         <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${focusedRoadmapStageIndex})">${openRoadmapMilestoneIndex===focusedRoadmapStageIndex?'Hide Milestone Detail':'Open Milestone Detail'}</button>
         ${focusedRoadmapStageIndex===activeIndex?'<button class="btn btn-primary btn-sm" onclick="openExecutionTasks()">Open Execution Tasks →</button>':''}
@@ -3506,7 +4697,7 @@ function addTask(){
     created
   }],{
     stageIndex,
-    stageTitle:stage?.title||'MVP build',
+    stageTitle:stage?.title||'Stage 1',
     stageObjective:stage?.objective||'',
     deadline:S.user.deadline||''
   })[0];
@@ -3663,7 +4854,7 @@ function loadTasks(){
     }else{
       S.tasks=normalizeTaskCollection(raw,{
         stageIndex,
-        stageTitle:stage?.title||'MVP build',
+        stageTitle:stage?.title||'Stage 1',
         stageObjective:stage?.objective||'',
         deadline:S.user.deadline||''
       }).map((task)=>({
@@ -3695,7 +4886,7 @@ async function aiEditTasks(){
       {
         existingById,
         stageObjective:activeStage?.objective||'',
-        stageTitle:activeStage?.title||'MVP build',
+        stageTitle:activeStage?.title||'Stage 1',
         deadline:S.user.deadline||''
       }
     );
@@ -3703,7 +4894,7 @@ async function aiEditTasks(){
     const untouched=tasks.filter(task=>!revisedById.has(task.id));
     aiTasksDraft=normalizeTaskCollection([...revisedSubset,...untouched],{
       stageIndex:activeIndex,
-      stageTitle:activeStage?.title||'MVP build',
+      stageTitle:activeStage?.title||'Stage 1',
       stageObjective:activeStage?.objective||'',
       deadline:S.user.deadline||''
     });
@@ -3720,7 +4911,7 @@ function applyAiTasks(){
   const stage=getExecutionStage(stageIndex)||S.roadmap?.[stageIndex]||S.roadmap?.[0]||{};
   const normalized=normalizeTaskCollection(aiTasksDraft,{
     stageIndex,
-    stageTitle:stage?.title||'MVP build',
+    stageTitle:stage?.title||'Stage 1',
     stageObjective:stage?.objective||'',
     deadline:S.user.deadline||''
   });
