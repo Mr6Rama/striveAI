@@ -86,7 +86,9 @@
       <div class="ob-field">
         <label class="ob-lbl">Your deadline — when do you want to finish?</label>
         <input class="ob-in" type="date" id="ob-deadline"/>
+        <div class="ob-beta-limit">Beta limit: plans currently support deadlines up to 1 month.</div>
         <div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:4px;text-transform:uppercase;letter-spacing:.04em;">AI will size your roadmap to fit this date — you set it, not us</div>
+        <div class="ob-field-error" id="ob-deadline-error"></div>
       </div>
       <div class="ob-field">
         <label class="ob-lbl">Daily hours available</label>
@@ -158,9 +160,9 @@
       <div class="ob-headline">Choose<br><span>your</span><br>pace.</div>
       <div class="ob-sub">AI will build your plan based on this strategy and your deadline</div>
       <div class="ob-variants">
-        <div class="ob-variant" id="var-safe" onclick="obSelectVariant('safe')">
+        <div class="ob-variant ob-variant-disabled" id="var-safe" aria-disabled="true">
           <div class="ob-variant-check" id="vc-safe"></div>
-          <div class="ob-variant-tag safe">🟢 Conservative</div>
+          <div class="ob-variant-tag safe">🟢 Conservative · Coming soon</div>
           <div class="ob-variant-title">Safe &amp; Steady</div>
           <div class="ob-variant-desc">Sustainable pace · Lower risk · Deep learning focus · 2–4h/day</div>
         </div>
@@ -170,13 +172,14 @@
           <div class="ob-variant-title">Build Momentum</div>
           <div class="ob-variant-desc">Optimal execution rhythm · Mix of deep work and shipping · 4–6h/day</div>
         </div>
-        <div class="ob-variant" id="var-aggressive" onclick="obSelectVariant('aggressive')">
+        <div class="ob-variant ob-variant-disabled" id="var-aggressive" aria-disabled="true">
           <div class="ob-variant-check" id="vc-aggressive"></div>
-          <div class="ob-variant-tag aggressive">🔴 Aggressive</div>
+          <div class="ob-variant-tag aggressive">🔴 Aggressive · Coming soon</div>
           <div class="ob-variant-title">All In</div>
           <div class="ob-variant-desc">Maximum output · Ship fast · High intensity · 8–10h/day</div>
         </div>
       </div>
+      <div class="ob-beta-note">Beta availability: only Balanced roadmap mode is currently enabled.</div>
       <div id="ob-gen-loading" style="display:none">
         <div class="ob-loading"><div class="spin"></div><div class="ob-loading-txt">Generating your personalized roadmap with AI… (about 1–2 minutes)</div></div>
       </div>
@@ -204,25 +207,26 @@
       <div class="ob-headline">Generate<br><span>your</span><br>first tasks.</div>
       <div class="ob-sub">Choose task intensity for reaching Milestone 1</div>
       <div class="ob-variants" id="task-variants">
-        <div class="ob-variant" id="tvar-safe" onclick="obSelectTaskVar('safe')">
-          <div class="ob-variant-check" id="tvc-safe"></div>
+        <div class="ob-variant on" id="tvar-safe" onclick="obSelectTaskVar('safe')">
+          <div class="ob-variant-check" id="tvc-safe">✓</div>
           <div class="ob-variant-tag safe">🟢 Focused</div>
           <div class="ob-variant-title">Core Tasks Only</div>
           <div class="ob-variant-desc">3–5 key tasks with clear deadlines — no overwhelm</div>
         </div>
-        <div class="ob-variant on" id="tvar-balanced" onclick="obSelectTaskVar('balanced')">
-          <div class="ob-variant-check" id="tvc-balanced">✓</div>
-          <div class="ob-variant-tag balanced">🟡 Balanced</div>
+        <div class="ob-variant ob-variant-disabled" id="tvar-balanced" aria-disabled="true">
+          <div class="ob-variant-check" id="tvc-balanced"></div>
+          <div class="ob-variant-tag balanced">🟡 Balanced · Coming soon</div>
           <div class="ob-variant-title">Full Task Set</div>
           <div class="ob-variant-desc">7–10 tasks covering all areas with deadlines</div>
         </div>
-        <div class="ob-variant" id="tvar-aggressive" onclick="obSelectTaskVar('aggressive')">
+        <div class="ob-variant ob-variant-disabled" id="tvar-aggressive" aria-disabled="true">
           <div class="ob-variant-check" id="tvc-aggressive"></div>
-          <div class="ob-variant-tag aggressive">🔴 Aggressive</div>
+          <div class="ob-variant-tag aggressive">🔴 Aggressive · Coming soon</div>
           <div class="ob-variant-title">Maximum Coverage</div>
           <div class="ob-variant-desc">12–15 detailed tasks with sub-tasks and stretch goals</div>
         </div>
       </div>
+      <div class="ob-beta-note">Beta availability: only Core Tasks Only generation is currently enabled.</div>
       <div id="ob-tasks-loading" style="display:none">
         <div class="ob-loading"><div class="spin"></div><div class="ob-loading-txt">AI generating your milestone tasks…</div></div>
       </div>
@@ -306,7 +310,7 @@
         <div class="dash-hero">
           <div class="dash-greeting" id="dash-greeting">SYSTEM INITIALIZED //</div>
           <div class="dash-title" id="dash-title">Ready to<br><span class="accent" id="dash-accent">build.</span></div>
-          <div class="dash-goal-line" id="dash-goal-line">Set your goal in Settings to get started →</div>
+          <div class="dash-goal-line" id="dash-goal-line">Complete onboarding to set your goal and start shipping →</div>
           <div class="dash-hero-body">
             <div class="dash-hero-left">
               <div class="milestone-bar-wrap">
@@ -367,8 +371,8 @@
         <div class="dash-grid-wide">
           <div class="card mission-card" id="dashboard-mission-card">
             <div class="mission-label">⚡ Today's Mission</div>
-            <div class="mission-title" id="mc-title">Add your goal in Settings to generate a plan</div>
-            <div class="mission-detail" id="mc-detail">Set your goal, deadline, and work preferences — then hit "Build Plan" to get your personalized 8-week roadmap.</div>
+            <div class="mission-title" id="mc-title">Complete onboarding to generate your plan</div>
+            <div class="mission-detail" id="mc-detail">Set your goal, deadline, and work preferences during onboarding, then build your roadmap.</div>
             <div class="mission-tags">
               <span class="mtag" id="mc-tag1">Status: Ready</span>
               <span class="mtag" id="mc-tag2">Priority: —</span>
@@ -425,6 +429,11 @@
             <button class="ftab" onclick="filterTasks('active',this)">Active</button>
             <button class="ftab" onclick="filterTasks('high',this)">🔴 High</button>
             <button class="ftab" onclick="filterTasks('done',this)">Done</button>
+          </div>
+          <div class="task-stage-banner" id="task-stage-banner">
+            <div class="task-stage-kicker">Active Milestone</div>
+            <div class="task-stage-title" id="task-stage-title">No active milestone</div>
+            <div class="task-stage-meta" id="task-stage-meta">Generate roadmap to start milestone execution.</div>
           </div>
           <div class="task-list" id="task-list"></div>
         </div>
@@ -491,7 +500,10 @@
       <div class="roadmap-wrap" style="padding-top:20px;">
         <div class="page-head" style="background:transparent;border:none;padding:0 0 14px;max-width:860px;margin:0 auto;">
           <div><div class="page-title">Roadmap</div><div class="page-sub" id="rm-span">Your 8-week execution plan</div></div>
-          <button class="btn btn-outline btn-sm" onclick="genVariants()">↻ Rebuild Plan</button>
+          <div class="rm-rebuild-wrap">
+            <button class="btn btn-outline btn-sm" id="rm-rebuild-btn" onclick="onRebuildPlanClick()">↻ Rebuild Plan</button>
+            <div class="rm-rebuild-limit" id="rm-rebuild-limit" style="display:none">Rebuild limit reached (2/2)</div>
+          </div>
         </div>
 
         <!-- Progress panel INSIDE roadmap -->
@@ -526,8 +538,8 @@
           <div class="rm-gen-state">
             <div style="font-size:36px">◈</div>
             <div class="rm-gen-title">No Roadmap Yet</div>
-            <div class="rm-gen-sub">Set your goal in Settings, then generate your personalized 8-week execution plan.</div>
-            <button class="btn btn-primary" style="margin-top:10px" onclick="genVariants()">Generate My Plan →</button>
+            <div class="rm-gen-sub">Complete onboarding goal setup, then generate your personalized execution plan.</div>
+            <button class="btn btn-primary" style="margin-top:10px" id="rm-generate-btn" onclick="genVariants()">Generate My Plan →</button>
           </div>
         </div>
       </div>
@@ -585,26 +597,13 @@
           <div><div class="page-title">Settings</div></div>
         </div>
         <div class="settings-section">
-          <div class="ss-head">⚡ Goal &amp; Context</div>
-          <div class="ss-row" style="flex-direction:column;align-items:flex-start;gap:8px">
-            <div><div class="ss-row-name">Primary Goal</div><div class="ss-row-sub">What are you trying to ship?</div></div>
-            <input class="inp" id="set-goal-input" style="max-width:480px" placeholder="e.g. Ship MVP by June…"/>
-          </div>
-          <div class="ss-row"><div><div class="ss-row-name">Deadline</div><div class="ss-row-sub">AI sizes your roadmap to this date — not fixed to 8 weeks</div></div><input class="inp" type="date" id="set-deadline-input" style="width:180px"/></div>
-          <div class="ss-row"><div><div class="ss-row-name">Daily Hours</div></div><select class="inp" id="set-hrs-input" style="width:200px"><option value="">Not set</option><option>2–4 hours</option><option>4–6 hours</option><option>6–8 hours</option><option>8–10 hours</option><option>10+ hours (beast mode)</option></select></div>
-          <div class="ss-row" style="flex-direction:column;align-items:flex-start;gap:8px"><div><div class="ss-row-name">Biggest Blocker</div></div><input class="inp" id="set-block-input" style="max-width:480px" placeholder="e.g. No co-founder…"/></div>
-          <div class="ss-row" style="flex-direction:column;align-items:flex-start;gap:8px"><div><div class="ss-row-name">Work Style</div></div><div class="pill-row" id="style-pills"><div class="pill" onclick="togglePill(this)">⚡ Deep Work</div><div class="pill" onclick="togglePill(this)">🔁 Sprints</div><div class="pill" onclick="togglePill(this)">🎯 Task Batching</div><div class="pill" onclick="togglePill(this)">🤝 Pair Sessions</div><div class="pill" onclick="togglePill(this)">📊 Data-Driven</div><div class="pill" onclick="togglePill(this)">🌙 Night Owl</div></div></div>
-          <div class="ss-row" style="flex-direction:column;align-items:flex-start;gap:8px"><div><div class="ss-row-name">90-Day Vision</div></div><textarea class="inp" id="set-win-input" rows="2" style="max-width:480px" placeholder="First paying customers…"></textarea></div>
-          <div class="ss-row"><button class="btn btn-primary" onclick="saveProfile()">Save Profile</button><span id="set-profile-status" style="font-family:var(--mono);font-size:10px;color:var(--green);display:none;margin-left:10px">✓ SAVED</span></div>
-        </div>
-        <div class="settings-section">
           <div class="ss-head">👤 Profile &amp; Plan</div>
           <div class="ss-row"><div><div class="ss-row-name">Name</div></div><div style="font-family:var(--mono);font-size:12px;color:var(--muted)" id="set-name">—</div></div>
           <div class="ss-row"><div><div class="ss-row-name">Project</div></div><div style="font-family:var(--mono);font-size:12px;color:var(--muted)" id="set-proj">—</div></div>
           <div class="ss-row"><div><div class="ss-row-name">Current Plan</div></div><div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--blue-l)" id="set-plan">Free</div></div>
           <div class="ss-row"><div><div class="ss-row-name">Upgrade to Pro</div><div class="ss-row-sub">Unlock adaptive rebuilds, unlimited roadmaps, AI task cleanup</div></div><button class="btn btn-primary btn-sm" onclick="gp('billing')">View Plans →</button></div>
           <div class="ss-row"><div><div class="ss-row-name">Sign Out</div><div class="ss-row-sub">Sign out from this account and return to login screen</div></div><button class="btn btn-ghost btn-sm" onclick="authSignOut()">Sign Out</button></div>
-          <div class="ss-row"><div><div class="ss-row-name">Reset All Data</div><div class="ss-row-sub">Clear everything and start fresh</div></div><button class="btn btn-danger btn-sm" onclick="if(confirm('Reset all data?')){localStorage.clear();location.reload();}">Reset</button></div>
+          <div class="ss-row"><div><div class="ss-row-name">Reset All Data</div><div class="ss-row-sub">Clear everything and start fresh</div></div><button class="btn btn-danger btn-sm" onclick="resetAllData()">Reset</button></div>
         </div>
         <div class="settings-section"><div class="ss-head">ℹ️ About</div><div class="ss-row"><div><div class="ss-row-name">striveAI v1</div><div class="ss-row-sub">Powered by Gemini AI · Payments via PayPal</div></div><div style="font-family:var(--mono);font-size:10px;color:var(--muted)">v1.0.0</div></div></div>
       </div>
@@ -651,6 +650,12 @@
       <span id="tour-final-deadline">No deadline set</span>
     </div>
     <button class="ob-cta" style="margin-top:0" onclick="closeGuidedTour()">Enter Workspace →</button>
+  </div>
+</div>
+
+<div class="task-detail-overlay" id="task-detail-overlay" onclick="onTaskDetailOverlayClick(event)">
+  <div class="task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="task-detail-title" onclick="event.stopPropagation()">
+    <div id="task-detail-content"></div>
   </div>
 </div>
 
