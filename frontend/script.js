@@ -371,6 +371,14 @@ function splitObjectiveOutcomeText(value=''){
   const parsed=parseObjectiveOutcome(String(value||''),'');
   return parsed;
 }
+function getStageObjectiveText(stageLike){
+  const parsed=splitObjectiveOutcomeText(stageLike?.objective||'');
+  return clipText(parsed.objective||stageLike?.objective||'',180);
+}
+function getStageOutcomeText(stageLike){
+  const parsed=splitObjectiveOutcomeText(stageLike?.objective||'');
+  return clipText(stageLike?.outcome||parsed.outcome||'',140);
+}
 function getRoadmapWindowDays(deadline){
   if(!deadline) return 10;
   const end=new Date(deadline);
@@ -650,7 +658,7 @@ function normalizeFounderTask(raw,options={}){
     doneDefinition:clipText(raw?.done_definition||raw?.doneDefinition||'',200),
     prio:normalizeTaskPriority(raw?.priority??raw?.prio),
     deadline:normalizeTaskDeadlineValue(raw?.deadline),
-    linkedStage:Math.max(1,Math.min(3,stageIndex+1)),
+    linkedStage:Math.max(1,Math.min(ROADMAP_MAX_STAGES,stageIndex+1)),
     stageObjective:stageObjective||clipText(raw?.objective||'',150),
     done:Boolean(raw?.done),
     created:String(raw?.created||new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short'})).trim()
@@ -715,7 +723,7 @@ function normalizeBetaTasks(raw,options={}){
 function normalizeTaskCollection(raw,options={}){
   const source=Array.isArray(raw)?raw:[];
   const normalizedStageIndex=Number.isFinite(Number(options.stageIndex))
-    ? Math.max(0,Math.min(2,Number(options.stageIndex)))
+    ? Math.max(0,Math.min(ROADMAP_MAX_STAGES-1,Number(options.stageIndex)))
     : 0;
   const baseId=Date.now();
   const usedIds=new Set();
@@ -726,7 +734,7 @@ function normalizeTaskCollection(raw,options={}){
     usedIds.add(id);
     const rawLinkedStage=Number(item?.linkedStage??item?.linked_stage);
     const stageIndex=Number.isFinite(rawLinkedStage)
-      ? Math.max(0,Math.min(2,rawLinkedStage-1))
+      ? Math.max(0,Math.min(ROADMAP_MAX_STAGES-1,rawLinkedStage-1))
       : normalizedStageIndex;
     const normalized=normalizeFounderTask(
       {
@@ -750,7 +758,7 @@ function normalizeTaskCollection(raw,options={}){
       text:getTaskTitle(normalized),
       done:Boolean(item?.done),
       created,
-      linkedStage:Math.max(1,Math.min(3,Number(normalized.linkedStage)||stageIndex+1))
+      linkedStage:Math.max(1,Math.min(ROADMAP_MAX_STAGES,Number(normalized.linkedStage)||stageIndex+1))
     };
   });
 }
@@ -785,6 +793,13 @@ function normalizeCompletionCriteria(rawDays,objective=''){
   if(base.length) return base.slice(0,4);
   const fallback=clipText(objective,90)||'Выполнить ключевой outcome этапа.';
   return [fallback];
+}
+function resolvePhaseCompletionCriteria(phase){
+  const direct=(Array.isArray(phase?.completion_criteria)?phase.completion_criteria:[])
+    .map((entry)=>clipText(entry,90))
+    .filter(Boolean);
+  if(direct.length) return direct.slice(0,4);
+  return normalizeCompletionCriteria(phase?.days||[],phase?.objective||'');
 }
 function normalizeExecutionTask(task,stage){
   const safe=normalizeFounderTask(task,{
@@ -839,20 +854,26 @@ function createExecutionRoadmapFromPhases(phases){
   const hasDeadline=Boolean(deadline)&&!Number.isNaN(deadline.getTime())&&deadline>baseDate;
   const stages=list.map((phase,index)=>{
     const stageId=createClientRequestId(`stage${index+1}`);
-    const objective=clipText(phase?.objective||'',180)||`objective: этап ${index+1} | outcome: измеримый результат`;
-    const targetDate=hasDeadline
+    const parsed=splitObjectiveOutcomeText(phase?.objective||'');
+    const objectiveClean=clipText(parsed.objective||phase?.objective||'',180)||`этап ${index+1}: измеримый прогресс`;
+    const outcomeClean=clipText(phase?.outcome||parsed.outcome||extractOutcomeFromObjective(objectiveClean),140);
+    const objective=formatObjectiveOutcome(objectiveClean,outcomeClean);
+    const aiTargetDate=toIsoDateOnly(phase?.target_date||'');
+    const targetDate=aiTargetDate||(
+      hasDeadline
       ? toDateInputValue(new Date(baseDate.getTime()+(((deadline.getTime()-baseDate.getTime())*(index+1))/total)))
-      : toDateInputValue(new Date(baseDate.getTime()+((index+1)*7*24*60*60*1000)));
+      : toDateInputValue(new Date(baseDate.getTime()+((index+1)*7*24*60*60*1000)))
+    );
     return {
       id:stageId,
       index:index+1,
       title:clipText(phase?.title||`Stage ${index+1}`,80),
       objective,
-      outcome:clipText(phase?.outcome||extractOutcomeFromObjective(objective),140),
+      outcome:outcomeClean,
       startDate:index===0?toDateInputValue(baseDate):'',
       targetDate,
       status:index===0?'active':'locked',
-      completionCriteria:normalizeCompletionCriteria(phase?.days,objective),
+      completionCriteria:resolvePhaseCompletionCriteria(phase),
       tasksGenerated:false,
       tasksGeneratedAt:'',
       progress:0,
@@ -1035,9 +1056,16 @@ function initializeExecutionFromRoadmap(options={}){
     area:'frontend',
     module:'frontend/script.js',
     function:'initializeExecutionFromRoadmap',
-    action:'roadmap_initialized',
+    action:'execution_initialized',
     stageCount:S.execution.stages.length,
     stages:summarizeRoadmapStagesForLog(S.execution.stages)
+  });
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'initializeExecutionFromRoadmap',
+    action:'roadmap_initialized',
+    stageCount:S.execution.stages.length
   });
   logStageTaskSnapshot('active_stage_set',0);
   return true;
@@ -1428,7 +1456,7 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
         area:'frontend',
         module:'frontend/script.js',
         function:'geminiJSON',
-        action:'roadmap_fallback_applied',
+        action:'fallback_roadmap_used',
         requestId:response.requestId||'',
         stages:summarizeRoadmapStagesForLog(fallback)
       });
@@ -1959,39 +1987,31 @@ function roadmapMaxTokens(weeksCount,variant='balanced'){
 }
 function roadmapResponseJsonSchema(){
   return {
-    type:'array',
-    minItems:3,
-    maxItems:3,
-    items:{
-      type:'object',
-      additionalProperties:false,
-      required:['week','title','objective','days'],
-      properties:{
-        week:{type:'integer',minimum:1,maximum:3},
-        title:{type:'string',maxLength:48},
-        objective:{type:'string',maxLength:160},
-        outcome:{type:'string',maxLength:140},
-        completion_criteria:{
-          type:'array',
-          minItems:1,
-          maxItems:4,
-          items:{type:'string',maxLength:90}
-        },
-        days:{
-          type:'array',
-          minItems:1,
-          maxItems:4,
-          items:{
-            type:'object',
-            additionalProperties:false,
-              required:['day','task','duration'],
-              properties:{
-                day:{type:'string',maxLength:12},
-                task:{type:'string',maxLength:80},
-                duration:{type:'string',maxLength:12}
-              }
-            }
+    type:'object',
+    additionalProperties:false,
+    required:['stages'],
+    properties:{
+      stages:{
+        type:'array',
+        minItems:ROADMAP_MIN_STAGES,
+        maxItems:ROADMAP_MAX_STAGES,
+        items:{
+          type:'object',
+          additionalProperties:false,
+          required:['title','objective','outcome','completion_criteria','target_date'],
+          properties:{
+            title:{type:'string',maxLength:64},
+            objective:{type:'string',maxLength:180},
+            outcome:{type:'string',maxLength:140},
+            completion_criteria:{
+              type:'array',
+              minItems:1,
+              maxItems:4,
+              items:{type:'string',maxLength:90}
+            },
+            target_date:{type:'string',maxLength:20}
           }
+        }
       }
     }
   };
@@ -2053,30 +2073,28 @@ ${horizonLabel}
 Активный горизонт: ${windowDays} дней.
 
 Требования:
-- Верни JSON-массив из 3 фаз:
-  1) фаза сборки и проверки MVP
-  2) фаза запуска и сбора фидбэка
-  3) фаза traction и роста
-- Каждая фаза содержит: week, title, objective, outcome, completion_criteria, days
+- Верни JSON-объект вида { "stages": [...] }.
+- В массиве stages должно быть 2-4 milestones.
+- Каждый milestone содержит: title, objective, outcome, completion_criteria, target_date.
 - Это структура milestones, а не полный список задач.
 
 Формат:
-- week: 1..3
 - title: короткое название фазы (2-5 слов), отражающее контекст пользователя
-- objective: "objective: ... | outcome: ..."
-- outcome: измеримый результат этапа
+- objective: конкретная цель этапа (без префикса "objective:")
+- outcome: измеримый результат этапа (без префикса "outcome:")
 - completion_criteria: 1-3 коротких критерия завершения
-- days[]: 1-2 high-level criteria в формате {day, task, duration}
+- target_date: YYYY-MM-DD или ""
 
 Правила:
-- Без детального task dump для всех фаз
+- Не дублируй одинаковые названия milestones
+- Без детального task dump
 - Компактно, стратегично, без воды
 - Без объяснений
 - Только JSON`;
 }
 function buildMilestoneTasksPrompt(ms1,_countDesc,intensityDesc=''){
   const stageTitle=clipText(ms1?.title||'MVP build',60)||'MVP build';
-  const stageObjective=clipText(ms1?.objective||'',170)||'проверить спрос и довести MVP до первых пользователей';
+  const stageObjective=clipText(getStageObjectiveText(ms1)||'',170)||'проверить спрос и довести MVP до первых пользователей';
   const goal=clipText(S.user.goal||'',140)||'запуск продукта';
   const deadline=S.user.deadline||'не задан';
   const blockers=clipText(S.user.blockers||'',120)||'нет явных';
@@ -2166,7 +2184,7 @@ function normalizeAiTasks(tasks,options={}){
       created:t?.created||existing?.created
     };
     const stageIdxRaw=Number(merged?.linkedStage??merged?.linked_stage);
-    const stageIndex=Number.isFinite(stageIdxRaw)?Math.max(0,Math.min(2,stageIdxRaw-1)):0;
+    const stageIndex=Number.isFinite(stageIdxRaw)?Math.max(0,Math.min(ROADMAP_MAX_STAGES-1,stageIdxRaw-1)):0;
     const normalized=normalizeFounderTask(merged,{
       stageIndex,
       stageTitle:options.stageTitle||'MVP build',
@@ -2179,7 +2197,7 @@ function normalizeAiTasks(tasks,options={}){
       text:getTaskTitle(normalized),
       done:Boolean(merged.done),
       created:String(merged.created||normalized.created||new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short'})).trim(),
-      linkedStage:Math.max(1,Math.min(3,Number(normalized.linkedStage)||1))
+      linkedStage:Math.max(1,Math.min(ROADMAP_MAX_STAGES,Number(normalized.linkedStage)||1))
     };
   });
 }
@@ -2521,7 +2539,7 @@ function obShowGoals(){
   const stageSource=getExecutionStages().length
     ? getExecutionStages().map((stage,index)=>({
       title:stage.title||S.roadmap?.[index]?.title||`Stage ${index+1}`,
-      objective:stage.objective||S.roadmap?.[index]?.objective||''
+      objective:getStageObjectiveText(stage)||getStageObjectiveText(S.roadmap?.[index]||{})||''
     }))
     : (S.roadmap||[]);
   const newGoals=stageSource.slice(0,3).map((wk,i)=>({id:Date.now()+i,title:wk.title,deadline:'',desc:wk.objective,pct:0}));
@@ -2538,8 +2556,24 @@ function renderOnboardingTaskPreview(){
   syncActiveTasksFromExecution();
   const activeTasks=getActiveStageTasks();
   const count=activeTasks.length;
-  el.innerHTML=`<div class="ob-task-preview-meta"><strong>${escHtml(milestone.title||`Этап ${activeIndex+1}`)}</strong><span>Загружено задач: ${count}</span></div><div class="ob-task-preview-list">`+
+  const stageObjective=getStageObjectiveText(milestone);
+  const stageOutcome=getStageOutcomeText(milestone);
+  el.innerHTML=`<div class="ob-task-preview-meta"><strong>${escHtml(milestone.title||`Этап ${activeIndex+1}`)}</strong><span>Загружено задач: ${count}</span></div>`+
+    `${stageObjective?`<div class="ob-task-preview-meta"><strong>Objective:</strong><span>${escHtml(stageObjective)}</span></div>`:''}`+
+    `${stageOutcome?`<div class="ob-task-preview-meta"><strong>Outcome:</strong><span>${escHtml(stageOutcome)}</span></div>`:''}`+
+    `<div class="ob-task-preview-list">`+
     activeTasks.map((task,i)=>`<div class="ob-task-item"><div class="ob-task-index">${i+1}</div><div class="ob-task-body"><div class="ob-task-text">${escHtml(getTaskTitle(task))}</div><div class="ob-task-deadline">${task.deadline?`Дедлайн: ${escHtml(task.deadline)}`:'Дедлайн не назначен'}</div></div><div class="ob-task-prio ${escHtml(task.prio||'med')}">${escHtml(taskPrioLabel(task.prio||'med'))}</div></div>`).join('')+`</div>`;
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'renderOnboardingTaskPreview',
+    action:'onboarding_preview_rendered',
+    activeStageIndex:activeIndex,
+    taskCount:count,
+    title:clipText(milestone.title||'',80),
+    objective:clipText(stageObjective,140),
+    outcome:clipText(stageOutcome,120)
+  });
 }
 function obPrepLaunch(){
   const nameEl=document.getElementById('ob-name-final');
@@ -2550,8 +2584,8 @@ function obPrepLaunch(){
   if(deadlineEl)deadlineEl.textContent=S.user.deadline?`Deadline: ${S.user.deadline}`:'Deadline: flexible';
   const ms=document.getElementById('ob-ready-milestones');
   const tk=document.getElementById('ob-ready-tasks');
-  if(ms)ms.textContent=String((S.roadmap||[]).length);
-  if(tk)tk.textContent=String((S.tasks||[]).length);
+  if(ms)ms.textContent=String((getExecutionStages().length||S.roadmap?.length||0));
+  if(tk)tk.textContent=String((getActiveStageTasks().length||0));
 }
 function obContinueToLaunch(){obPrepLaunch();obGo(6);}
 async function obGenerateTasks(){
@@ -2563,7 +2597,17 @@ async function obGenerateTasks(){
   try{
     obTaskVariant=BETA_ALLOWED_TASK_VARIANT;
     syncTaskVariantUI();
-    await ensureActiveStageTasks({force:false,silentFallback:false});
+    await ensureActiveStageTasks({force:false,silentFallback:false,reason:'onboarding_tasks_step'});
+    if(!getActiveStageTasks().length){
+      logWarn({
+        area:'frontend',
+        module:'frontend/script.js',
+        function:'obGenerateTasks',
+        action:'stage_tasks_missing_after_roadmap',
+        stageIndex:getExecutionActiveStageIndex()
+      });
+      await ensureActiveStageTasks({force:true,silentFallback:false,reason:'onboarding_tasks_step_recovery'});
+    }
     syncActiveTasksFromExecution();
     saveTasks();renderOnboardingTaskPreview();obPrepLaunch();toast2('Задачи сгенерированы',`Подготовлено ${S.tasks.length} задач для первого этапа`);obGo(5);
   }catch(e){
@@ -3019,7 +3063,8 @@ function buildRoadmapDetailPanel(index){
   const wk=S.roadmap[index];
   const stage=getExecutionStage(index);
   const stageTitle=stage?.title||wk.title||`Этап ${index+1}`;
-  const stageObjective=stage?.objective||wk.objective||'';
+  const stageObjective=getStageObjectiveText(stage||wk)||'';
+  const stageOutcome=getStageOutcomeText(stage||wk)||'';
   const pct=getRoadmapStagePct(index);
   const related=getRoadmapRelatedTasks(index).slice(0,6);
   const criteriaCount=Math.max(1,(wk.days||[]).length);
@@ -3037,7 +3082,7 @@ function buildRoadmapDetailPanel(index){
     <div>
       <div class="rm-detail-kicker">Milestone Detail</div>
       <div class="rm-detail-title">${escHtml(stageTitle)}</div>
-      <div class="rm-detail-copy">${escHtml(stageObjective)}</div>
+      <div class="rm-detail-copy">${escHtml(stageObjective)}${stageOutcome?` · Outcome: ${escHtml(stageOutcome)}`:''}</div>
     </div>
     <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${index})">Close</button>
   </div>
@@ -3163,7 +3208,17 @@ function renderRM(){
   const timelineProgress=totalPct();
   const focusStatusLabel=focusedStatus==='done'?'Completed':focusedStatus==='active'?'Active':'Upcoming';
   const focusTitle=(focusedStage?.title||focusedMilestone.title||`Stage ${focusedRoadmapStageIndex+1}`);
-  const focusObjective=String(focusedStage?.objective||focusedMilestone.objective||'').trim()||'Execution objective not specified yet.';
+  const focusObjective=getStageObjectiveText(focusedStage||focusedMilestone)||'Execution objective not specified yet.';
+  const focusOutcome=getStageOutcomeText(focusedStage||focusedMilestone);
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'renderRM',
+    action:'roadmap_render_payload',
+    activeStageIndex:activeIndex,
+    stageCount:S.roadmap.length,
+    stages:summarizeRoadmapStagesForLog(getExecutionStages().length?getExecutionStages():S.roadmap)
+  });
   const timelineMeta=`${S.roadmap.length} stages · ${completedStages} completed · Active stage ${activeIndex+1}`;
   if(strip){
     strip.innerHTML=`<div class="rm-timeline-track">
@@ -3193,7 +3248,7 @@ function renderRM(){
     <div class="rm-focus-left">
       <div class="rm-focus-kicker">${focusedStatus==='active'?'FOCUSING PHASE':'STAGE OVERVIEW'}</div>
       <h2 class="rm-focus-title">${escHtml(focusTitle)}</h2>
-      <p class="rm-focus-copy">${escHtml(focusObjective)}</p>
+      <p class="rm-focus-copy">${escHtml(focusObjective)}${focusOutcome?` · Outcome: ${escHtml(focusOutcome)}`:''}</p>
       <div class="rm-focus-actions">
         <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${focusedRoadmapStageIndex})">${openRoadmapMilestoneIndex===focusedRoadmapStageIndex?'Hide Milestone Detail':'Open Milestone Detail'}</button>
         ${focusedRoadmapStageIndex===activeIndex?'<button class="btn btn-primary btn-sm" onclick="openExecutionTasks()">Open Execution Tasks →</button>':''}
@@ -3337,8 +3392,10 @@ function renderActiveMilestoneHeader(){
   const stageTasks=getTasksForStage(activeIndex,{includeArchived:false});
   const doneCount=stageTasks.filter((task)=>task.status==='done'||task.done).length;
   const totalCount=stageTasks.length;
+  const objectiveText=getStageObjectiveText(stage);
+  const outcomeText=getStageOutcomeText(stage);
   titleEl.textContent=`Active milestone: ${stage.title||`Stage ${activeIndex+1}`}`;
-  metaEl.textContent=`${stageStatusLabel(stage.status)} · ${doneCount}/${totalCount} tasks done · ${clipText(stage.objective||'',120)||'Objective pending'}`;
+  metaEl.textContent=`${stageStatusLabel(stage.status)} · ${doneCount}/${totalCount} tasks done · ${clipText(objectiveText||outcomeText||'',120)||'Objective pending'}`;
 }
 function focusTaskInput(){document.getElementById('task-input').focus();}
 function ensureTaskDetailBindings(){
