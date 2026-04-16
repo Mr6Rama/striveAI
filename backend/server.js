@@ -42,11 +42,14 @@ const GEMINI_ALLOWED_CONFIG_KEYS = new Set([
   'topP',
   'responseMimeType',
   'responseSchema',
+  'thinkingConfig',
 ]);
-const AI_ACTIONS = new Set(['roadmap', 'tasks', 'task_audit', 'goals_review', 'note_process', 'chat']);
+const AI_ACTIONS = new Set(['roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit', 'goals_review', 'note_process', 'chat']);
 const ACTION_MAX_OUTPUT_TOKENS = {
   roadmap: 2200,
   tasks: 1200,
+  tasks_skeleton: 600,
+  task_detail: 1100,
   task_audit: 700,
   goals_review: 500,
   note_process: 700,
@@ -55,11 +58,14 @@ const ACTION_MAX_OUTPUT_TOKENS = {
 const ACTION_CONTEXT_LIMITS = {
   roadmap: { promptChars: 12000, systemChars: 2600, totalChars: 14000 },
   tasks: { promptChars: 7000, systemChars: 1800, totalChars: 8200 },
+  tasks_skeleton: { promptChars: 5200, systemChars: 1500, totalChars: 6200 },
+  task_detail: { promptChars: 6000, systemChars: 1600, totalChars: 7000 },
   task_audit: { promptChars: 5200, systemChars: 1700, totalChars: 6400 },
   goals_review: { promptChars: 4200, systemChars: 1500, totalChars: 5200 },
   note_process: { promptChars: 5200, systemChars: 1500, totalChars: 6200 },
   chat: { promptChars: 6000, systemChars: 1700, totalChars: 7200 },
 };
+const TASK_GENERATION_ACTIONS = new Set(['tasks', 'tasks_skeleton', 'task_detail']);
 
 function approxInputTokens(charCount) {
   return Math.max(1, Math.round(charCount / 4));
@@ -179,6 +185,133 @@ function parseJsonWithRepair(raw) {
   return { usable: false, repairedText: '' };
 }
 
+function salvagePlainTextTasks(raw) {
+  const text = String(raw || '').replace(/\r/g, '').trim();
+  if (!text) return { usable: false, repairedText: '', taskCount: 0 };
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  const blocks = new Map();
+  lines.forEach((line) => {
+    let match = line.match(/^TASK\s+(\d+)\s*\|\s*(.+)$/i);
+    if (match) {
+      const idx = Number(match[1]);
+      blocks.set(idx, { ...(blocks.get(idx) || {}), task: line });
+      return;
+    }
+    match = line.match(/^DESCRIPTION\s+(\d+)\s*\|\s*(.+)$/i);
+    if (match) {
+      const idx = Number(match[1]);
+      blocks.set(idx, { ...(blocks.get(idx) || {}), description: line });
+      return;
+    }
+    match = line.match(/^WHY\s+(\d+)\s*\|\s*(.+)$/i);
+    if (match) {
+      const idx = Number(match[1]);
+      blocks.set(idx, { ...(blocks.get(idx) || {}), why: line });
+      return;
+    }
+    match = line.match(/^DELIVERABLE\s+(\d+)\s*\|\s*(.+)$/i);
+    if (match) {
+      const idx = Number(match[1]);
+      blocks.set(idx, { ...(blocks.get(idx) || {}), deliverable: line });
+      return;
+    }
+    match = line.match(/^DONE\s+(\d+)\s*\|\s*(.+)$/i);
+    if (match) {
+      const idx = Number(match[1]);
+      blocks.set(idx, { ...(blocks.get(idx) || {}), done: line });
+      return;
+    }
+    match = line.match(/^PRIORITY\s+(\d+)\s*\|\s*(high|med|low)$/i);
+    if (match) {
+      const idx = Number(match[1]);
+      blocks.set(idx, { ...(blocks.get(idx) || {}), priority: line });
+      return;
+    }
+    match = line.match(/^DEADLINE\s+(\d+)\s*\|\s*(.+)$/i);
+    if (match) {
+      const idx = Number(match[1]);
+      blocks.set(idx, { ...(blocks.get(idx) || {}), deadline: line });
+    }
+  });
+  const ordered = Array.from(blocks.entries())
+    .sort((a, b) => a[0] - b[0])
+    .filter(([, block]) => block.task && block.description && block.why && block.deliverable && block.done && block.priority && block.deadline);
+  if (!ordered.length) {
+    return { usable: false, repairedText: '', taskCount: 0 };
+  }
+  const repairedText = [
+    'TASK_SET_START',
+    'LANGUAGE | Russian',
+    ...ordered.flatMap(([, block]) => [block.task, block.description, block.why, block.deliverable, block.done, block.priority, block.deadline]),
+    'TASK_SET_END',
+  ].join('\n');
+  return { usable: true, repairedText, taskCount: ordered.length };
+}
+
+function salvageTaskSkeleton(raw) {
+  const text = String(raw || '').replace(/\r/g, '').trim();
+  if (!text) return { usable: false, repairedText: '', taskCount: 0 };
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  const ordered = lines
+    .map((line) => {
+      const match = line.match(/^(\d+)\s*\|\s*(.+)$/i);
+      if (!match) return null;
+      return {
+        idx: Number(match[1]),
+        title: match[2].trim(),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.idx - b.idx)
+    .filter((item, index) => item.idx === index + 1 && item.title);
+  if (ordered.length !== 3) {
+    return { usable: false, repairedText: '', taskCount: 0 };
+  }
+  const repairedText = [
+    'TASKS_SKELETON_START',
+    ...ordered.map((item) => `${item.idx} | ${item.title}`),
+    'TASKS_SKELETON_END',
+  ].join('\n');
+  return { usable: true, repairedText, taskCount: ordered.length };
+}
+
+function salvageTaskDetail(raw) {
+  const text = String(raw || '').replace(/\r/g, '').trim();
+  if (!text) return { usable: false, repairedText: '' };
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  const fields = new Map();
+  lines.forEach((line) => {
+    const match = line.match(/^(TITLE|DESCRIPTION|WHY|DELIVERABLE|DONE|PRIORITY|DEADLINE)\s*\|\s*(.+)$/i);
+    if (match && !fields.has(String(match[1] || '').toUpperCase())) {
+      fields.set(String(match[1] || '').toUpperCase(), `${String(match[1] || '').toUpperCase()} | ${String(match[2] || '').trim()}`);
+    }
+  });
+  const hasCore = fields.has('TITLE') && fields.has('DESCRIPTION') && fields.has('WHY');
+  const hasCompletion = fields.has('DELIVERABLE') || fields.has('DONE');
+  if (!hasCore || !hasCompletion) {
+    return { usable: false, repairedText: '' };
+  }
+  if (!fields.has('DELIVERABLE') && fields.has('DONE')) {
+    fields.set('DELIVERABLE', `DELIVERABLE | ${String(fields.get('DONE') || '').replace(/^DONE\s*\|\s*/i, '')}`);
+  }
+  if (!fields.has('DONE') && fields.has('DELIVERABLE')) {
+    fields.set('DONE', `DONE | ${String(fields.get('DELIVERABLE') || '').replace(/^DELIVERABLE\s*\|\s*/i, '')}`);
+  }
+  if (!fields.has('PRIORITY')) {
+    fields.set('PRIORITY', 'PRIORITY | med');
+  }
+  if (!fields.has('DEADLINE')) {
+    fields.set('DEADLINE', 'DEADLINE | none');
+  }
+  const orderedKeys = ['TITLE', 'DESCRIPTION', 'WHY', 'DELIVERABLE', 'DONE', 'PRIORITY', 'DEADLINE'];
+  const repairedText = [
+    'TASK_DETAIL_START',
+    ...orderedKeys.map((key) => fields.get(key)),
+    'TASK_DETAIL_END',
+  ].join('\n');
+  return { usable: true, repairedText: repairedText.trim() };
+}
+
 function classifyFailure({ timedOut, parseFailed, upstreamStatus, upstreamErrorCode, finishReason }) {
   const normalizedUpstreamError = String(upstreamErrorCode || '').toUpperCase();
   if (finishReason === 'MAX_TOKENS') {
@@ -209,11 +342,12 @@ function classifyFailure({ timedOut, parseFailed, upstreamStatus, upstreamErrorC
 }
 
 function isRetryableFailureCode(code) {
-  return code === 'UPSTREAM_UNAVAILABLE';
+  return code === 'UPSTREAM_UNAVAILABLE' || code === 'TIMEOUT';
 }
 
 function normalizeErrorPayload(action, failure) {
   const code = failure?.code || 'UPSTREAM_5XX';
+  const taskGenerationAction = TASK_GENERATION_ACTIONS.has(action);
   if (action === 'roadmap' && code === 'UPSTREAM_UNAVAILABLE') {
     return {
       error: 'Roadmap generation is temporarily unavailable. Please try again in a moment.',
@@ -229,7 +363,7 @@ function normalizeErrorPayload(action, failure) {
   }
   if (code === 'RESPONSE_TRUNCATED') {
     return {
-      error: action === 'tasks'
+      error: taskGenerationAction
         ? 'Task generation response was incomplete. Please retry.'
         : 'AI response was truncated. Please retry.',
       code: 'truncated_response',
@@ -291,6 +425,7 @@ function safePayloadForLogs(payload) {
       temperature: Number.isFinite(cfg.temperature) ? cfg.temperature : null,
       topP: Number.isFinite(cfg.topP) ? cfg.topP : null,
       responseMimeType: typeof cfg.responseMimeType === 'string' ? cfg.responseMimeType : '',
+      thinkingBudget: Number.isFinite(cfg?.thinkingConfig?.thinkingBudget) ? cfg.thinkingConfig.thinkingBudget : null,
       schemaProvided: Boolean(cfg.responseSchema || cfg.responseJsonSchema),
       keys: Object.keys(cfg || {}),
     },
@@ -337,11 +472,15 @@ function sanitizeGenerationConfig({ opts, action, effectiveMaxTokens }) {
   if (typeof opts.temperature === 'number' && Number.isFinite(opts.temperature)) {
     generationConfig.temperature = Math.min(2, Math.max(0, opts.temperature));
   } else {
-    generationConfig.temperature = action === 'roadmap' ? 0.2 : 0.7;
+    generationConfig.temperature = action === 'roadmap'
+      ? 0.2
+      : (action === 'tasks_skeleton' ? 0 : (action === 'task_detail' ? 0.25 : 0.7));
   }
 
   if (typeof opts.topP === 'number' && Number.isFinite(opts.topP)) {
     generationConfig.topP = Math.min(1, Math.max(0, opts.topP));
+  } else if (action === 'tasks_skeleton') {
+    generationConfig.topP = 0.1;
   }
 
   if (action !== 'roadmap' && typeof opts.responseMimeType === 'string' && opts.responseMimeType.length <= 120) {
@@ -360,6 +499,9 @@ function sanitizeGenerationConfig({ opts, action, effectiveMaxTokens }) {
     && !Array.isArray(responseSchema)
   ) {
     generationConfig.responseSchema = sanitizeResponseSchemaNode(responseSchema);
+  }
+  if (action === 'tasks_skeleton') {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
   }
 
   return { generationConfig, warnings };
@@ -389,6 +531,10 @@ function validateGeminiRequestPayload({ model, fullPrompt, generationConfig, act
     errors.push('roadmap maxOutputTokens must be 1200-2200');
   } else if (action === 'tasks' && (generationConfig.maxOutputTokens < 400 || generationConfig.maxOutputTokens > 1200)) {
     errors.push('tasks maxOutputTokens must be 400-1200');
+  } else if (action === 'tasks_skeleton' && (generationConfig.maxOutputTokens < 400 || generationConfig.maxOutputTokens > 600)) {
+    errors.push('tasks_skeleton maxOutputTokens must be 400-600');
+  } else if (action === 'task_detail' && (generationConfig.maxOutputTokens < 850 || generationConfig.maxOutputTokens > 1100)) {
+    errors.push('task_detail maxOutputTokens must be 850-1100');
   }
   if (generationConfig.temperature !== undefined && (!Number.isFinite(generationConfig.temperature) || generationConfig.temperature < 0 || generationConfig.temperature > 2)) {
     errors.push('generationConfig.temperature must be 0-2');
@@ -398,6 +544,19 @@ function validateGeminiRequestPayload({ model, fullPrompt, generationConfig, act
   }
   if (generationConfig.responseMimeType !== undefined && !GEMINI_ALLOWED_RESPONSE_MIME_TYPES.has(generationConfig.responseMimeType)) {
     errors.push('generationConfig.responseMimeType is invalid');
+  }
+  if (
+    generationConfig.thinkingConfig !== undefined
+    && (
+      typeof generationConfig.thinkingConfig !== 'object'
+      || generationConfig.thinkingConfig === null
+      || Array.isArray(generationConfig.thinkingConfig)
+      || !Number.isInteger(generationConfig.thinkingConfig.thinkingBudget)
+      || generationConfig.thinkingConfig.thinkingBudget < 0
+      || generationConfig.thinkingConfig.thinkingBudget > 24576
+    )
+  ) {
+    errors.push('generationConfig.thinkingConfig.thinkingBudget must be an integer 0-24576');
   }
   if (
     generationConfig.responseSchema !== undefined
@@ -660,7 +819,11 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
     const normalizedRequestedMaxTokens = safeAction === 'roadmap'
       ? Math.min(2200, Math.max(1200, requestedMaxTokens))
       : safeAction === 'tasks'
-        ? Math.min(1200, Math.max(400, requestedMaxTokens))
+        ? Math.min(1200, Math.max(900, requestedMaxTokens))
+        : safeAction === 'tasks_skeleton'
+          ? Math.min(600, Math.max(400, requestedMaxTokens))
+          : safeAction === 'task_detail'
+            ? Math.min(1100, Math.max(850, requestedMaxTokens))
         : requestedMaxTokens;
     const actionCap = ACTION_MAX_OUTPUT_TOKENS[safeAction] || ACTION_MAX_OUTPUT_TOKENS.chat;
     const effectiveMaxTokens = Math.min(normalizedRequestedMaxTokens, actionCap);
@@ -736,6 +899,20 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
         systemCtx: trimmedCtx.systemCtx,
       },
     ];
+    if (safeAction === 'tasks' && effectiveMaxTokens > 1000) {
+      attempts.push({
+        maxTokens: Math.max(900, Math.min(1000, effectiveMaxTokens - 120)),
+        prompt: trimmedCtx.prompt,
+        systemCtx: trimmedCtx.systemCtx,
+      });
+    }
+    if (safeAction === 'task_detail' && effectiveMaxTokens > 950) {
+      attempts.push({
+        maxTokens: Math.max(850, Math.min(950, effectiveMaxTokens - 100)),
+        prompt: trimmedCtx.prompt,
+        systemCtx: trimmedCtx.systemCtx,
+      });
+    }
     const retryBackoffMs = TRANSIENT_RETRY_BACKOFF_MS;
 
     let lastFailure = null;
@@ -816,37 +993,143 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
               retryAttempt: retryIndex,
               latencyMs: Date.now() - attemptStartedAt,
             });
-            const repaired = parseJsonWithRepair(result.text || '');
-            if (repaired.usable) {
-              logGeminiRequest({
-                ...baseLog,
-                logType: 'truncated_response_usable',
-                upstreamStatus: result.upstreamStatus,
-                upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
-                finishReason: result.finishReason || '',
-                attempt: providerAttempt,
-                chainAttempt: attemptIndex + 1,
-                retryAttempt: retryIndex,
-                latencyMs: Date.now() - attemptStartedAt,
-              });
-              baseLog.logType = 'success';
-              baseLog.upstreamStatus = result.upstreamStatus;
-              baseLog.upstreamErrorCode = result.upstreamErrorCode;
-              baseLog.finishReason = result.finishReason;
-              baseLog.latencyMs = Date.now() - startedAt;
-              baseLog.attempt = providerAttempt;
-              baseLog.chainAttempt = attemptIndex + 1;
-              baseLog.retryAttempt = retryIndex;
-              lastRetryAttempt = retryIndex;
-              logGeminiRequest(baseLog);
-              return res.json({
-                text: repaired.repairedText || result.text || '',
-                finishReason: result.finishReason || '',
-                requestId,
-                status: 'degraded_success',
-                degraded: true,
-                truncated: true,
-              });
+            if (safeAction === 'tasks') {
+              const salvagedTasks = salvagePlainTextTasks(result.text || '');
+              if (salvagedTasks.usable) {
+                logGeminiRequest({
+                  ...baseLog,
+                  logType: 'truncated_response_usable',
+                  upstreamStatus: result.upstreamStatus,
+                  upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
+                  finishReason: result.finishReason || '',
+                  attempt: providerAttempt,
+                  chainAttempt: attemptIndex + 1,
+                  retryAttempt: retryIndex,
+                  latencyMs: Date.now() - attemptStartedAt,
+                  salvagedTaskCount: salvagedTasks.taskCount,
+                });
+                baseLog.logType = 'success';
+                baseLog.upstreamStatus = result.upstreamStatus;
+                baseLog.upstreamErrorCode = result.upstreamErrorCode;
+                baseLog.finishReason = result.finishReason;
+                baseLog.latencyMs = Date.now() - startedAt;
+                baseLog.attempt = providerAttempt;
+                baseLog.chainAttempt = attemptIndex + 1;
+                baseLog.retryAttempt = retryIndex;
+                lastRetryAttempt = retryIndex;
+                logGeminiRequest(baseLog);
+                return res.json({
+                  text: salvagedTasks.repairedText,
+                  finishReason: result.finishReason || '',
+                  requestId,
+                  status: 'degraded_success',
+                  degraded: true,
+                  truncated: true,
+                });
+              }
+            }
+            if (safeAction === 'tasks_skeleton') {
+              const salvagedSkeleton = salvageTaskSkeleton(result.text || '');
+              if (salvagedSkeleton.usable) {
+                logGeminiRequest({
+                  ...baseLog,
+                  logType: 'truncated_response_usable',
+                  upstreamStatus: result.upstreamStatus,
+                  upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
+                  finishReason: result.finishReason || '',
+                  attempt: providerAttempt,
+                  chainAttempt: attemptIndex + 1,
+                  retryAttempt: retryIndex,
+                  latencyMs: Date.now() - attemptStartedAt,
+                  salvagedTaskCount: salvagedSkeleton.taskCount,
+                });
+                baseLog.logType = 'success';
+                baseLog.upstreamStatus = result.upstreamStatus;
+                baseLog.upstreamErrorCode = result.upstreamErrorCode;
+                baseLog.finishReason = result.finishReason;
+                baseLog.latencyMs = Date.now() - startedAt;
+                baseLog.attempt = providerAttempt;
+                baseLog.chainAttempt = attemptIndex + 1;
+                baseLog.retryAttempt = retryIndex;
+                lastRetryAttempt = retryIndex;
+                logGeminiRequest(baseLog);
+                return res.json({
+                  text: salvagedSkeleton.repairedText,
+                  finishReason: result.finishReason || '',
+                  requestId,
+                  status: 'degraded_success',
+                  degraded: true,
+                  truncated: true,
+                });
+              }
+            }
+            if (safeAction === 'task_detail') {
+              const salvagedDetail = salvageTaskDetail(result.text || '');
+              if (salvagedDetail.usable) {
+                logGeminiRequest({
+                  ...baseLog,
+                  logType: 'truncated_response_usable',
+                  upstreamStatus: result.upstreamStatus,
+                  upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
+                  finishReason: result.finishReason || '',
+                  attempt: providerAttempt,
+                  chainAttempt: attemptIndex + 1,
+                  retryAttempt: retryIndex,
+                  latencyMs: Date.now() - attemptStartedAt,
+                });
+                baseLog.logType = 'success';
+                baseLog.upstreamStatus = result.upstreamStatus;
+                baseLog.upstreamErrorCode = result.upstreamErrorCode;
+                baseLog.finishReason = result.finishReason;
+                baseLog.latencyMs = Date.now() - startedAt;
+                baseLog.attempt = providerAttempt;
+                baseLog.chainAttempt = attemptIndex + 1;
+                baseLog.retryAttempt = retryIndex;
+                lastRetryAttempt = retryIndex;
+                logGeminiRequest(baseLog);
+                return res.json({
+                  text: salvagedDetail.repairedText,
+                  finishReason: result.finishReason || '',
+                  requestId,
+                  status: 'degraded_success',
+                  degraded: true,
+                  truncated: true,
+                });
+              }
+            }
+            if (!TASK_GENERATION_ACTIONS.has(safeAction)) {
+              const repaired = parseJsonWithRepair(result.text || '');
+              if (repaired.usable) {
+                logGeminiRequest({
+                  ...baseLog,
+                  logType: 'truncated_response_usable',
+                  upstreamStatus: result.upstreamStatus,
+                  upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
+                  finishReason: result.finishReason || '',
+                  attempt: providerAttempt,
+                  chainAttempt: attemptIndex + 1,
+                  retryAttempt: retryIndex,
+                  latencyMs: Date.now() - attemptStartedAt,
+                });
+                baseLog.logType = 'success';
+                baseLog.upstreamStatus = result.upstreamStatus;
+                baseLog.upstreamErrorCode = result.upstreamErrorCode;
+                baseLog.finishReason = result.finishReason;
+                baseLog.latencyMs = Date.now() - startedAt;
+                baseLog.attempt = providerAttempt;
+                baseLog.chainAttempt = attemptIndex + 1;
+                baseLog.retryAttempt = retryIndex;
+                lastRetryAttempt = retryIndex;
+                logGeminiRequest(baseLog);
+                return res.json({
+                  text: repaired.repairedText || result.text || '',
+                  finishReason: result.finishReason || '',
+                  requestId,
+                  status: 'degraded_success',
+                  degraded: true,
+                  truncated: true,
+                });
+              }
             }
             logGeminiRequest({
               ...baseLog,
@@ -907,11 +1190,11 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
         });
 
         if (
-          safeAction === 'tasks' &&
+          (safeAction === 'tasks' || safeAction === 'tasks_skeleton' || safeAction === 'task_detail') &&
           failure.code === 'RESPONSE_TRUNCATED' &&
           attemptIndex === 0
         ) {
-          break;
+          continue;
         }
         if (
           safeAction === 'roadmap' &&
@@ -929,7 +1212,7 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
       if (lastFailure?.code === 'UPSTREAM_401_403' || lastFailure?.code === 'BAD_REQUEST') {
         break;
       }
-      const firstChainWithFallback = attemptIndex === 0 && (safeAction === 'roadmap' || safeAction === 'tasks');
+      const firstChainWithFallback = attemptIndex === 0 && (safeAction === 'roadmap' || TASK_GENERATION_ACTIONS.has(safeAction));
       if (
         firstChainWithFallback &&
         lastFailure &&

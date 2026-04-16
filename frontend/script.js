@@ -355,14 +355,140 @@ function parseStages(text){
     .split('\n')
     .map(line=>line.trim())
     .filter(line=>/^\d+\./.test(line))
-    .map(line=>line.replace(/^\d+\.\s*/,''))
+    .map(line=>line.replace(/^\d+\.\s*/,'').trim())
+    .map((line)=>{
+      if(!line) return null;
+      const parts=line.split(/\s*\|\|\s*/).map((part)=>part.trim()).filter(Boolean);
+      if(parts.length>=3){
+        return {
+          title:parts[0],
+          objective:parts[1],
+          outcome:parts.slice(2).join(' || ')
+        };
+      }
+      return parts[0]||null;
+    })
     .filter(Boolean)
     .slice(0,3);
+}
+function normalizeTaskContractValue(value,maxLen=220){
+  return clipText(String(value||'').replace(/\s+/g,' ').trim(),maxLen);
+}
+function normalizeTaskSkeletonTitle(value){
+  const compact=String(value||'')
+    .replace(/\s+/g,' ')
+    .trim()
+    .replace(/[.!?,;:]+$/g,'');
+  if(!compact) return '';
+  const words=compact.split(' ').filter(Boolean).slice(0,8);
+  return clipText(words.join(' '),96);
+}
+function normalizePlainTextDeadline(value){
+  const raw=String(value||'').trim().toLowerCase();
+  if(!raw||raw==='none'||raw==='null'||raw==='нет'||raw==='n/a') return '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw)?raw:'';
+}
+function parseTaskSkeletonContract(raw){
+  const text=String(raw||'').replace(/\r/g,'').trim();
+  if(!text) return [];
+  const lines=text
+    .split('\n')
+    .map((line)=>line.trim())
+    .filter(Boolean);
+  if(lines[0]!=='TASKS_SKELETON_START'||lines[lines.length-1]!=='TASKS_SKELETON_END') return [];
+  const body=lines.slice(1,-1);
+  if(body.length!==3) return [];
+  return body.map((line,index)=>{
+    const match=line.match(/^(\d+)\s*\|\s*(.+)$/i);
+    if(!match) return null;
+    const ordinal=Number(match[1]);
+    if(ordinal!==index+1) return null;
+    const title=normalizeTaskSkeletonTitle(match[2]);
+    if(!title) return null;
+    return {
+      title,
+      linkedStage:index+1
+    };
+  }).filter(Boolean);
+}
+function parseTaskDetailContract(raw){
+  const text=String(raw||'').replace(/\r/g,'').trim();
+  if(!text) return null;
+  const lines=text
+    .split('\n')
+    .map((line)=>line.trim())
+    .filter(Boolean);
+  if(lines[0]!=='TASK_DETAIL_START') return null;
+  const hasEndMarker=lines[lines.length-1]==='TASK_DETAIL_END';
+  const body=hasEndMarker?lines.slice(1,-1):lines.slice(1);
+  const parsed={};
+  const seen=new Set();
+  for(const line of body){
+    if(line==='TASK_DETAIL_END') continue;
+    let match=line.match(/^TITLE\s*\|\s*(.+)$/i);
+    if(match){
+      if(seen.has('title')) return null;
+      seen.add('title');
+      parsed.title=normalizeTaskContractValue(match[1],96);
+      continue;
+    }
+    match=line.match(/^DESCRIPTION\s*\|\s*(.+)$/i);
+    if(match){
+      if(seen.has('description')) return null;
+      seen.add('description');
+      parsed.description=normalizeTaskContractValue(match[1],220);
+      continue;
+    }
+    match=line.match(/^WHY\s*\|\s*(.+)$/i);
+    if(match){
+      if(seen.has('why_it_matters')) return null;
+      seen.add('why_it_matters');
+      parsed.why_it_matters=normalizeTaskContractValue(match[1],200);
+      continue;
+    }
+    match=line.match(/^DELIVERABLE\s*\|\s*(.+)$/i);
+    if(match){
+      if(seen.has('deliverable')) return null;
+      seen.add('deliverable');
+      parsed.deliverable=normalizeTaskContractValue(match[1],200);
+      continue;
+    }
+    match=line.match(/^DONE\s*\|\s*(.+)$/i);
+    if(match){
+      if(seen.has('done_definition')) return null;
+      seen.add('done_definition');
+      parsed.done_definition=normalizeTaskContractValue(match[1],200);
+      continue;
+    }
+    match=line.match(/^PRIORITY\s*\|\s*(high|med|low)$/i);
+    if(match){
+      if(seen.has('priority')) return null;
+      seen.add('priority');
+      parsed.priority=normalizeTaskPriority(match[1]);
+      continue;
+    }
+    match=line.match(/^DEADLINE\s*\|\s*(.+)$/i);
+    if(match){
+      if(seen.has('deadline')) return null;
+      seen.add('deadline');
+      parsed.deadline=normalizePlainTextDeadline(match[1]);
+      continue;
+    }
+    return null;
+  }
+  if(!parsed.title||!parsed.description||!parsed.why_it_matters) return null;
+  if(!parsed.deliverable&&!parsed.done_definition) return null;
+  if(!parsed.deliverable) parsed.deliverable=parsed.done_definition;
+  if(!parsed.done_definition) parsed.done_definition=parsed.deliverable;
+  if(!parsed.priority) parsed.priority='med';
+  return parsed;
 }
 const ROADMAP_MIN_STAGES=2;
 const ROADMAP_MAX_STAGES=4;
 const ROADMAP_DEFAULT_MAX_TOKENS = 2000;
 const TASKS_DEFAULT_MAX_TOKENS = 1000;
+const TASK_SKELETON_DEFAULT_MAX_TOKENS = 500;
+const TASK_DETAIL_DEFAULT_MAX_TOKENS = 1000;
 const ROADMAP_SKELETON_MAX_TOKENS = 1600;
 const ACTIVE_STAGE_ENRICH_MAX_TOKENS = 180;
 const MVP_STAGE_DETAILS_DEFAULTS=Object.freeze({
@@ -1005,6 +1131,7 @@ function normalizeFounderTasks(raw,options={}){
       : [];
   const stageObjective=clipText(options.stageObjective||'',150);
   const stageTitle=clipText(options.stageTitle||'',40)||'Stage 1';
+  const allowBlueprintFallback=options.allowBlueprintFallback!==false;
   const fallback=fallbackFounderTaskBlueprints({
     goal:S?.user?.goal||'',
     stageObjective,
@@ -1019,10 +1146,13 @@ function normalizeFounderTasks(raw,options={}){
     const key=normalized.title.toLowerCase();
     if(seen.has(key)) return;
     const qualityOk=!isWeakFounderTaskTitle(normalized.title)&&normalized.deliverable.length>=20;
-    const finalTask=qualityOk?normalized:normalizeFounderTask(fallback[out.length%fallback.length],{...options,stageObjective,stageTitle});
+    const finalTask=(allowBlueprintFallback&&!qualityOk)
+      ? normalizeFounderTask(fallback[out.length%fallback.length],{...options,stageObjective,stageTitle})
+      : normalized;
     seen.add(finalTask.title.toLowerCase());
     out.push(finalTask);
   });
+  if(!allowBlueprintFallback) return out.slice(0,5);
   let fallbackIndex=0;
   while(out.length<3){
     const candidate=normalizeFounderTask(fallback[fallbackIndex%fallback.length],{...options,stageObjective,stageTitle});
@@ -1038,7 +1168,7 @@ function fallbackTasksForMvp(options={}){
   return normalizeFounderTasks([],options);
 }
 function normalizeBetaTasks(raw,options={}){
-  return normalizeFounderTasks(raw,options);
+  return normalizeFounderTasks(raw,{...options,allowBlueprintFallback:false});
 }
 function normalizeTaskCollection(raw,options={}){
   const source=Array.isArray(raw)?raw:[];
@@ -1207,6 +1337,7 @@ function createExecutionRoadmapFromPhases(phases){
       detailsGenerated:false,
       detailsGeneratedAt:'',
       progress:0,
+      tasksPromptSignature:'',
       taskIds:[]
     };
   });
@@ -1451,6 +1582,7 @@ function initializeExecutionFromRoadmap(options={}){
     stage.taskIds=[];
     stage.tasksGenerated=false;
     stage.tasksGeneratedAt='';
+    stage.tasksPromptSignature='';
     stage.detailsGenerated=false;
     stage.detailsGeneratedAt='';
     stage.whyThisStageMatters=clipText(stage.whyThisStageMatters||stage.reasoning||'',220);
@@ -1557,6 +1689,7 @@ function ensureExecutionState(options={}){
       stage.status=rawStatus==='completed'||rawStatus==='active'||rawStatus==='locked'?rawStatus:'locked';
     }
     stage.tasksGenerated=Boolean(stage.tasksGenerated);
+    stage.tasksPromptSignature=String(stage.tasksPromptSignature||'');
     stage.detailsGenerated=Boolean(stage.detailsGenerated);
     stage.detailsGeneratedAt=String(stage.detailsGeneratedAt||'');
     stage.progress=Number(stage.progress)||0;
@@ -1642,6 +1775,27 @@ function setStageTasks(stageIndex,tasks,opts={}){
   logStageTaskSnapshot('stage_tasks_saved',stageIndex,{savedTaskCount:persisted.length});
   return persisted;
 }
+function buildStageTaskGenerationSignature(stage,context={}){
+  const normalizedStage=normalizeStageForEnrichment(stage||{},Number(stage?.index||1)-1);
+  const parts=[
+    'tasks-skeleton-detail-v1',
+    clipText(normalizedStage.title,80),
+    clipText(normalizedStage.objective,180),
+    clipText(normalizedStage.outcome,140),
+    clipText(context.project_name,90),
+    clipText(context.startup_idea,220),
+    clipText(context.primary_goal,140),
+    clipText(context.current_stage,50),
+    clipText(context.built_status,180),
+    clipText(context.niche,90),
+    clipText(context.target_audience,120),
+    clipText(context.resources,180),
+    clipText(context.blocker,120),
+    clipText(context.daily_hours,40),
+    clipText(context.deadline,30)
+  ];
+  return parts.join('|').toLowerCase();
+}
 async function generateTasksForStage(stageIndex,options={}){
   ensureExecutionState();
   if(!hasExecutionStateReady()){
@@ -1700,8 +1854,16 @@ async function generateTasksForStage(stageIndex,options={}){
     });
     return stageTaskGenerationInFlight.get(stageIndex);
   }
+  const onboardingContext=buildRoadmapOnboardingContext();
+  const phase=S.roadmap?.[stageIndex]||{};
+  const normalizedStage=normalizeStageForEnrichment({
+    title:stage?.title||phase?.title||`Stage ${stageIndex+1}`,
+    objective:stage?.objective||phase?.objective||'',
+    outcome:stage?.outcome||phase?.outcome||''
+  },stageIndex);
+  const tasksPromptSignature=buildStageTaskGenerationSignature(normalizedStage,onboardingContext);
   const existing=getTasksForStage(stageIndex,{includeArchived:false});
-  if(existing.length&&stage.tasksGenerated&&!options.force){
+  if(existing.length>=3&&stage.tasksGenerated&&!options.force&&stage.tasksPromptSignature===tasksPromptSignature){
     logRoadmapPipelineEvent('active_stage_task_generation_skipped_already_generated',{
       stageCount:getExecutionStages().length,
       activeStageId:stage.id,
@@ -1737,36 +1899,40 @@ async function generateTasksForStage(stageIndex,options={}){
     reason:String(options.reason||'unspecified')
   });
   const taskPromise=(async ()=>{
-    const phase=S.roadmap?.[stageIndex]||{};
-    const normalizedStage=normalizeStageForEnrichment({
-      title:stage?.title||phase?.title||`Stage ${stageIndex+1}`,
-      objective:stage?.objective||phase?.objective||'',
-      outcome:stage?.outcome||phase?.outcome||''
-    },stageIndex);
-    const intensityDesc='рабочий сбалансированный темп';
-    const clientRequestId=createClientRequestId(`tasks-s${stageIndex+1}`);
-    const contextMapping=roadmapContextPresence(buildRoadmapOnboardingContext());
-    const tasksPrompt=buildMilestoneTasksPrompt(normalizedStage,'3-5',intensityDesc,{
+    const taskOutputLanguage=detectTaskOutputLanguage(
+      normalizedStage.title||'',
+      normalizedStage.objective||'',
+      normalizedStage.outcome||'',
+      onboardingContext.project_name||'',
+      onboardingContext.startup_idea||'',
+      onboardingContext.primary_goal||S.user.goal||''
+    );
+    const intensityDesc=taskOutputLanguage==='English'
+      ? 'balanced working pace'
+      : 'сбалансированный рабочий темп';
+    const contextMapping=roadmapContextPresence(onboardingContext);
+    const skeletonRequestId=createClientRequestId(`tasks-skeleton-s${stageIndex+1}`);
+    const tasksPrompt=buildMilestoneTasksPrompt(normalizedStage,'3',intensityDesc,{
       stageIndex,
-      context:buildRoadmapOnboardingContext()
+      context:onboardingContext
     });
     logRoadmapPipelineEvent('active_stage_task_generation_started',{
-      requestId:clientRequestId,
+      requestId:skeletonRequestId,
       stageCount:getExecutionStages().length,
       activeStageId:stage.id,
       activeStageIndex:stageIndex,
       promptChars:tasksPrompt.length,
-      requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS
+      requestedMaxTokens:TASK_SKELETON_DEFAULT_MAX_TOKENS
     });
     try{
-      const generatedResult=await geminiJSON(
+      const skeletonResult=await geminiJSON(
         tasksPrompt,
-        milestoneTasksResponseJsonSchema(),
-        TASKS_DEFAULT_MAX_TOKENS,
+        null,
+        TASK_SKELETON_DEFAULT_MAX_TOKENS,
         '',
         {
           temperature:0.2,
-          clientRequestId,
+          clientRequestId:skeletonRequestId,
           stageObjective:normalizedStage.objective||stage.objective||'',
           stageTitle:normalizedStage.title||stage.title||`Stage ${stageIndex+1}`,
           stageIndex,
@@ -1775,25 +1941,88 @@ async function generateTasksForStage(stageIndex,options={}){
           contextFields:contextMapping.present,
           missingContextFields:contextMapping.missing
         },
-        'tasks'
+        'tasks_skeleton'
       );
-      const generated=generatedResult?.data||[];
-      const normalized=normalizeFounderTasks(generated,{
+      const skeletonTasks=Array.isArray(skeletonResult?.data)?skeletonResult.data:[];
+      const enrichedTasks=[];
+      const detailFailures=[];
+      for(let taskIdx=0;taskIdx<skeletonTasks.length;taskIdx+=1){
+        const skeletonTask=skeletonTasks[taskIdx]||{};
+        const detailRequestId=createClientRequestId(`task-detail-s${stageIndex+1}-t${taskIdx+1}`);
+        const detailPrompt=buildMilestoneTaskDetailPrompt(skeletonTask,normalizedStage,intensityDesc,{
+          stageIndex,
+          context:onboardingContext
+        });
+        try{
+          const detailResult=await geminiJSON(
+            detailPrompt,
+            null,
+            TASK_DETAIL_DEFAULT_MAX_TOKENS,
+            '',
+            {
+              temperature:0.2,
+              clientRequestId:detailRequestId,
+              stageObjective:normalizedStage.objective||stage.objective||'',
+              stageTitle:normalizedStage.title||stage.title||`Stage ${stageIndex+1}`,
+              stageIndex,
+              deadline:S.user.deadline||'',
+              returnMeta:true,
+              contextFields:contextMapping.present,
+              missingContextFields:contextMapping.missing
+            },
+            'task_detail'
+          );
+          const detailTask=Array.isArray(detailResult?.data)?detailResult.data[0]:null;
+          if(!detailTask) throw new Error('Task detail response contained no enriched task.');
+          enrichedTasks.push({
+            ...detailTask,
+            title:getTaskTitle(detailTask)||skeletonTask.title,
+            text:getTaskTitle(detailTask)||skeletonTask.title,
+            priority:normalizeTaskPriority(detailTask?.priority??detailTask?.prio),
+            prio:normalizeTaskPriority(detailTask?.prio??detailTask?.priority),
+            deadline:detailTask?.deadline||'',
+            linkedStage:stageIndex+1,
+            linked_stage:stageIndex+1
+          });
+        }catch(detailError){
+          const errorMessage=String(detailError?.message||'');
+          detailFailures.push({taskNumber:taskIdx+1,errorMessage});
+          logWarn({
+            area:'frontend',
+            module:'frontend/script.js',
+            function:'generateTasksForStage',
+            action:'task_detail_generation_failed',
+            stageIndex,
+            taskNumber:taskIdx+1,
+            errorMessage
+          });
+        }
+      }
+      const normalized=normalizeFounderTasks(enrichedTasks,{
         stageObjective:phase?.objective||stage.objective||'',
         stageTitle:phase?.title||stage.title||`Stage ${stageIndex+1}`,
         stageIndex,
-        deadline:S.user.deadline||''
-      }).slice(0,5);
+        deadline:S.user.deadline||'',
+        allowBlueprintFallback:false
+      }).slice(0,3);
+      if(!normalized.length){
+        throw new Error('Task enrichment failed for all generated skeleton tasks.');
+      }
       const persisted=setStageTasks(stageIndex,normalized,{replace:true});
+      stage.tasksGenerated=persisted.length>=3;
+      stage.tasksPromptSignature=tasksPromptSignature;
       setStageTaskStatus(stageIndex,'ready');
       logRoadmapPipelineEvent('stage_task_generation_succeeded',{
-        requestId:generatedResult?.meta?.requestId||clientRequestId,
+        requestId:skeletonResult?.meta?.requestId||skeletonRequestId,
         stageCount:getExecutionStages().length,
         activeStageId:stage.id,
         activeStageIndex:stageIndex,
         taskCount:persisted.length
       });
-      logStageTaskSnapshot('stage_tasks_generated',stageIndex,{generatedCount:normalized.length});
+      logStageTaskSnapshot('stage_tasks_generated',stageIndex,{
+        generatedCount:normalized.length,
+        detailFailures:detailFailures.length
+      });
       logExecutionFlowEvent('tasks_generated_count',stageIndex,{generatedCount:persisted.length,fallback:false});
       logExecutionFlowEvent('tasks_saved',stageIndex,{savedCount:persisted.length});
       logInfo({
@@ -1803,26 +2032,27 @@ async function generateTasksForStage(stageIndex,options={}){
         action:'tasks_generated_count',
         stageIndex,
         generatedCount:persisted.length,
-        fallback:false
+        fallback:false,
+        detailFailures:detailFailures.length
       });
       logRoadmapPipelineEvent('active_stage_tasks_generated',{
-        requestId:generatedResult?.meta?.requestId||clientRequestId,
+        requestId:skeletonResult?.meta?.requestId||skeletonRequestId,
         stageCount:getExecutionStages().length,
         activeStageId:stage.id,
         activeStageIndex:stageIndex,
-        promptChars:generatedResult?.meta?.promptChars||tasksPrompt.length,
-        requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS,
-        finishReason:generatedResult?.meta?.finishReason||'',
+        promptChars:skeletonResult?.meta?.promptChars||tasksPrompt.length,
+        requestedMaxTokens:TASK_SKELETON_DEFAULT_MAX_TOKENS,
+        finishReason:skeletonResult?.meta?.finishReason||'',
         taskCount:persisted.length
       });
       logRoadmapPipelineEvent('active_stage_tasks_saved',{
-        requestId:generatedResult?.meta?.requestId||clientRequestId,
+        requestId:skeletonResult?.meta?.requestId||skeletonRequestId,
         stageCount:getExecutionStages().length,
         activeStageId:stage.id,
         activeStageIndex:stageIndex,
-        promptChars:generatedResult?.meta?.promptChars||tasksPrompt.length,
-        requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS,
-        finishReason:generatedResult?.meta?.finishReason||'',
+        promptChars:skeletonResult?.meta?.promptChars||tasksPrompt.length,
+        requestedMaxTokens:TASK_SKELETON_DEFAULT_MAX_TOKENS,
+        finishReason:skeletonResult?.meta?.finishReason||'',
         taskCount:persisted.length
       });
       saveTasks();
@@ -1838,54 +2068,47 @@ async function generateTasksForStage(stageIndex,options={}){
         stageIndex,
         errorMessage
       });
-      const fallback=normalizeFounderTasks([],{
-        stageObjective:phase?.objective||stage.objective||'',
-        stageTitle:phase?.title||stage.title||`Stage ${stageIndex+1}`,
-        stageIndex,
-        deadline:S.user.deadline||''
-      }).slice(0,5);
-      const persisted=setStageTasks(stageIndex,fallback,{replace:true});
-      setStageTaskStatus(stageIndex,persisted.length?'ready':'error',errorMessage);
-      logStageTaskSnapshot('stage_tasks_generated',stageIndex,{generatedCount:persisted.length,fallback:true,errorMessage});
-      logExecutionFlowEvent('fallback_used',stageIndex,{reason:'tasks_generation_failed',errorMessage});
-      logExecutionFlowEvent('tasks_generated_count',stageIndex,{generatedCount:persisted.length,fallback:true});
+      const preservedCount=existing.length;
+      setStageTaskStatus(stageIndex,preservedCount?'ready':'error',errorMessage);
+      logStageTaskSnapshot('stage_tasks_generated',stageIndex,{generatedCount:preservedCount,fallback:false,errorMessage});
+      logExecutionFlowEvent('tasks_generated_count',stageIndex,{generatedCount:preservedCount,fallback:false});
       logInfo({
         area:'frontend',
         module:'frontend/script.js',
         function:'generateTasksForStage',
         action:'tasks_generated_count',
         stageIndex,
-        generatedCount:persisted.length,
-        fallback:true
+        generatedCount:preservedCount,
+        fallback:false
       });
       logRoadmapPipelineEvent('tasks_generation_failed',{
-        requestId:clientRequestId,
+        requestId:skeletonRequestId,
         stageCount:getExecutionStages().length,
         activeStageId:stage.id,
         activeStageIndex:stageIndex,
         promptChars:tasksPrompt.length,
-        requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS,
+        requestedMaxTokens:TASK_SKELETON_DEFAULT_MAX_TOKENS,
         finishReason:'',
-        taskCount:persisted.length,
+        taskCount:preservedCount,
         errorMessage
       });
       logRoadmapPipelineEvent('stage_task_generation_failed_nonfatal',{
-        requestId:clientRequestId,
+        requestId:skeletonRequestId,
         stageCount:getExecutionStages().length,
         activeStageId:stage.id,
         activeStageIndex:stageIndex,
         promptChars:tasksPrompt.length,
-        requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS,
+        requestedMaxTokens:TASK_SKELETON_DEFAULT_MAX_TOKENS,
         finishReason:'',
-        taskCount:persisted.length,
-        errorMessage:'fallback_tasks_applied'
+        taskCount:preservedCount,
+        errorMessage:'ai_tasks_not_replaced_with_fallback'
       });
       saveTasks();
       saveAll();
       if(options.silentFallback!==true){
-        toast2('Task generation fallback','Applied fallback tasks for this stage.');
+        toast2('Task generation failed','AI tasks were not replaced with static fallback tasks.');
       }
-      return persisted;
+      return existing;
     }finally{
       stageTaskGenerationInFlight.delete(stageIndex);
     }
@@ -2569,7 +2792,13 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
   const callOpts={
     ...opts
   };
-  if(action!=='roadmap'){
+  const plainTextTaskAction=action==='tasks'||action==='tasks_skeleton'||action==='task_detail';
+  if(plainTextTaskAction){
+    callOpts.responseMimeType='text/plain';
+    if(Object.prototype.hasOwnProperty.call(callOpts,'responseJsonSchema')) delete callOpts.responseJsonSchema;
+    if(Object.prototype.hasOwnProperty.call(callOpts,'responseSchema')) delete callOpts.responseSchema;
+  }
+  if(action!=='roadmap'&&!plainTextTaskAction){
     callOpts.responseMimeType='application/json';
     callOpts.responseJsonSchema=_responseJsonSchema&&typeof _responseJsonSchema==='object'
       ? _responseJsonSchema
@@ -2602,10 +2831,10 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
       const parsedStages=parseStages(response.text);
       logExecutionFlowEvent('roadmap_parsed',0,{
         requestId:response.requestId||'',
-        stages:summarizeRoadmapStagesForLog(parsedStages.map((title,index)=>({
-          title,
-          objective:'',
-          outcome:'',
+        stages:summarizeRoadmapStagesForLog(parsedStages.map((item,index)=>({
+          title:typeof item==='string'?item:(item?.title||''),
+          objective:typeof item==='string'?'':(item?.objective||''),
+          outcome:typeof item==='string'?'':(item?.outcome||''),
           status:index===0?'active':''
         })))
       });
@@ -2617,12 +2846,30 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
       if(opts?.returnMeta) return {data:normalized,meta};
       return normalized;
     }
-    const parsed=parseJSON(response.text,{allowPartial:response.finishReason==='MAX_TOKENS'});
     if(action==='tasks'){
-      const normalizedTasks=normalizeBetaTasks(parsed,taskNormalizationContext);
+      throw new Error('Legacy single-step task generation is disabled.');
+    }
+    if(action==='tasks_skeleton'){
+      const parsedSkeleton=parseTaskSkeletonContract(response.text);
+      if(parsedSkeleton.length!==3){
+        throw new Error('Task skeleton response does not match the plain-text contract.');
+      }
+      if(opts?.returnMeta) return {data:parsedSkeleton,meta};
+      return parsedSkeleton;
+    }
+    if(action==='task_detail'){
+      const parsedDetail=parseTaskDetailContract(response.text);
+      if(!parsedDetail){
+        throw new Error('Task detail response does not match the plain-text contract.');
+      }
+      const normalizedTasks=normalizeBetaTasks([parsedDetail],taskNormalizationContext);
+      if(!normalizedTasks.length){
+        throw new Error('Task detail response contained no usable AI task.');
+      }
       if(opts?.returnMeta) return {data:normalizedTasks,meta};
       return normalizedTasks;
     }
+    const parsed=parseJSON(response.text,{allowPartial:response.finishReason==='MAX_TOKENS'});
     if(opts?.returnMeta) return {data:parsed,meta};
     return parsed;
   }catch(parseErr){
@@ -2633,11 +2880,9 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
       if(opts?.returnMeta) return {data:fallback,meta};
       return fallback;
     }
-    if(action==='tasks'){
-      logWarn({area:'frontend',module:'frontend/script.js',function:'geminiJSON',action:'tasks_partial_fallback',errorMessage:String(parseErr?.message||''),finishReason:response.finishReason||'',requestId:response.requestId||''});
-      const fallbackTasks=fallbackTasksForMvp(taskNormalizationContext);
-      if(opts?.returnMeta) return {data:fallbackTasks,meta};
-      return fallbackTasks;
+    if(action==='tasks'||action==='tasks_skeleton'||action==='task_detail'){
+      logWarn({area:'frontend',module:'frontend/script.js',function:'geminiJSON',action:'tasks_parse_failed',errorMessage:String(parseErr?.message||''),finishReason:response.finishReason||'',requestId:response.requestId||''});
+      throw parseErr;
     }
     throw parseErr;
   }
@@ -3173,6 +3418,17 @@ function toast2(title,body=''){document.getElementById('tt').textContent=title;d
 function togglePill(el){el.classList.toggle('on');}
 function getSelectedPills(id){return Array.from(document.querySelectorAll('#'+id+' .pill.on')).map(p=>p.textContent.trim());}
 function aiLanguageRules(){return `ВАЖНО:\n- Весь смысловой текст, все формулировки задач, milestones, целей, заметок и советов пиши только на русском языке.\n- Английский допустим только в обязательных ключах JSON, если схема ниже требует английские ключи.\n- Если требуется JSON, верни только чистый JSON без markdown, без комментариев и без пояснений.\n- Значения полей title, objective, task, text, desc и day должны быть на русском языке.`;}
+function detectTaskOutputLanguage(...values){
+  const sample=values.filter(Boolean).join(' ');
+  if(/[А-Яа-яЁё]/.test(sample)) return 'Russian';
+  if(/[A-Za-z]/.test(sample)) return 'English';
+  return 'Russian';
+}
+function taskPlainTextLanguageRules(language='Russian'){
+  return language==='English'
+    ? `LANGUAGE:\n- Write every task value in English.\n- Return only plain-text in the exact contract.\n- No markdown, no commentary, no extra lines outside the contract.`
+    : `ЯЗЫК:\n- Пиши все значения задач только на русском языке.\n- Верни только plain-text в точном контракте.\n- Без markdown, без комментариев и без лишних строк вне контракта.`;
+}
 function sysp(){
   const summary=getContextSummary();
   return `Ты — AI-коуч StriveAI. Работаешь кратко, по-русски, без воды.\n\nКонтекст (сводка):\n${summary}\n\nПравила:\n- Не выдумывай данные, если их нет.\n- Давай только практические и проверяемые шаги.\n- Учитывай дедлайн, ограничения и текущий темп.\n- Если формат JSON обязателен, верни только JSON.\n\n${aiLanguageRules()}`;
@@ -3267,28 +3523,6 @@ function activeStageEnrichmentResponseJsonSchema(){
 }
 function getRoadmapPromptWindowDays(deadline){
   return getRoadmapWindowDays(deadline);
-}
-function milestoneTasksResponseJsonSchema(){
-  return {
-    type:'array',
-    minItems:3,
-    maxItems:5,
-    items:{
-      type:'object',
-      additionalProperties:false,
-      required:['title','description','why_it_matters','deliverable','done_definition','priority','deadline'],
-      properties:{
-        title:{type:'string',maxLength:80},
-        description:{type:'string',maxLength:220},
-        why_it_matters:{type:'string',maxLength:200},
-        deliverable:{type:'string',maxLength:200},
-        done_definition:{type:'string',maxLength:200},
-        priority:{type:'string',enum:['high','med','low']},
-        deadline:{type:'string'},
-        linked_stage:{type:'integer'}
-      }
-    }
-  };
 }
 function taskAuditResponseJsonSchema(){
   return {
@@ -3401,15 +3635,16 @@ ${strategyDesc?`- Pace: ${strategyDesc}`:''}
 Краткая сводка:
 ${summary}
 
-Верни только список стадий:
-1. Stage name
-2. Stage name
-3. Stage name
+Верни только список стадий в формате:
+1. Stage name || objective || outcome
+2. Stage name || objective || outcome
+3. Stage name || objective || outcome
 
 Правила:
 - максимум 3 стадии
 - каждая строка начинается с '1.', '2.', '3.'
-- без описаний
+- objective: конкретная цель этапа
+- outcome: измеримый результат этапа
 - без лишнего текста`;
 }
 function buildActiveStageEnrichmentPrompt(stage,context={}){
@@ -3469,55 +3704,84 @@ function normalizeRoadmapSkeleton(raw){
 }
 function buildMilestoneTasksPrompt(ms1,_countDesc,intensityDesc='',options={}){
   const stage=normalizeStageForEnrichment(ms1||{},Number(options.stageIndex)||0);
-  const stageTitle=clipText(stage.title||'Stage 1',60)||'Stage 1';
-  const stageObjective=clipText(stage.objective||'',170)||'проверить спрос и довести MVP до первых пользователей';
-  const stageOutcome=clipText(stage.outcome||'',130)||'измеримый результат текущего этапа';
   const context=options.context||buildRoadmapOnboardingContext();
+  const stageTitle=clipText(stage.title||'Этап 1',60)||'Этап 1';
+  const stageObjective=clipText(stage.objective||'',170)||'проверить спрос и довести MVP до первых пользователей';
   const goal=clipText(context.primary_goal||S.user.goal||'',140)||'запуск продукта';
   const deadline=context.deadline||S.user.deadline||'не задан';
-  const blockers=clipText(context.blocker||S.user.blockers||'',120)||'нет явных';
-  const founderContext=clipText([
+  return `Generate 3 execution tasks.
+
+Context:
+Goal: ${goal}
+Stage: ${stageTitle}
+Objective: ${stageObjective}
+Deadline: ${deadline}
+
+Output:
+TASKS_SKELETON_START
+1 | <task title>
+2 | <task title>
+3 | <task title>
+TASKS_SKELETON_END
+
+Rules:
+- exactly 3 lines
+- short action titles (max 6-8 words)
+- no extra text
+
+Language: Russian`;
+}
+function buildMilestoneTaskDetailPrompt(taskSkeleton,stage,intensityDesc='',options={}){
+  const normalizedStage=normalizeStageForEnrichment(stage||{},Number(options.stageIndex)||0);
+  const context=options.context||buildRoadmapOnboardingContext();
+  const outputLanguage=detectTaskOutputLanguage(
+    taskSkeleton?.title||'',
+    normalizedStage.title||'',
+    normalizedStage.objective||'',
+    normalizedStage.outcome||'',
     context.project_name||'',
     context.startup_idea||'',
-    context.current_stage||'',
-    context.target_audience||'',
-    context.niche||'',
-    context.resources||''
-  ].filter(Boolean).join(' · '),260)||'MVP стартап · ранняя стадия';
-  return `Сгенерируй founder-grade execution tasks для активной фазы "${stageTitle}".
+    context.primary_goal||S.user.goal||''
+  );
+  const isEnglish=outputLanguage==='English';
+  const stageTitle=clipText(normalizedStage.title||(isEnglish?'Stage 1':'Этап 1'),60)||(isEnglish?'Stage 1':'Этап 1');
+  const stageObjective=clipText(normalizedStage.objective||'',170)||(isEnglish?'validate demand and move MVP to real users':'проверить спрос и довести MVP до первых пользователей');
+  const stageOutcome=clipText(normalizedStage.outcome||'',130)||(isEnglish?'a measurable outcome for this stage':'измеримый результат текущего этапа');
+  const goal=clipText(context.primary_goal||S.user.goal||'',140)||(isEnglish?'ship the product':'запуск продукта');
+  const deadline=context.deadline||S.user.deadline||(isEnglish?'not set':'не задан');
+  return `Task detail for one startup execution task.
 
-Контекст:
-Цель: ${goal}
-Objective фазы: ${stageObjective}
-Outcome фазы: ${stageOutcome}
-Контекст фаундера: ${founderContext}
-Дедлайн: ${deadline}
-Блокеры: ${blockers}
-Темп: ${intensityDesc||'сбалансированный'}
-Сегодня: ${todayISO()}
+Language: ${outputLanguage}
+Goal: ${goal}
+Stage: ${stageTitle}
+Objective: ${stageObjective}
+Outcome: ${stageOutcome}
+Task: ${clipText(taskSkeleton?.title||'',96)}
+Deadline: ${deadline}
 
-Требования:
-- Верни 3-5 задач
-- Только JSON массив
+Output:
+TASK_DETAIL_START
+TITLE | <refined task title>
+DESCRIPTION | <one sentence>
+WHY | <one sentence>
+DELIVERABLE | <one sentence>
+DONE | <one sentence>
+PRIORITY | high|med|low
+DEADLINE | YYYY-MM-DD or none
+TASK_DETAIL_END
 
-Формат каждого объекта:
-- title: конкретное действие + измеримый результат (до 80 символов)
-- description: что сделать пошагово (1-2 коротких предложения)
-- why_it_matters: почему это критично сейчас для фазы
-- deliverable: какой артефакт/результат должен появиться
-- done_definition: как понять, что задача завершена
-- priority: high | med | low
-- deadline: YYYY-MM-DD или ""
-- linked_stage: номер активной фазы (1..4)
+Rules:
+- one short line per field
+- DESCRIPTION max 1 sentence
+- WHY max 1 sentence
+- DELIVERABLE max 1 sentence
+- DONE max 1 sentence
+- be specific, execution-focused, founder-grade
+- avoid generic filler and pseudo-work
+- no extra text
+- no markdown
 
-Правила:
-- Без объяснений
-- Без вложенности
-- Без абстракций и generic формулировок
-- Запрещены формулировки типа "сформулировать цель", "снять фидбек"
-- Каждая задача должна двигать продукт к реальному output (пользователи, лиды, demo, выручка)
-
-${aiLanguageRules()}`;
+${taskPlainTextLanguageRules(outputLanguage)}`;
 }
 function sampleTasksForAudit(tasks,maxActive=16,maxDone=8){
   const all=Array.isArray(tasks)?tasks:[];
