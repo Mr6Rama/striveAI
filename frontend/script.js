@@ -1384,6 +1384,14 @@ function syncActiveTasksFromExecution(){
   const stages=getExecutionStages();
   if(!stages.length) return;
   const activeIndex=getExecutionActiveStageIndex();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'syncActiveTasksFromExecution',
+    action:'tasks_sync_started',
+    activeStageIndex:activeIndex,
+    stageCount:stages.length
+  });
   S.execution.currentStageIndex=activeIndex;
   const activeTasks=getTasksForStage(activeIndex,{includeArchived:false});
   S.tasks=activeTasks.map((task)=>({
@@ -1394,6 +1402,14 @@ function syncActiveTasksFromExecution(){
     text:getTaskTitle(task),
     linkedStage:Math.max(1,(Number(task.linkedStageIndex)||0)+1)
   }));
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'syncActiveTasksFromExecution',
+    action:'tasks_sync_completed',
+    activeStageIndex:activeIndex,
+    taskCount:S.tasks.length
+  });
 }
 function normalizeExecutionStatuses(){
   const stages=getExecutionStages();
@@ -1582,7 +1598,10 @@ function ensureExecutionState(options={}){
   syncActiveTasksFromExecution();
   return changed;
 }
-function setStageTasks(stageIndex,tasks,opts={}){
+function hasExecutionStateReady(){
+  return isExecutionStateObject(S.execution)&&getExecutionStages().length>0;
+}
+function setStageTasks(stageIndex,tasks,opts={}){ 
   const stage=getExecutionStage(stageIndex);
   if(!stage||!Array.isArray(tasks)) return [];
   const replace=opts.replace!==false;
@@ -1624,7 +1643,8 @@ function setStageTasks(stageIndex,tasks,opts={}){
   return persisted;
 }
 async function generateTasksForStage(stageIndex,options={}){
-  if(!ensureExecutionState()){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()){
     logRoadmapPipelineEvent('active_stage_task_generation_skipped_execution_uninitialized',{
       stageCount:getExecutionStages().length,
       activeStageId:'',
@@ -1707,6 +1727,15 @@ async function generateTasksForStage(stageIndex,options={}){
     force:Boolean(options.force),
     reason:String(options.reason||'unspecified')
   });
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'generateTasksForStage',
+    action:'tasks_generation_started',
+    stageIndex,
+    force:Boolean(options.force),
+    reason:String(options.reason||'unspecified')
+  });
   const taskPromise=(async ()=>{
     const phase=S.roadmap?.[stageIndex]||{};
     const normalizedStage=normalizeStageForEnrichment({
@@ -1767,6 +1796,15 @@ async function generateTasksForStage(stageIndex,options={}){
       logStageTaskSnapshot('stage_tasks_generated',stageIndex,{generatedCount:normalized.length});
       logExecutionFlowEvent('tasks_generated_count',stageIndex,{generatedCount:persisted.length,fallback:false});
       logExecutionFlowEvent('tasks_saved',stageIndex,{savedCount:persisted.length});
+      logInfo({
+        area:'frontend',
+        module:'frontend/script.js',
+        function:'generateTasksForStage',
+        action:'tasks_generated_count',
+        stageIndex,
+        generatedCount:persisted.length,
+        fallback:false
+      });
       logRoadmapPipelineEvent('active_stage_tasks_generated',{
         requestId:generatedResult?.meta?.requestId||clientRequestId,
         stageCount:getExecutionStages().length,
@@ -1791,10 +1829,46 @@ async function generateTasksForStage(stageIndex,options={}){
       saveAll();
       return persisted;
     }catch(error){
-      setStageTaskStatus(stageIndex,'error',String(error?.message||''));
-      logStageTaskSnapshot('stage_tasks_generated',stageIndex,{generatedCount:0,fallback:false,errorMessage:String(error?.message||'')});
-      logExecutionFlowEvent('fallback_used',stageIndex,{reason:'tasks_generation_failed',errorMessage:String(error?.message||'')});
-      logExecutionFlowEvent('tasks_generated_count',stageIndex,{generatedCount:0,fallback:false});
+      const errorMessage=String(error?.message||'');
+      logInfo({
+        area:'frontend',
+        module:'frontend/script.js',
+        function:'generateTasksForStage',
+        action:'tasks_generation_failed',
+        stageIndex,
+        errorMessage
+      });
+      const fallback=normalizeFounderTasks([],{
+        stageObjective:phase?.objective||stage.objective||'',
+        stageTitle:phase?.title||stage.title||`Stage ${stageIndex+1}`,
+        stageIndex,
+        deadline:S.user.deadline||''
+      }).slice(0,5);
+      const persisted=setStageTasks(stageIndex,fallback,{replace:true});
+      setStageTaskStatus(stageIndex,persisted.length?'ready':'error',errorMessage);
+      logStageTaskSnapshot('stage_tasks_generated',stageIndex,{generatedCount:persisted.length,fallback:true,errorMessage});
+      logExecutionFlowEvent('fallback_used',stageIndex,{reason:'tasks_generation_failed',errorMessage});
+      logExecutionFlowEvent('tasks_generated_count',stageIndex,{generatedCount:persisted.length,fallback:true});
+      logInfo({
+        area:'frontend',
+        module:'frontend/script.js',
+        function:'generateTasksForStage',
+        action:'tasks_generated_count',
+        stageIndex,
+        generatedCount:persisted.length,
+        fallback:true
+      });
+      logRoadmapPipelineEvent('tasks_generation_failed',{
+        requestId:clientRequestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        promptChars:tasksPrompt.length,
+        requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS,
+        finishReason:'',
+        taskCount:persisted.length,
+        errorMessage
+      });
       logRoadmapPipelineEvent('stage_task_generation_failed_nonfatal',{
         requestId:clientRequestId,
         stageCount:getExecutionStages().length,
@@ -1803,14 +1877,15 @@ async function generateTasksForStage(stageIndex,options={}){
         promptChars:tasksPrompt.length,
         requestedMaxTokens:TASKS_DEFAULT_MAX_TOKENS,
         finishReason:'',
-        taskCount:0,
-        errorMessage:String(error?.message||'')
+        taskCount:persisted.length,
+        errorMessage:'fallback_tasks_applied'
       });
+      saveTasks();
       saveAll();
       if(options.silentFallback!==true){
-        toast2('Task generation failed','Roadmap stays available. Retry task generation for this stage.');
+        toast2('Task generation fallback','Applied fallback tasks for this stage.');
       }
-      return [];
+      return persisted;
     }finally{
       stageTaskGenerationInFlight.delete(stageIndex);
     }
@@ -1819,7 +1894,8 @@ async function generateTasksForStage(stageIndex,options={}){
   return taskPromise;
 }
 async function initializeTasksForActiveStage(options={}){
-  if(!ensureExecutionState()){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()){
     logInfo({
       area:'frontend',
       module:'frontend/script.js',
@@ -1873,7 +1949,8 @@ async function initializeTasksForActiveStage(options={}){
   return generated;
 }
 async function ensureActiveStageTasks(options={}){
-  if(!ensureExecutionState()){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()){
     logWarn({
       area:'frontend',
       module:'frontend/script.js',
@@ -2244,7 +2321,8 @@ async function generateRoadmapSkeleton(options={}){
   }
 }
 async function bootstrapExecutionAfterRoadmap(reason='roadmap_created'){
-  if(!ensureExecutionState({mergeLegacyTasks:false})){
+  ensureExecutionState({mergeLegacyTasks:false});
+  if(!hasExecutionStateReady()){
     throw new Error('Execution state was not initialized from roadmap');
   }
   const stages=getExecutionStages();
@@ -2260,7 +2338,6 @@ async function bootstrapExecutionAfterRoadmap(reason='roadmap_created'){
   });
   normalizeExecutionStatuses();
   refreshExecutionProgress();
-  syncActiveTasksFromExecution();
   let activeIndex=getExecutionActiveStageIndex();
   let activeStage=getExecutionStage(activeIndex);
   if(!activeStage||!activeStage.id){
@@ -2288,10 +2365,11 @@ async function bootstrapExecutionAfterRoadmap(reason='roadmap_created'){
     activeStageIndex:activeIndex
   });
   setStageTaskStatus(activeIndex,'not_generated');
-  logRoadmapPipelineEvent('post_roadmap_task_generation_deferred',{
+  logRoadmapPipelineEvent('tasks_generation_deferred',{
     stageCount:stages.length,
     activeStageId:activeStage?.id||'',
-    activeStageIndex:activeIndex
+    activeStageIndex:activeIndex,
+    errorMessage:String(reason||'bootstrap')
   });
   saveAll();
   return [];
@@ -2304,6 +2382,11 @@ async function runRoadmapPipeline(options={}){
   const reason=String(options.reason||'roadmap_pipeline');
   const context=options.context||buildRoadmapOnboardingContext();
   const contextMapping=roadmapContextPresence(context);
+  const result={
+    degraded:false,
+    degradedStage:'',
+    errorMessage:''
+  };
   logRoadmapPipelineEvent('roadmap_pipeline_started',{
     requestId:createClientRequestId('roadmap-pipeline'),
     stageCount:0,
@@ -2321,7 +2404,30 @@ async function runRoadmapPipeline(options={}){
   });
   if(pipelineId&&!isRoadmapPipelineActive(pipelineId)) return null;
   S.roadmap=nextRoadmap;
-  const initialized=initializeExecutionFromRoadmap({resetVisibleTasks:true});
+  let initialized=false;
+  try{
+    initialized=initializeExecutionFromRoadmap({resetVisibleTasks:true});
+  }catch(error){
+    result.degraded=true;
+    result.degradedStage='execution_init';
+    result.errorMessage=String(error?.message||'');
+    S.execution=null;
+    logRoadmapPipelineEvent('roadmap_execution_init_failed',{
+      stageCount:Array.isArray(S.roadmap)?S.roadmap.length:0,
+      activeStageId:'',
+      activeStageIndex:0,
+      errorMessage:result.errorMessage,
+      contextFields:contextMapping.present
+    });
+    logRoadmapPipelineEvent('roadmap_pipeline_degraded_fallback_applied',{
+      stageCount:Array.isArray(S.roadmap)?S.roadmap.length:0,
+      activeStageId:'',
+      activeStageIndex:0,
+      errorMessage:'execution_init_failed_using_skeleton_only',
+      contextFields:contextMapping.present
+    });
+    return result;
+  }
   if(pipelineId&&!isRoadmapPipelineActive(pipelineId)) return null;
   logRoadmapPipelineEvent('execution_state_initialized',{
     roadmapId:S.execution?.id||'',
@@ -2331,7 +2437,25 @@ async function runRoadmapPipeline(options={}){
     contextFields:contextMapping.present
   });
   if(!initialized){
-    throw new Error('Execution state initialization failed');
+    result.degraded=true;
+    result.degradedStage='execution_init';
+    result.errorMessage='Execution state initialization failed';
+    S.execution=null;
+    logRoadmapPipelineEvent('roadmap_execution_init_failed',{
+      stageCount:Array.isArray(S.roadmap)?S.roadmap.length:0,
+      activeStageId:'',
+      activeStageIndex:0,
+      errorMessage:result.errorMessage,
+      contextFields:contextMapping.present
+    });
+    logRoadmapPipelineEvent('roadmap_pipeline_degraded_fallback_applied',{
+      stageCount:Array.isArray(S.roadmap)?S.roadmap.length:0,
+      activeStageId:'',
+      activeStageIndex:0,
+      errorMessage:'execution_init_returned_false_using_skeleton_only',
+      contextFields:contextMapping.present
+    });
+    return result;
   }
   const activeStageIndex=getExecutionActiveStageIndex();
   const activeStage=getExecutionStage(activeStageIndex);
@@ -2343,7 +2467,30 @@ async function runRoadmapPipeline(options={}){
     activeStageIndex,
     contextFields:contextMapping.present
   });
-  await bootstrapExecutionAfterRoadmap(reason);
+  try{
+    await bootstrapExecutionAfterRoadmap(reason);
+  }catch(error){
+    if(pipelineId&&!isRoadmapPipelineActive(pipelineId)) return null;
+    result.degraded=true;
+    result.degradedStage='post_generation';
+    result.errorMessage=String(error?.message||'');
+    logRoadmapPipelineEvent('roadmap_pipeline_failed_post_generation',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length||(Array.isArray(S.roadmap)?S.roadmap.length:0),
+      activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+      activeStageIndex:getExecutionActiveStageIndex(),
+      errorMessage:result.errorMessage,
+      contextFields:contextMapping.present
+    });
+    logRoadmapPipelineEvent('roadmap_pipeline_degraded_fallback_applied',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length||(Array.isArray(S.roadmap)?S.roadmap.length:0),
+      activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+      activeStageIndex:getExecutionActiveStageIndex(),
+      errorMessage:'post_generation_failed_roadmap_kept_in_memory',
+      contextFields:contextMapping.present
+    });
+  }
   if(pipelineId&&!isRoadmapPipelineActive(pipelineId)) return null;
   logRoadmapPipelineEvent('roadmap_pipeline_completed',{
     roadmapId:S.execution?.id||'',
@@ -2351,11 +2498,16 @@ async function runRoadmapPipeline(options={}){
     activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
     activeStageIndex:getExecutionActiveStageIndex(),
     taskCount:getTasksForStage(getExecutionActiveStageIndex(),{includeArchived:false}).length,
+    degraded:result.degraded,
+    degradedStage:result.degradedStage,
     contextFields:contextMapping.present
   });
+  return result;
 }
 async function advanceRoadmapStage(options={}){
-  if(stageAdvanceInFlight||!ensureExecutionState()) return false;
+  if(stageAdvanceInFlight) return false;
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return false;
   const stages=getExecutionStages();
   if(!stages.length) return false;
   const currentIndex=getExecutionActiveStageIndex();
@@ -2405,7 +2557,9 @@ async function advanceRoadmapStage(options={}){
   }
 }
 async function maybeAutoAdvanceRoadmapStage(){
-  if(stageAdvanceInFlight||!ensureExecutionState()) return false;
+  if(stageAdvanceInFlight) return false;
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return false;
   const activeIndex=getExecutionActiveStageIndex();
   if(activeIndex<0) return false;
   if(!areStageTasksCompleted(activeIndex)) return false;
@@ -3720,7 +3874,7 @@ async function obGenerateRoadmap(){
     const variantDesc={safe:'Консервативный темп: 2-4 часа в день, упор на устойчивость и низкий риск',balanced:'Сбалансированный темп: 4-6 часов в день, сочетание скорости и качества',aggressive:'Агрессивный темп: 8-10 часов в день, высокий фокус на быстрый результат'}[roadmapVariant];
     const weeksCount=calcWeeksFromDeadline(S.user.deadline);
     const roadmapCtx=buildRoadmapOnboardingContext();
-    await runRoadmapPipeline({
+    const pipelineResult=await runRoadmapPipeline({
       weeksCount,
       strategyDesc:variantDesc,
       context:roadmapCtx,
@@ -3733,7 +3887,6 @@ async function obGenerateRoadmap(){
 
     if(pipelineCompleted){
       try{
-        syncActiveTasksFromExecution();
         saveAll();
         logInfo({
           area:'frontend',
@@ -3741,10 +3894,25 @@ async function obGenerateRoadmap(){
           function:'obGenerateRoadmap',
           action:'execution_persisted',
           activeStageIndex:getExecutionActiveStageIndex(),
-          stages:summarizeRoadmapStagesForLog(getExecutionStages())
+          stages:summarizeRoadmapStagesForLog(getExecutionStages()),
+          degraded:Boolean(pipelineResult?.degraded),
+          degradedStage:String(pipelineResult?.degradedStage||'')
         });
+        if(pipelineResult?.degraded){
+          logRoadmapPipelineEvent('roadmap_pipeline_rendered_degraded',{
+            roadmapId:S.execution?.id||'',
+            stageCount:getExecutionStages().length||(Array.isArray(S.roadmap)?S.roadmap.length:0),
+            activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+            activeStageIndex:getExecutionActiveStageIndex(),
+            errorMessage:String(pipelineResult?.errorMessage||''),
+            degradedStage:String(pipelineResult?.degradedStage||'')
+          });
+        }
         obShowGoals();
         obGo(3);
+        if(pipelineResult?.degraded){
+          toast2('Roadmap готов','Roadmap показан в degraded mode.');
+        }
       }catch(postError){
         logWarn({
           area:'frontend',
@@ -3758,13 +3926,31 @@ async function obGenerateRoadmap(){
     }
   }catch(e){
     if(isAbortError(e)||!isRoadmapPipelineActive(pipelineId)) return;
-    logRoadmapPipelineEvent('roadmap_pipeline_failed_onboarding',{
+    const hasSkeleton=Array.isArray(S.roadmap)&&S.roadmap.length>0;
+    logRoadmapPipelineEvent(hasSkeleton?'roadmap_pipeline_failed_post_generation':'roadmap_pipeline_failed_onboarding_collect_or_skeleton',{
       roadmapId:S.execution?.id||'',
-      stageCount:getExecutionStages().length,
+      stageCount:getExecutionStages().length||(Array.isArray(S.roadmap)?S.roadmap.length:0),
       activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
       activeStageIndex:getExecutionActiveStageIndex(),
       errorMessage:String(e?.message||'')
     });
+    if(hasSkeleton){
+      logRoadmapPipelineEvent('roadmap_pipeline_degraded_fallback_applied',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length||(Array.isArray(S.roadmap)?S.roadmap.length:0),
+        activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+        activeStageIndex:getExecutionActiveStageIndex(),
+        errorMessage:'post_generation_exception_ui_kept_using_existing_skeleton'
+      });
+      try{
+        if(!getExecutionStages().length) initializeExecutionFromRoadmap({resetVisibleTasks:true});
+        saveAll();
+        obShowGoals();
+        obGo(3);
+      }catch(_degradedError){}
+      toast2('Roadmap готов','Roadmap показан в degraded mode.');
+      return;
+    }
     toast2('Roadmap generation failed',mapGeminiErrorMessage(e,'roadmap'));
   }finally{
     if(!isRoadmapPipelineActive(pipelineId)) return;
@@ -3834,7 +4020,7 @@ function obPrepLaunch(){
   if(tk)tk.textContent=String((getActiveStageTasks().length||0));
 }
 function obContinueToLaunch(){obPrepLaunch();obGo(6);}
-async function obGenerateTasks(){
+async function handleGenerateTasksClick(){
   if(!S.roadmap||taskRequestInFlight)return;
   const btn=document.getElementById('ob-tasks-btn'),loading=document.getElementById('ob-tasks-loading');
   taskRequestInFlight=true;
@@ -3843,29 +4029,99 @@ async function obGenerateTasks(){
   try{
     obTaskVariant=BETA_ALLOWED_TASK_VARIANT;
     syncTaskVariantUI();
-    await initializeTasksForActiveStage({force:false,silentFallback:false,reason:'onboarding_tasks_step'});
-    if(!getActiveStageTasks().length){
-      logWarn({
-        area:'frontend',
-        module:'frontend/script.js',
-        function:'obGenerateTasks',
-        action:'stage_tasks_missing_after_roadmap',
-        stageIndex:getExecutionActiveStageIndex()
-      });
-      await initializeTasksForActiveStage({force:true,silentFallback:false,reason:'onboarding_tasks_step_retry'});
+    logRoadmapPipelineEvent('execution_recovery_started',{
+      roadmapId:S.execution?.id||'',
+      stageCount:Array.isArray(S.roadmap)?S.roadmap.length:0,
+      activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+      activeStageIndex:getExecutionActiveStageIndex()
+    });
+    const hasExecutionObject=isExecutionStateObject(S.execution);
+    const hasExecutionStages=getExecutionStages().length>0;
+    const hasActiveStage=Boolean(getExecutionStage(getExecutionActiveStageIndex()));
+    if(!Array.isArray(S.roadmap)||!S.roadmap.length){
+      throw new Error('Roadmap is missing, cannot recover execution state');
     }
+    if(!hasExecutionObject||!hasExecutionStages||!hasActiveStage){
+      const initialized=initializeExecutionFromRoadmap({resetVisibleTasks:true});
+      if(!initialized){
+        throw new Error('Execution recovery failed from roadmap');
+      }
+    }else{
+      ensureExecutionState({mergeLegacyTasks:false});
+    }
+    if(!isExecutionStateObject(S.execution)||!getExecutionStages().length){
+      throw new Error('Execution state is still unavailable after recovery');
+    }
+    const recoveredActiveStageIndex=getExecutionActiveStageIndex();
+    const recoveredActiveStage=getExecutionStage(recoveredActiveStageIndex);
+    if(!recoveredActiveStage){
+      throw new Error('Active stage recovery failed');
+    }
+    logRoadmapPipelineEvent('active_stage_recovered',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length,
+      activeStageId:recoveredActiveStage?.id||'',
+      activeStageIndex:recoveredActiveStageIndex
+    });
+    logRoadmapPipelineEvent('execution_recovery_completed',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length,
+      activeStageId:recoveredActiveStage?.id||'',
+      activeStageIndex:recoveredActiveStageIndex
+    });
+    const activeStageIndex=recoveredActiveStageIndex;
+    const activeStage=recoveredActiveStage;
+    logRoadmapPipelineEvent('tasks_generation_manual_started',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length,
+      activeStageId:activeStage?.id||'',
+      activeStageIndex
+    });
+    const tasks=await initializeTasksForActiveStage({force:true,silentFallback:false,reason:'manual_click'});
     if(!getActiveStageTasks().length){
+      logRoadmapPipelineEvent('tasks_generation_failed',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length,
+        activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+        activeStageIndex:getExecutionActiveStageIndex(),
+        errorMessage:'tasks_missing_after_manual_generation'
+      });
       throw new Error('Active stage tasks are still missing');
     }
     syncActiveTasksFromExecution();
-    saveTasks();renderOnboardingTaskPreview();obPrepLaunch();toast2('Задачи сгенерированы',`Подготовлено ${S.tasks.length} задач для первого этапа`);obGo(5);
+    saveAll();
+    logRoadmapPipelineEvent('tasks_generation_manual_completed',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length,
+      activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+      activeStageIndex:getExecutionActiveStageIndex(),
+      taskCount:Array.isArray(tasks)?tasks.length:S.tasks.length
+    });
+    renderOnboardingTaskPreview();obPrepLaunch();toast2('Задачи сгенерированы',`Подготовлено ${S.tasks.length} задач для первого этапа`);obGo(5);
   }catch(e){
+    logRoadmapPipelineEvent('execution_recovery_failed',{
+      roadmapId:S.execution?.id||'',
+      stageCount:Array.isArray(S.roadmap)?S.roadmap.length:0,
+      activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+      activeStageIndex:getExecutionActiveStageIndex(),
+      errorMessage:String(e?.message||'')
+    });
+    logRoadmapPipelineEvent('tasks_generation_failed',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length,
+      activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+      activeStageIndex:getExecutionActiveStageIndex(),
+      errorMessage:String(e?.message||'')
+    });
     toast2('Task generation failed',mapGeminiErrorMessage(e,'tasks'));
   }finally{
     taskRequestInFlight=false;
     if(btn) btn.disabled=false;
     if(loading) loading.style.display='none';
   }
+}
+async function obGenerateTasks(){
+  return handleGenerateTasksClick();
 }
 function obFinish(){
   const btn=document.getElementById('ob-launch-btn');
@@ -3914,9 +4170,6 @@ function gp(id){
     renderTasks();
     renderGoals();
     updTaskBadge();
-    if(Array.isArray(S.roadmap)&&S.roadmap.length&&isExecutionStateObject(S.execution)){
-      initializeTasksForActiveStage({force:false,silentFallback:true,reason:'work_screen_entry'}).catch(()=>{});
-    }
   }
   if(id==='notes'){renderNoteList();if(!activeNoteId&&(S.notes||[]).length)openNote(S.notes[0].id);}
   if(id==='analytics'){renderAnalytics();}
@@ -4019,9 +4272,6 @@ function switchWorkTab(tab){
   if(tab!=='tasks') closeTaskDetail(true);
   if(tab==='tasks'){
     renderTasks();
-    if(Array.isArray(S.roadmap)&&S.roadmap.length&&isExecutionStateObject(S.execution)){
-      initializeTasksForActiveStage({force:false,silentFallback:true,reason:'tasks_tab_opened'}).catch(()=>{});
-    }
   }
   // Swap action buttons
   const actions=document.getElementById('work-actions');
@@ -4398,7 +4648,7 @@ async function genVariants(){
     const roadmapVariant=BETA_ALLOWED_ROADMAP_VARIANT;
     const variantDesc={safe:'Консервативный темп: 2-4 часа в день, упор на устойчивость и низкий риск',balanced:'Сбалансированный темп: 4-6 часов в день, сочетание скорости и качества',aggressive:'Агрессивный темп: 8-10 часов в день, высокий фокус на быстрый результат'}[roadmapVariant];
     const roadmapCtx=buildRoadmapOnboardingContext();
-    await runRoadmapPipeline({
+    const pipelineResult=await runRoadmapPipeline({
       weeksCount,
       strategyDesc:variantDesc,
       context:roadmapCtx,
@@ -4407,7 +4657,6 @@ async function genVariants(){
       signal
     });
     if(!isRoadmapPipelineActive(pipelineId)) return;
-    syncActiveTasksFromExecution();
     saveAll();
     logInfo({
       area:'frontend',
@@ -4415,20 +4664,52 @@ async function genVariants(){
       function:'genVariants',
       action:'execution_persisted',
       activeStageIndex:getExecutionActiveStageIndex(),
-      stages:summarizeRoadmapStagesForLog(getExecutionStages())
+      stages:summarizeRoadmapStagesForLog(getExecutionStages()),
+      degraded:Boolean(pipelineResult?.degraded),
+      degradedStage:String(pipelineResult?.degradedStage||'')
     });
     renderRM();
     updRoadmapProgress();
-    toast2('Roadmap готов',`Построен план на ${weeksCount} нед.`);
+    if(pipelineResult?.degraded){
+      logRoadmapPipelineEvent('roadmap_pipeline_rendered_degraded',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length||(Array.isArray(S.roadmap)?S.roadmap.length:0),
+        activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+        activeStageIndex:getExecutionActiveStageIndex(),
+        errorMessage:String(pipelineResult?.errorMessage||''),
+        degradedStage:String(pipelineResult?.degradedStage||'')
+      });
+      toast2('Roadmap готов','Roadmap показан в degraded mode.');
+    }else{
+      toast2('Roadmap готов',`Построен план на ${weeksCount} нед.`);
+    }
   }catch(e){
     if(isAbortError(e)||!isRoadmapPipelineActive(pipelineId)) return;
-    logRoadmapPipelineEvent('roadmap_pipeline_failed_rebuild',{
+    const hasSkeleton=Array.isArray(S.roadmap)&&S.roadmap.length>0;
+    logRoadmapPipelineEvent(hasSkeleton?'roadmap_pipeline_failed_post_generation':'roadmap_pipeline_failed_rebuild',{
       roadmapId:S.execution?.id||'',
-      stageCount:getExecutionStages().length,
+      stageCount:getExecutionStages().length||(Array.isArray(S.roadmap)?S.roadmap.length:0),
       activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
       activeStageIndex:getExecutionActiveStageIndex(),
       errorMessage:String(e?.message||'')
     });
+    if(hasSkeleton){
+      logRoadmapPipelineEvent('roadmap_pipeline_degraded_fallback_applied',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length||(Array.isArray(S.roadmap)?S.roadmap.length:0),
+        activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+        activeStageIndex:getExecutionActiveStageIndex(),
+        errorMessage:'rebuild_post_generation_exception_ui_kept_using_existing_skeleton'
+      });
+      try{
+        if(!getExecutionStages().length) initializeExecutionFromRoadmap({resetVisibleTasks:true});
+        saveAll();
+        renderRM();
+        updRoadmapProgress();
+      }catch(_degradedError){}
+      toast2('Roadmap готов','Roadmap показан в degraded mode.');
+      return;
+    }
     if(previousRoadmap){
       S.roadmap=previousRoadmap;
       S.execution=previousExecution;
@@ -4626,11 +4907,13 @@ function getTaskById(id){
   return (S.tasks||[]).find(t=>Number(t.id)===Number(id));
 }
 function getActiveStageTasks(){
-  if(!ensureExecutionState()) return [];
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return [];
   return getTasksForStage(getExecutionActiveStageIndex(),{includeArchived:false});
 }
 function getTasksForStageById(stageId){
-  if(!ensureExecutionState()) return [];
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return [];
   const stages=getExecutionStages();
   const idx=stages.findIndex((stage)=>String(stage.id)===String(stageId));
   if(idx<0) return [];
@@ -4645,7 +4928,8 @@ function renderActiveMilestoneHeader(){
   const titleEl=document.getElementById('task-stage-title');
   const metaEl=document.getElementById('task-stage-meta');
   if(!titleEl||!metaEl) return;
-  if(!ensureExecutionState()){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()){
     titleEl.textContent='No active milestone';
     metaEl.textContent='Generate a roadmap to start milestone execution.';
     return;
@@ -4748,7 +5032,8 @@ function renderTaskDetail(){
   document.body.classList.add('task-detail-open');
 }
 function addTask(){
-  if(!ensureExecutionState()){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()){
     toast2('Roadmap required','Generate roadmap before adding milestone tasks.');
     return;
   }
@@ -4859,7 +5144,8 @@ function renderTasks(){
   }).join('');
 }
 async function toggleTask(id){
-  if(!ensureExecutionState()) return;
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return;
   const t=getTaskById(id);
   if(!t) return;
   const canonical=getExecutionTaskById(t.id);
@@ -4889,7 +5175,8 @@ async function toggleTask(id){
   if(activeTaskDetailId===Number(id)) renderTaskDetail();
 }
 function deleteTask(id){
-  if(!ensureExecutionState()) return;
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return;
   const task=getTaskById(id);
   if(!task) return;
   const stageIndex=Math.max(0,Number(task.linkedStageIndex)||0);
@@ -4999,7 +5286,8 @@ async function aiEditTasks(){
 }
 function applyAiTasks(){
   if(!aiTasksDraft)return;
-  if(!ensureExecutionState()) return;
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return;
   const stageIndex=getExecutionActiveStageIndex();
   const stage=getExecutionStage(stageIndex)||S.roadmap?.[stageIndex]||S.roadmap?.[0]||{};
   const normalized=normalizeTaskCollection(aiTasksDraft,{
