@@ -359,6 +359,14 @@ function parseStages(text){
     .map((line)=>{
       if(!line) return null;
       const parts=line.split(/\s*\|\|\s*/).map((part)=>part.trim()).filter(Boolean);
+      if(parts.length>=4){
+        return {
+          title:parts[0],
+          objective:parts[1],
+          outcome:parts[2],
+          reasoning:parts.slice(3).join(' || ')
+        };
+      }
       if(parts.length>=3){
         return {
           title:parts[0],
@@ -369,7 +377,7 @@ function parseStages(text){
       return parts[0]||null;
     })
     .filter(Boolean)
-    .slice(0,3);
+    .slice(0,ROADMAP_MAX_STAGES);
 }
 function normalizeTaskContractValue(value,maxLen=220){
   return clipText(String(value||'').replace(/\s+/g,' ').trim(),maxLen);
@@ -397,8 +405,9 @@ function parseTaskSkeletonContract(raw){
     .filter(Boolean);
   if(lines[0]!=='TASKS_SKELETON_START'||lines[lines.length-1]!=='TASKS_SKELETON_END') return [];
   const body=lines.slice(1,-1);
-  if(body.length!==3) return [];
-  return body.map((line,index)=>{
+  if(!body.length) return [];
+  const usableBody=body.slice(0,10);
+  return usableBody.map((line,index)=>{
     const match=line.match(/^(\d+)\s*\|\s*(.+)$/i);
     if(!match) return null;
     const ordinal=Number(match[1]);
@@ -483,9 +492,9 @@ function parseTaskDetailContract(raw){
   if(!parsed.priority) parsed.priority='med';
   return parsed;
 }
-const ROADMAP_MIN_STAGES=2;
-const ROADMAP_MAX_STAGES=4;
-const ROADMAP_DEFAULT_MAX_TOKENS = 2000;
+const ROADMAP_MIN_STAGES=3;
+const ROADMAP_MAX_STAGES=7;
+const ROADMAP_DEFAULT_MAX_TOKENS = 1700;
 const TASKS_DEFAULT_MAX_TOKENS = 1000;
 const TASK_SKELETON_DEFAULT_MAX_TOKENS = 500;
 const TASK_DETAIL_DEFAULT_MAX_TOKENS = 1000;
@@ -818,7 +827,73 @@ function getRoadmapWindowDays(deadline){
   end.setHours(0,0,0,0);
   const raw=Math.ceil((end.getTime()-now.getTime())/(1000*60*60*24));
   if(!Number.isFinite(raw)) return 10;
-  return Math.max(7,Math.min(14,raw));
+  return Math.max(7,Math.min(35,raw));
+}
+function getRoadmapDeadlineDays(deadline){
+  return Math.max(1,getRoadmapWindowDays(deadline));
+}
+function getDesiredRoadmapStageCount(deadline,sourceLength=0){
+  const days=getRoadmapDeadlineDays(deadline);
+  let target=3;
+  if(days<=14) target=3;
+  else if(days<=21) target=4;
+  else if(days<=28) target=5;
+  else if(days<=35) target=6;
+  else target=7;
+  const sourceCount=Math.max(0,Number(sourceLength)||0);
+  return Math.max(target,Math.min(ROADMAP_MAX_STAGES,sourceCount||target));
+}
+function getTargetTaskCountForStage(stageIndex,stageCount,deadline){
+  const days=getRoadmapDeadlineDays(deadline);
+  const safeStageCount=Math.max(1,Number(stageCount)||1);
+  const safeStageIndex=Math.max(0,Number(stageIndex)||0);
+  if(days<=14) return 5;
+  if(days<=28){
+    const minCount=6;
+    const maxCount=8;
+    const step=Math.floor(((maxCount-minCount)*safeStageIndex)/Math.max(1,safeStageCount-1));
+    return Math.max(minCount,Math.min(maxCount,minCount+step));
+  }
+  const minCount=8;
+  const maxCount=10;
+  const step=Math.floor(((maxCount-minCount)*safeStageIndex)/Math.max(1,safeStageCount-1));
+  return Math.max(minCount,Math.min(maxCount,minCount+step));
+}
+function toDateInputValueSafe(value){
+  if(!value) return '';
+  const date=value instanceof Date?new Date(value.getTime()):new Date(value);
+  if(Number.isNaN(date.getTime())) return '';
+  return toDateInputValue(date);
+}
+function addDaysToDateInput(value,days){
+  const base=value?new Date(`${value}T00:00:00`):new Date();
+  if(Number.isNaN(base.getTime())) return '';
+  const copy=new Date(base.getTime());
+  copy.setDate(copy.getDate()+Number(days||0));
+  return toDateInputValue(copy);
+}
+function spreadDatesBetween(startDate,endDate,count){
+  const total=Math.max(1,Number(count)||1);
+  const start=toDateInputValueSafe(startDate)||toDateInputValueSafe(new Date());
+  let end=toDateInputValueSafe(endDate);
+  if(!start) return Array.from({length:total},()=>toDateInputValue(new Date()));
+  if(!end) end=addDaysToDateInput(start,Math.max(total,3));
+  const startTime=new Date(`${start}T00:00:00`).getTime();
+  let endTime=new Date(`${end}T00:00:00`).getTime();
+  if(!Number.isFinite(startTime)) return Array.from({length:total},()=>start);
+  if(!Number.isFinite(endTime)||endTime<=startTime) endTime=startTime+Math.max(total,3)*24*60*60*1000;
+  const spanDays=Math.max(1,Math.round((endTime-startTime)/(24*60*60*1000)));
+  const out=[];
+  for(let i=0;i<total;i+=1){
+    const offset=Math.max(1,Math.round(((i+1)*spanDays)/total));
+    out.push(toDateInputValue(new Date(startTime+offset*24*60*60*1000)));
+  }
+  return out;
+}
+function buildTaskDeadlinePlan({stageStartDate='',stageTargetDate='',deadline='',taskCount=1}={}){
+  const fallbackStart=toDateInputValueSafe(stageStartDate)||toDateInputValueSafe(new Date());
+  const fallbackEnd=toDateInputValueSafe(stageTargetDate)||toDateInputValueSafe(deadline);
+  return spreadDatesBetween(fallbackStart,fallbackEnd,Math.max(1,Number(taskCount)||1));
 }
 function phaseDayLabels(totalDays,count){
   const labels=[];
@@ -863,42 +938,101 @@ function tasksToDays(tasks,totalDays,duration='2-3ч'){
     duration
   }));
 }
-function fallbackRoadmapForMvp(){
+function fallbackRoadmapForMvp(count){
   const project=clipText((S?.user?.project||S?.user?.idea||''),70)||'проект';
   const goal=clipText((S?.user?.goal||''),70)||'ключевой цели';
-  const horizon=getRoadmapWindowDays(S?.user?.deadline);
-  const activeTasks=[
-    `запустить лендинг ${project} и собрать 20 регистраций`,
-    'провести 5 интервью и зафиксировать 3 ключевые боли',
-    'выпустить рабочую версию и закрыть 10 критичных сценариев',
-    'получить 1 платящего пользователя или LOI'
-  ];
-  return [
+  const horizonDays=getRoadmapDeadlineDays(S?.user?.deadline);
+  const targetCount=Math.max(3,Math.min(ROADMAP_MAX_STAGES,Number(count)||getDesiredRoadmapStageCount(S?.user?.deadline)));
+  const targetDates=spreadDatesBetween(new Date(),S?.user?.deadline||addDaysToDateInput(toDateInputValue(new Date()),targetCount*4),targetCount);
+  const templates=[
     {
-      week:1,
-      title:buildFallbackStageTitle(0,goal),
-      objective:goal,
-      outcome:`MVP + 20 лидов за ${horizon} дней`,
-      reasoning:'Создаёт стартовую базу исполнения: проверка спроса и первый измеримый сигнал.',
-      days:tasksToDays(activeTasks,horizon,'2-4ч')
+      title:`Validate ${project}`.trim(),
+      objective:`Проверить спрос и подтвердить ключевую боль для ${goal}`,
+      outcome:'Появляется ясный сигнал спроса и 1-2 сильных инсайта от пользователей',
+      reasoning:'Сначала нужен реальный пользовательский сигнал, а не абстрактный план.',
+      criteria:[
+        'Проведены интервью с целевой аудиторией',
+        'Сформулированы топ-3 боли и триггеры покупки',
+        'Есть подтверждённый следующий шаг по продукту'
+      ]
     },
     {
-      week:2,
-      title:buildFallbackStageTitle(1,goal),
-      objective:'запуск беты',
-      outcome:'15 ответов фидбэка и 3 улучшения',
-      reasoning:'Переводит гипотезы из планирования в реальные пользовательские реакции.',
-      days:[{day:'W2',task:'открыть бета-доступ и собрать 15 ответов от пользователей',duration:'focus'}]
+      title:'Shape MVP scope',
+      objective:'Сузить MVP до одного проверяемого сценария и измеримых исходов',
+      outcome:'Чёткий MVP-scope и список обязательных экранов/флоу',
+      reasoning:'Без жёсткого скоупа команда распыляется и теряет скорость.',
+      criteria:[
+        'Определён один основной пользовательский сценарий',
+        'Список must-have фич зафиксирован',
+        'Есть план измерения результата'
+      ]
     },
     {
-      week:3,
-      title:buildFallbackStageTitle(2,goal),
-      objective:'масштабировать приток',
-      outcome:'5 платящих пользователей',
-      reasoning:'Показывает, что продукт можно конвертировать в устойчивый денежный сигнал.',
-      days:[{day:'W3',task:'включить 1 канал привлечения и довести до 5 оплат',duration:'focus'}]
+      title:'Build beta path',
+      objective:'Собрать рабочую beta-версию с трекингом ключевых действий',
+      outcome:'Пользователь может пройти основной сценарий end-to-end',
+      reasoning:'Рабочий путь нужен, чтобы получать не мнение, а поведение.',
+      criteria:[
+        'Основной флоу проходит без блокеров',
+        'Подключены события аналитики',
+        'Фиксируются критичные ошибки и падения'
+      ]
+    },
+    {
+      title:'Launch acquisition',
+      objective:'Запустить первый устойчивый канал привлечения',
+      outcome:'Появляются первые входящие лиды и записи на следующий шаг',
+      reasoning:'Продукт должен получить внешний поток, а не жить в вакууме.',
+      criteria:[
+        'Есть рабочий канал трафика',
+        'Собираются заявки или регистрации',
+        'Понятен текущий CAC/конверсия'
+      ]
+    },
+    {
+      title:'Improve activation',
+      objective:'Убрать трение в онбординге и повысить активацию',
+      outcome:'Пользователи быстрее доходят до первого ценного действия',
+      reasoning:'Раннее удержание определяет, есть ли у продукта шанс на рост.',
+      criteria:[
+        'Описан первый wow-moment',
+        'Сокращены лишние шаги онбординга',
+        'Измерена конверсия до активации'
+      ]
+    },
+    {
+      title:'Monetize usage',
+      objective:'Доказать ценность через оплату, LOI или предзаказ',
+      outcome:'Есть денежный или квази-денежный сигнал',
+      reasoning:'План должен вести не только к использованию, но и к выручке.',
+      criteria:[
+        'Есть сформированное предложение',
+        'Проведены продажи или pricing tests',
+        'Получен один платящий клиент или LOI'
+      ]
+    },
+    {
+      title:'Stabilize growth',
+      objective:'Закрепить работающий цикл и подготовить следующий рывок',
+      outcome:'Сформирован повторяемый execution loop и список улучшений',
+      reasoning:'Последний этап должен не закрывать план, а открывать масштабирование.',
+      criteria:[
+        'Повторяемый процесс подтверждён',
+        'Устранены основные операционные риски',
+        'Определён следующий приоритет роста'
+      ]
     }
   ];
+  return templates.slice(0,targetCount).map((stage,index)=>({
+    week:index+1,
+    title:clipText(stage.title||buildFallbackStageTitle(index,goal),80),
+    objective:clipText(stage.objective||goal,180),
+    outcome:clipText(stage.outcome||`Достижение измеримого прогресса для ${goal}`,140),
+    reasoning:clipText(stage.reasoning||`Этот этап двигает проект к результату в пределах ${horizonDays} дней.`,220),
+    completion_criteria:(Array.isArray(stage.criteria)?stage.criteria:[]).slice(0,4).map((item)=>clipText(item,90)),
+    target_date:targetDates[index]||'',
+    days:tasksToDays((Array.isArray(stage.criteria)?stage.criteria:[]).slice(0,4),Math.max(3,Math.round(horizonDays/Math.max(1,targetCount))),'2-4ч')
+  }));
 }
 function normalizeBetaRoadmap(raw){
   const source=Array.isArray(raw)
@@ -908,13 +1042,10 @@ function normalizeBetaRoadmap(raw){
       : Array.isArray(raw?.phases)
         ? raw.phases
         : (raw&&typeof raw==='object'?[raw]:[]);
-  const base=fallbackRoadmapForMvp();
-  const activeWindow=getRoadmapWindowDays(S?.user?.deadline);
-  const phaseFallbackTasks=base[0].days.map((d)=>d.task);
-  const targetCount=Math.max(
-    ROADMAP_MIN_STAGES,
-    Math.min(ROADMAP_MAX_STAGES,source.length||base.length)
-  );
+  const targetCount=getDesiredRoadmapStageCount(S?.user?.deadline,source.length||0);
+  const base=fallbackRoadmapForMvp(targetCount);
+  const activeWindow=getRoadmapDeadlineDays(S?.user?.deadline);
+  const phaseFallbackTasks=base[0]?.days?.map((d)=>d.task)||[];
   const fallbackFlags=[];
   const normalized=Array.from({length:targetCount},(_,index)=>{
     const candidate=source[index]||{};
@@ -925,8 +1056,8 @@ function normalizeBetaRoadmap(raw){
     const outcomeRaw=clipText(candidate?.outcome||'',140);
     const reasoningRaw=clipText(candidate?.reasoning||'',220);
     const parsedObjective=parseObjectiveOutcome(objectiveRaw||fallbackBase.objective||'',outcomeRaw||fallbackBase.outcome||'');
-    const objective=clipText(parsedObjective.objective||'достичь измеримого прогресса этапа',180);
-    const outcome=clipText(parsedObjective.outcome||extractOutcomeFromObjective(objective),140);
+    const objective=clipText(parsedObjective.objective||fallbackBase.objective||'достичь измеримого прогресса этапа',180);
+    const outcome=clipText(parsedObjective.outcome||extractOutcomeFromObjective(objective)||fallbackBase.outcome||'',140);
     const reasoning=reasoningRaw||clipText(fallbackBase?.reasoning||`Этот этап нужен, чтобы подготовить входные условия для следующего шага после "${title}".`,220);
     const criteriaFromResponse=(Array.isArray(candidate?.completion_criteria)?candidate.completion_criteria:[])
       .map((item)=>clipText(item,80))
@@ -935,42 +1066,31 @@ function normalizeBetaRoadmap(raw){
     const usedFallbackTitle=!rawTitle;
     const usedFallbackObjective=!objectiveRaw;
     fallbackFlags.push({index,usedFallbackTitle,usedFallbackObjective});
-    if(index===0){
-      let strong=[...criteriaFromResponse,...extracted].filter((task)=>!isWeakExecutionTask(task)).slice(0,4);
-      if(strong.length<3){
-        phaseFallbackTasks.forEach((task)=>{
-          if(strong.length<4&&!strong.includes(task)) strong.push(task);
-        });
-      }
-      strong=strong.slice(0,4);
-      const completionCriteria=strong.slice(0,4);
-      return {
-        week:index+1,
-        title,
-        objective,
-        outcome,
-        reasoning,
-        completion_criteria:completionCriteria,
-        target_date:toIsoDateOnly(candidate?.target_date||''),
-        days:tasksToDays(completionCriteria,activeWindow,'2-4ч')
-      };
+    const criterionPool=[
+      ...criteriaFromResponse,
+      ...extracted.filter((task)=>!isWeakExecutionTask(task))
+    ].filter(Boolean);
+    while(criterionPool.length<3){
+      const fallbackCriterion=fallbackBase.criteria?.[criterionPool.length]||fallbackBase.criteria?.[0]||`Завершить ${title}`;
+      criterionPool.push(clipText(fallbackCriterion,90));
     }
-    const firstHighLevel=clipText(criteriaFromResponse[0]||extracted[0]||'',80);
-    const fallbackTask=fallbackBase.days?.[0]?.task||'выполнить ключевой шаг фазы';
-    const task=(!firstHighLevel||isWeakExecutionTask(firstHighLevel))?fallbackTask:firstHighLevel;
+    const completionCriteria=criterionPool.slice(0,4).map((item)=>clipText(item,90));
+    const fallbackTask=fallbackBase.days?.[0]?.task||`выполнить ключевой шаг фазы ${title}`;
+    const days=tasksToDays(
+      completionCriteria.length?completionCriteria:[fallbackTask],
+      Math.max(3,Math.round(activeWindow/Math.max(1,targetCount))),
+      '2-4ч'
+    );
+    const targetDate=toIsoDateOnly(candidate?.target_date||fallbackBase?.target_date||'');
     return {
       week:index+1,
       title,
       objective,
       outcome,
       reasoning,
-      completion_criteria:[clipText(task,90)],
-      target_date:toIsoDateOnly(candidate?.target_date||''),
-      days:[{
-        day:`W${index+1}`,
-        task:clipText(task,80),
-        duration:'focus'
-      }]
+      completion_criteria:completionCriteria,
+      target_date:targetDate,
+      days
     };
   });
   logInfo({
@@ -1030,61 +1150,107 @@ function spreadTaskDeadlines(deadline,count){
 function fallbackFounderTaskBlueprints({goal='',stageObjective='',deadline='',stageLabel='Stage 1'}={}){
   const safeGoal=clipText(goal,80)||'запуск продукта';
   const safeObjective=clipText(stageObjective,120)||'проверить спрос и запустить MVP';
-  const dates=spreadTaskDeadlines(deadline,5);
+  const stagePrefix=clipText(stageLabel,24)?`${clipText(stageLabel,24)} · `:'';
+  const dates=spreadTaskDeadlines(deadline,10);
   return [
     {
-      title:'Созвониться с 5 ICP-пользователями и подтвердить ключевую боль',
+      title:`${stagePrefix}Созвониться с 5 ICP-пользователями и подтвердить ключевую боль`,
       description:`Провести 5 интервью с ICP и проверить, насколько ${safeObjective} решает боль.`,
       whyItMatters:'Без подтверждённой боли рост будет случайным и дорогим.',
       deliverable:'5 интервью, заметки и таблица повторяющихся паттернов.',
       doneDefinition:'Есть 5 интервью и 3 повторяющиеся боли с цитатами.',
       priority:'high',
       deadline:dates[0]||'',
-      linkedStage:1,
       stageObjective:safeObjective
     },
     {
-      title:'Запустить лендинг с CTA и собрать 20 регистраций',
+      title:`${stagePrefix}Запустить лендинг с CTA и собрать 20 регистраций`,
       description:`Собрать лендинг под "${safeGoal}" с понятным оффером и формой регистрации.`,
       whyItMatters:'Проверяет реальный интерес до масштабной разработки.',
       deliverable:'Лендинг в проде и минимум 20 целевых регистраций.',
       doneDefinition:'Лендинг опубликован, в аналитике минимум 20 регистраций.',
       priority:'high',
       deadline:dates[1]||'',
-      linkedStage:1,
       stageObjective:safeObjective
     },
     {
-      title:'Выпустить clickable demo ключевого сценария',
+      title:`${stagePrefix}Выпустить clickable demo ключевого сценария`,
       description:`Собрать кликабельный демо-поток для фазы "${stageLabel}" и показать его 5 людям.`,
       whyItMatters:'Демо ускоряет обратную связь и снижает риск неверной реализации.',
       deliverable:'Clickable demo + список блокеров от пользователей.',
       doneDefinition:'5 просмотров демо и список замечаний с приоритетами.',
       priority:'med',
       deadline:dates[2]||'',
-      linkedStage:1,
       stageObjective:safeObjective
     },
     {
-      title:'Провести 10 ответов на форму и выделить 3 главных паттерна',
+      title:`${stagePrefix}Провести 10 ответов на форму и выделить 3 главных паттерна`,
       description:'Собрать ответы через форму/чат, выделить ключевые возражения и триггеры покупки.',
       whyItMatters:'Уточняет positioning и снижает шум в следующих итерациях.',
       deliverable:'10 ответов + summary с 3 ключевыми паттернами.',
       doneDefinition:'Подготовлен отчёт с 3 паттернами и следующими действиями.',
       priority:'med',
       deadline:dates[3]||'',
-      linkedStage:1,
       stageObjective:safeObjective
     },
     {
-      title:'Закрыть 1 платящего пользователя или LOI',
+      title:`${stagePrefix}Закрыть 1 платящего пользователя или LOI`,
       description:'Довести один квалифицированный лид до оплаты или подписанного LOI.',
       whyItMatters:'Показывает монетизацию и валидирует ценность продукта.',
       deliverable:'Оплата или подписанный LOI с подтверждённым use-case.',
       doneDefinition:'Есть подтверждённая оплата или LOI от целевого клиента.',
       priority:'high',
       deadline:dates[4]||'',
-      linkedStage:1,
+      stageObjective:safeObjective
+    },
+    {
+      title:`${stagePrefix}Подготовить список гипотез и критерии успеха`,
+      description:'Зафиксировать 3-5 гипотез, которые должны подтвердиться на этом этапе.',
+      whyItMatters:'Без критериев успеха невозможно понять, двигается ли проект вперёд.',
+      deliverable:'Список гипотез и измеримых критериев для проверки.',
+      doneDefinition:'Есть список гипотез с приоритетами и критериями верификации.',
+      priority:'med',
+      deadline:dates[5]||'',
+      stageObjective:safeObjective
+    },
+    {
+      title:`${stagePrefix}Собрать и протестировать первый рабочий флоу`,
+      description:'Собрать минимальный end-to-end flow и проверить его на реальном сценарии.',
+      whyItMatters:'Рабочий путь важнее презентационного макета.',
+      deliverable:'Проверенный основной flow и список багов.',
+      doneDefinition:'Основной сценарий проходит без блокирующих ошибок.',
+      priority:'high',
+      deadline:dates[6]||'',
+      stageObjective:safeObjective
+    },
+    {
+      title:`${stagePrefix}Подключить аналитику ключевых действий`,
+      description:'Добавить события, которые покажут активацию, удержание и конверсию.',
+      whyItMatters:'Без аналитики продукт невозможно улучшать осознанно.',
+      deliverable:'Подключённые события аналитики и проверка их качества.',
+      doneDefinition:'Ключевые события приходят и доступны для анализа.',
+      priority:'med',
+      deadline:dates[7]||'',
+      stageObjective:safeObjective
+    },
+    {
+      title:`${stagePrefix}Запустить первый канал привлечения`,
+      description:'Выбрать и запустить один канал, который может дать первые заявки.',
+      whyItMatters:'Execution должен быстро выходить за пределы внутренних проверок.',
+      deliverable:'Работающий канал и первые лиды.',
+      doneDefinition:'Канал запущен и даёт измеримый входящий поток.',
+      priority:'high',
+      deadline:dates[8]||'',
+      stageObjective:safeObjective
+    },
+    {
+      title:`${stagePrefix}Зафиксировать следующий шаг по монетизации`,
+      description:'Сформулировать оффер, pricing или LOI-шаг для следующей итерации.',
+      whyItMatters:'План должен вести к выручке, а не только к активности.',
+      deliverable:'Черновик предложения и следующий шаг к оплате.',
+      doneDefinition:'Есть ясный monetization step с конкретным owner action.',
+      priority:'high',
+      deadline:dates[9]||'',
       stageObjective:safeObjective
     }
   ];
@@ -1094,6 +1260,9 @@ function normalizeFounderTask(raw,options={}){
   const stageIndex=Number.isFinite(Number(raw?.linked_stage??raw?.linkedStage))?Number(raw?.linked_stage??raw?.linkedStage):Number(options.stageIndex||0);
   const stageLabel=clipText(options.stageTitle||'',40)||'Stage 1';
   const title=getTaskTitle(raw);
+  const deadlinePlan=Array.isArray(options.deadlinePlan)?options.deadlinePlan:[];
+  const taskIndex=Number.isFinite(Number(options.taskIndex))?Number(options.taskIndex):0;
+  const plannedDeadline=deadlinePlan[taskIndex]||deadlinePlan[deadlinePlan.length-1]||'';
   const normalized={
     id:Number(raw?.id)||0,
     title,
@@ -1103,7 +1272,7 @@ function normalizeFounderTask(raw,options={}){
     deliverable:clipText(raw?.deliverable||'',200),
     doneDefinition:clipText(raw?.done_definition||raw?.doneDefinition||'',200),
     prio:normalizeTaskPriority(raw?.priority??raw?.prio),
-    deadline:normalizeTaskDeadlineValue(raw?.deadline),
+    deadline:normalizeTaskDeadlineValue(raw?.deadline)||plannedDeadline,
     linkedStage:Math.max(1,Math.min(ROADMAP_MAX_STAGES,stageIndex+1)),
     stageObjective:stageObjective||clipText(raw?.objective||'',150),
     done:Boolean(raw?.done),
@@ -1123,6 +1292,41 @@ function normalizeFounderTask(raw,options={}){
   }
   return normalized;
 }
+function buildLocalTaskDetailFallback(taskSkeleton,stage,options={}){
+  const normalizedStage=normalizeStageForEnrichment(stage||{},Number(options.stageIndex)||0);
+  const taskTitle=getTaskTitle(taskSkeleton)||clipText(options.taskTitle||'',80)||`Task ${Number(options.taskIndex)||1}`;
+  const stageTitle=clipText(normalizedStage.title||options.stageTitle||'Stage 1',60)||'Stage 1';
+  const stageObjective=clipText(normalizedStage.objective||options.stageObjective||'',150)||'validate demand and keep execution moving';
+  const stageOutcome=clipText(normalizedStage.outcome||options.stageOutcome||'',120)||'a measurable stage outcome';
+  const deadlinePlan=buildTaskDeadlinePlan({
+    stageStartDate:options.stageStartDate||'',
+    stageTargetDate:options.stageTargetDate||'',
+    deadline:options.deadline||S.user.deadline||'',
+    taskCount:1
+  });
+  return normalizeFounderTask({
+    title:taskTitle,
+    description:`Выполнить "${taskTitle}" как конкретный шаг этапа ${stageTitle}.`,
+    whyItMatters:`Двигает этап ${stageTitle} к результату: ${stageObjective}.`,
+    deliverable:`Проверяемый результат задачи "${taskTitle}".`,
+    doneDefinition:`Задача завершена, результат зафиксирован, этап ${stageTitle} продвинут.`,
+    priority:'med',
+    deadline:normalizeTaskDeadlineValue(taskSkeleton?.deadline)||deadlinePlan[0]||options.stageTargetDate||options.deadline||S.user.deadline||'',
+    linkedStage:Number(options.stageIndex||0)+1,
+    stageObjective,
+    stageOutcome
+  },{
+    stageObjective,
+    stageTitle,
+    stageIndex:Number(options.stageIndex||0),
+    deadline:options.deadline||S.user.deadline||'',
+    stageStartDate:options.stageStartDate||'',
+    stageTargetDate:options.stageTargetDate||'',
+    taskIndex:Number(options.taskIndex||0),
+    deadlinePlan,
+    allowBlueprintFallback:false
+  });
+}
 function normalizeFounderTasks(raw,options={}){
   const source=Array.isArray(raw)
     ? raw
@@ -1131,6 +1335,7 @@ function normalizeFounderTasks(raw,options={}){
       : [];
   const stageObjective=clipText(options.stageObjective||'',150);
   const stageTitle=clipText(options.stageTitle||'',40)||'Stage 1';
+  const targetCount=Math.max(1,Number(options.targetCount)||5);
   const allowBlueprintFallback=options.allowBlueprintFallback!==false;
   const fallback=fallbackFounderTaskBlueprints({
     goal:S?.user?.goal||'',
@@ -1140,29 +1345,31 @@ function normalizeFounderTasks(raw,options={}){
   });
   const seen=new Set();
   const out=[];
-  source.forEach((item)=>{
-    if(out.length>=5) return;
-    const normalized=normalizeFounderTask(item,{...options,stageObjective,stageTitle});
+  const deadlinePlan=buildTaskDeadlinePlan({
+    stageStartDate:options.stageStartDate||'',
+    stageTargetDate:options.stageTargetDate||'',
+    deadline:options.deadline||S?.user?.deadline||'',
+    taskCount:targetCount
+  });
+  source.forEach((item,index)=>{
+    if(out.length>=targetCount) return;
+    const normalized=normalizeFounderTask(item,{...options,stageObjective,stageTitle,taskIndex:index,deadlinePlan});
     const key=normalized.title.toLowerCase();
     if(seen.has(key)) return;
-    const qualityOk=!isWeakFounderTaskTitle(normalized.title)&&normalized.deliverable.length>=20;
-    const finalTask=(allowBlueprintFallback&&!qualityOk)
-      ? normalizeFounderTask(fallback[out.length%fallback.length],{...options,stageObjective,stageTitle})
-      : normalized;
-    seen.add(finalTask.title.toLowerCase());
-    out.push(finalTask);
+    seen.add(key);
+    out.push(normalized);
   });
-  if(!allowBlueprintFallback) return out.slice(0,5);
+  if(!allowBlueprintFallback) return out.slice(0,targetCount);
   let fallbackIndex=0;
-  while(out.length<3){
-    const candidate=normalizeFounderTask(fallback[fallbackIndex%fallback.length],{...options,stageObjective,stageTitle});
+  while(out.length<targetCount){
+    const candidate=normalizeFounderTask(fallback[fallbackIndex%fallback.length],{...options,stageObjective,stageTitle,taskIndex:out.length,deadlinePlan});
     fallbackIndex+=1;
     const key=candidate.title.toLowerCase();
     if(seen.has(key)) continue;
     seen.add(key);
     out.push(candidate);
   }
-  return out.slice(0,5);
+  return out.slice(0,targetCount);
 }
 function fallbackTasksForMvp(options={}){
   return normalizeFounderTasks([],options);
@@ -1240,15 +1447,23 @@ function normalizeCompletionCriteria(rawDays,objective=''){
   const base=(Array.isArray(rawDays)?rawDays:[])
     .map((entry)=>clipText(entry?.task||entry?.text||entry||'',90))
     .filter(Boolean);
-  if(base.length) return base.slice(0,4);
-  const fallback=clipText(objective,90)||'Выполнить ключевой outcome этапа.';
-  return [fallback];
+  if(base.length>=3) return base.slice(0,4);
+  const seeds=[
+    clipText(objective,90),
+    clipText(extractOutcomeFromObjective(objective),90)
+  ].filter(Boolean);
+  const out=[...base];
+  if(seeds[0]) out.push(`Достичь: ${seeds[0]}`);
+  if(seeds[1]) out.push(`Подтвердить результат: ${seeds[1]}`);
+  if(out.length<3) out.push('Выполнить ключевой outcome этапа.');
+  if(out.length<3) out.push('Зафиксировать измеримый результат и переход к следующему шагу.');
+  return out.slice(0,4);
 }
 function resolvePhaseCompletionCriteria(phase){
   const direct=(Array.isArray(phase?.completion_criteria)?phase.completion_criteria:[])
     .map((entry)=>clipText(entry,90))
     .filter(Boolean);
-  if(direct.length) return direct.slice(0,4);
+  if(direct.length>=3) return direct.slice(0,4);
   return normalizeCompletionCriteria(phase?.days||[],phase?.objective||'');
 }
 function normalizeExecutionTask(task,stage){
@@ -1317,6 +1532,11 @@ function createExecutionRoadmapFromPhases(phases){
       ? toDateInputValue(new Date(baseDate.getTime()+(((deadline.getTime()-baseDate.getTime())*(index+1))/total)))
       : toDateInputValue(new Date(baseDate.getTime()+((index+1)*7*24*60*60*1000)))
     );
+    const startDate=index===0
+      ? toDateInputValue(baseDate)
+      : hasDeadline
+        ? toDateInputValue(new Date(baseDate.getTime()+(((deadline.getTime()-baseDate.getTime())*index)/total)))
+        : toDateInputValue(new Date(baseDate.getTime()+(index*7*24*60*60*1000)));
     return {
       id:stageId,
       index:index+1,
@@ -1325,10 +1545,10 @@ function createExecutionRoadmapFromPhases(phases){
       outcome:outcomeClean,
       whyThisStageMatters:reasoningClean,
       reasoning:reasoningClean,
-      startDate:index===0?toDateInputValue(baseDate):'',
+      startDate,
       targetDate,
       status:index===0?'active':'locked',
-      completionCriteria:Array.isArray(phase?.completion_criteria)
+      completionCriteria:Array.isArray(phase?.completion_criteria) && phase.completion_criteria.length>=3
         ? phase.completion_criteria.map((item)=>clipText(item,90)).filter(Boolean).slice(0,4)
         : resolvePhaseCompletionCriteria(phase),
       executionFocus:clipText(phase?.executionFocus||phase?.execution_focus||'',160),
@@ -1782,6 +2002,7 @@ function buildStageTaskGenerationSignature(stage,context={}){
     clipText(normalizedStage.title,80),
     clipText(normalizedStage.objective,180),
     clipText(normalizedStage.outcome,140),
+    clipText(normalizedStage.reasoning||normalizedStage.whyThisStageMatters||'',160),
     clipText(context.project_name,90),
     clipText(context.startup_idea,220),
     clipText(context.primary_goal,140),
@@ -1792,7 +2013,10 @@ function buildStageTaskGenerationSignature(stage,context={}){
     clipText(context.resources,180),
     clipText(context.blocker,120),
     clipText(context.daily_hours,40),
-    clipText(context.deadline,30)
+    clipText(context.deadline,30),
+    clipText(context.stageStartDate||'',20),
+    clipText(context.stageTargetDate||'',20),
+    String(context.targetTaskCount||'')
   ];
   return parts.join('|').toLowerCase();
 }
@@ -1861,9 +2085,18 @@ async function generateTasksForStage(stageIndex,options={}){
     objective:stage?.objective||phase?.objective||'',
     outcome:stage?.outcome||phase?.outcome||''
   },stageIndex);
-  const tasksPromptSignature=buildStageTaskGenerationSignature(normalizedStage,onboardingContext);
   const existing=getTasksForStage(stageIndex,{includeArchived:false});
-  if(existing.length>=3&&stage.tasksGenerated&&!options.force&&stage.tasksPromptSignature===tasksPromptSignature){
+  const stageCount=Math.max(1,getExecutionStages().length||S.roadmap?.length||1);
+  const targetTaskCount=getTargetTaskCountForStage(stageIndex,stageCount,S.user.deadline);
+  const stageStartDate=toIsoDateOnly(stage?.startDate||phase?.startDate||'')||toDateInputValue(new Date());
+  const stageTargetDate=toIsoDateOnly(stage?.targetDate||phase?.target_date||S.user.deadline||'')||S.user.deadline||'';
+  const tasksPromptSignature=buildStageTaskGenerationSignature(normalizedStage,{
+    ...onboardingContext,
+    stageStartDate,
+    stageTargetDate,
+    targetTaskCount
+  });
+  if(existing.length>=targetTaskCount&&stage.tasksGenerated&&!options.force&&stage.tasksPromptSignature===tasksPromptSignature){
     logRoadmapPipelineEvent('active_stage_task_generation_skipped_already_generated',{
       stageCount:getExecutionStages().length,
       activeStageId:stage.id,
@@ -1912,9 +2145,12 @@ async function generateTasksForStage(stageIndex,options={}){
       : 'сбалансированный рабочий темп';
     const contextMapping=roadmapContextPresence(onboardingContext);
     const skeletonRequestId=createClientRequestId(`tasks-skeleton-s${stageIndex+1}`);
-    const tasksPrompt=buildMilestoneTasksPrompt(normalizedStage,'3',intensityDesc,{
+    const tasksPrompt=buildMilestoneTasksPrompt(normalizedStage,String(targetTaskCount),intensityDesc,{
       stageIndex,
-      context:onboardingContext
+      context:onboardingContext,
+      taskCount:targetTaskCount,
+      stageStartDate,
+      stageTargetDate
     });
     logRoadmapPipelineEvent('active_stage_task_generation_started',{
       requestId:skeletonRequestId,
@@ -1936,14 +2172,26 @@ async function generateTasksForStage(stageIndex,options={}){
           stageObjective:normalizedStage.objective||stage.objective||'',
           stageTitle:normalizedStage.title||stage.title||`Stage ${stageIndex+1}`,
           stageIndex,
-          deadline:S.user.deadline||'',
+          stageStartDate,
+          stageTargetDate,
+          deadline:stageTargetDate||S.user.deadline||'',
+          targetCount:targetTaskCount,
           returnMeta:true,
           contextFields:contextMapping.present,
           missingContextFields:contextMapping.missing
         },
         'tasks_skeleton'
       );
-      const skeletonTasks=Array.isArray(skeletonResult?.data)?skeletonResult.data:[];
+      const skeletonTasks=Array.isArray(skeletonResult?.data)?skeletonResult.data.slice(0,targetTaskCount):[];
+      while(skeletonTasks.length<targetTaskCount){
+        const fallbackTitle=fallbackFounderTaskBlueprints({
+          goal:onboardingContext.primary_goal||S.user.goal||'',
+          stageObjective:normalizedStage.objective||stage.objective||'',
+          deadline:stageTargetDate||S.user.deadline||'',
+          stageLabel:normalizedStage.title||stage.title||`Stage ${stageIndex+1}`
+        })[skeletonTasks.length % 10]?.title||`Task ${skeletonTasks.length+1}`;
+        skeletonTasks.push({title:fallbackTitle,linkedStage:stageIndex+1});
+      }
       const enrichedTasks=[];
       const detailFailures=[];
       for(let taskIdx=0;taskIdx<skeletonTasks.length;taskIdx+=1){
@@ -1951,7 +2199,11 @@ async function generateTasksForStage(stageIndex,options={}){
         const detailRequestId=createClientRequestId(`task-detail-s${stageIndex+1}-t${taskIdx+1}`);
         const detailPrompt=buildMilestoneTaskDetailPrompt(skeletonTask,normalizedStage,intensityDesc,{
           stageIndex,
-          context:onboardingContext
+          context:onboardingContext,
+          taskCount:targetTaskCount,
+          taskIndex:taskIdx+1,
+          stageStartDate,
+          stageTargetDate
         });
         try{
           const detailResult=await geminiJSON(
@@ -1965,7 +2217,10 @@ async function generateTasksForStage(stageIndex,options={}){
               stageObjective:normalizedStage.objective||stage.objective||'',
               stageTitle:normalizedStage.title||stage.title||`Stage ${stageIndex+1}`,
               stageIndex,
-              deadline:S.user.deadline||'',
+              stageStartDate,
+              stageTargetDate,
+              deadline:stageTargetDate||S.user.deadline||'',
+              targetCount:targetTaskCount,
               returnMeta:true,
               contextFields:contextMapping.present,
               missingContextFields:contextMapping.missing
@@ -1987,6 +2242,18 @@ async function generateTasksForStage(stageIndex,options={}){
         }catch(detailError){
           const errorMessage=String(detailError?.message||'');
           detailFailures.push({taskNumber:taskIdx+1,errorMessage});
+          const fallbackTask=buildLocalTaskDetailFallback(skeletonTask,normalizedStage,{
+            stageIndex,
+            stageTitle:normalizedStage.title||stage.title||`Stage ${stageIndex+1}`,
+            stageObjective:normalizedStage.objective||stage.objective||'',
+            stageOutcome:normalizedStage.outcome||stage.outcome||'',
+            stageStartDate,
+            stageTargetDate,
+            deadline:stageTargetDate||S.user.deadline||'',
+            taskIndex:taskIdx+1,
+            taskTitle:skeletonTask?.title||`Task ${taskIdx+1}`
+          });
+          enrichedTasks.push(fallbackTask);
           logWarn({
             area:'frontend',
             module:'frontend/script.js',
@@ -1994,7 +2261,8 @@ async function generateTasksForStage(stageIndex,options={}){
             action:'task_detail_generation_failed',
             stageIndex,
             taskNumber:taskIdx+1,
-            errorMessage
+            errorMessage,
+            fallbackApplied:true
           });
         }
       }
@@ -2002,14 +2270,17 @@ async function generateTasksForStage(stageIndex,options={}){
         stageObjective:phase?.objective||stage.objective||'',
         stageTitle:phase?.title||stage.title||`Stage ${stageIndex+1}`,
         stageIndex,
-        deadline:S.user.deadline||'',
-        allowBlueprintFallback:false
-      }).slice(0,3);
+        deadline:stageTargetDate||S.user.deadline||'',
+        stageStartDate,
+        stageTargetDate,
+        targetCount:targetTaskCount,
+        allowBlueprintFallback:true
+      }).slice(0,targetTaskCount);
       if(!normalized.length){
         throw new Error('Task enrichment failed for all generated skeleton tasks.');
       }
       const persisted=setStageTasks(stageIndex,normalized,{replace:true});
-      stage.tasksGenerated=persisted.length>=3;
+      stage.tasksGenerated=persisted.length>=targetTaskCount;
       stage.tasksPromptSignature=tasksPromptSignature;
       setStageTaskStatus(stageIndex,'ready');
       logRoadmapPipelineEvent('stage_task_generation_succeeded',{
@@ -2478,7 +2749,8 @@ async function generateRoadmapSkeleton(options={}){
     contextMapping,
     prompt,
     requestedMaxTokens,
-    clientRequestId
+    clientRequestId,
+    weeksCount
   }=prepared;
   const pipelineId=String(options.pipelineId||'');
   logInfo({
@@ -2508,6 +2780,7 @@ async function generateRoadmapSkeleton(options={}){
       {
         temperature:0.2,
         clientRequestId,
+        milestoneCount:weeksCount,
         roadmapMode:'skeleton',
         returnMeta:true,
         signal:options.signal,
@@ -2851,7 +3124,7 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
     }
     if(action==='tasks_skeleton'){
       const parsedSkeleton=parseTaskSkeletonContract(response.text);
-      if(parsedSkeleton.length!==3){
+      if(!parsedSkeleton.length){
         throw new Error('Task skeleton response does not match the plain-text contract.');
       }
       if(opts?.returnMeta) return {data:parsedSkeleton,meta};
@@ -3337,7 +3610,7 @@ function buildContextSummaryFromState(){
   const projectValue=ctx.project_name||ctx.startup_idea||'MVP стартап';
   const goalValue=ctx.primary_goal||'запуск продукта';
   const stageValue=ctx.current_stage||'ранняя стадия';
-  const topTasks=(S.tasks||[]).filter(t=>!t.done).slice(0,3).map((t)=>clipText(getTaskTitle(t),60)).join('; ');
+  const topTasks=(S.tasks||[]).filter(t=>!t.done).slice(0,7).map((t)=>clipText(getTaskTitle(t),60)).join('; ');
   const topGoals=(S.goals||[]).slice(0,2).map(g=>clipText(g.title,60)).join('; ');
   const topBlockers=ctx.blocker||'нет явных';
   return [
@@ -3566,46 +3839,30 @@ function buildRoadmapPrompt(weeksCount,strategyDesc=''){
       missingFields:mapping.missing
     });
   }
-  return `Собери milestone roadmap на ${weeksCount} недель.
+  return `Собери milestone roadmap на ${weeksCount} milestones.
 
-FOUNDERS CONTEXT:
-- Project name: ${ctx.project_name||'не указано'}
-- Startup idea: ${ctx.startup_idea||'не указано'}
-- Primary goal: ${ctx.primary_goal||'не указано'}
-- Current stage: ${ctx.current_stage||'не указано'}
-- Built status: ${ctx.built_status||'не указано'}
+Контекст:
+- Project: ${ctx.project_name||'не указано'}
+- Goal: ${ctx.primary_goal||'не указано'}
+- Stage: ${ctx.current_stage||'не указано'}
+- Built: ${ctx.built_status||'не указано'}
 - Niche: ${ctx.niche||'не указано'}
-- Target audience: ${ctx.target_audience||'не указано'}
-- Resources available: ${ctx.resources||'не указано'}
-- Biggest blocker: ${ctx.blocker||'нет явных'}
-- Daily hours: ${ctx.daily_hours||'не указано'}
+- Audience: ${ctx.target_audience||'не указано'}
+- Resources: ${ctx.resources||'не указано'}
+- Blocker: ${ctx.blocker||'нет явных'}
+- Hours/day: ${ctx.daily_hours||'не указано'}
 - ${horizonLabel}
 - Active horizon: ${windowDays} дней
-${strategyDesc?`- Pace mode: ${strategyDesc}`:''}
+${strategyDesc?`- Pace: ${strategyDesc}`:''}
 
-Краткая сводка:
+Сводка:
 ${summary}
 
-Требования:
-- Верни JSON-объект вида { "stages": [...] }.
-- AI сам выбирает 2-4 milestones, названия и структуру по контексту пользователя.
-- Каждый milestone содержит: title, objective, outcome, reasoning, completion_criteria, target_date.
-- Это структура milestones, а не полный список задач.
-
-Формат:
-- title: короткое название фазы (2-5 слов), отражающее контекст пользователя
-- objective: конкретная цель этапа (без префикса "objective:")
-- outcome: измеримый результат этапа (без префикса "outcome:")
-- reasoning: почему этап критичен сейчас и к чему он ведёт дальше
-- completion_criteria: 1-3 коротких критерия завершения
-- target_date: YYYY-MM-DD или ""
-
-Правила:
-- Не дублируй одинаковые названия milestones
-- Без детального task dump
-- Компактно, стратегично, без воды
-- Без объяснений
-- Только JSON`;
+Верни только JSON-объект вида { "stages": [...] }.
+Нужно ровно ${weeksCount} stages, без лишнего текста и без полного task dump.
+Каждый stage содержит: title, objective, outcome, reasoning, completion_criteria, target_date.
+Later milestones must stay concrete and execution-heavy.
+Пиши компактно: короткие поля, без повторов, без пояснений вне JSON.`;
 }
 function buildRoadmapSkeletonPrompt(context={}){
   const weeksCount=Math.max(1,Number(context.weeksCount)||2);
@@ -3615,11 +3872,10 @@ function buildRoadmapSkeletonPrompt(context={}){
   const deadline=ctx.deadline||S.user.deadline||'';
   const windowDays=getRoadmapPromptWindowDays(deadline);
   const horizonLabel=deadline?`Дедлайн: ${deadline}`:'Дедлайн: в пределах 14 дней';
-  return `Собери roadmap skeleton на ${weeksCount} недель.
+  return `Собери roadmap skeleton на ${weeksCount} milestones.
 
-Контекст основателя:
+Контекст:
 - Project: ${ctx.project_name||'не указано'}
-- Idea: ${ctx.startup_idea||'не указано'}
 - Goal: ${ctx.primary_goal||'не указано'}
 - Stage: ${ctx.current_stage||'не указано'}
 - Built: ${ctx.built_status||'не указано'}
@@ -3627,24 +3883,26 @@ function buildRoadmapSkeletonPrompt(context={}){
 - Audience: ${ctx.target_audience||'не указано'}
 - Resources: ${ctx.resources||'не указано'}
 - Blocker: ${ctx.blocker||'нет явных'}
-- Daily hours: ${ctx.daily_hours||'не указано'}
+- Hours/day: ${ctx.daily_hours||'не указано'}
 - ${horizonLabel}
 - Active horizon: ${windowDays} дней
 ${strategyDesc?`- Pace: ${strategyDesc}`:''}
 
-Краткая сводка:
+Сводка:
 ${summary}
 
-Верни только список стадий в формате:
-1. Stage name || objective || outcome
-2. Stage name || objective || outcome
-3. Stage name || objective || outcome
+Верни только список стадий:
+1. Stage name || objective || outcome || reasoning
+2. Stage name || objective || outcome || reasoning
+...
+${weeksCount}. Stage name || objective || outcome || reasoning
 
 Правила:
-- максимум 3 стадии
-- каждая строка начинается с '1.', '2.', '3.'
-- objective: конкретная цель этапа
-- outcome: измеримый результат этапа
+- верни ровно ${weeksCount} стадии
+- каждая строка начинается с порядкового номера
+- objective, outcome и reasoning короткие, но конкретные
+- later milestones must not be hollow
+- каждая стадия должна вести к реальному execution
 - без лишнего текста`;
 }
 function buildActiveStageEnrichmentPrompt(stage,context={}){
@@ -3677,8 +3935,9 @@ function normalizeRoadmapSkeleton(raw){
   const source=Array.isArray(raw?.stages)
     ? raw.stages
     : (Array.isArray(raw)?raw:[]);
-  const fallback=fallbackRoadmapForMvp();
-  const count=Math.max(ROADMAP_MIN_STAGES,Math.min(ROADMAP_MAX_STAGES,source.length||fallback.length));
+  const count=getDesiredRoadmapStageCount(S?.user?.deadline,source.length||0);
+  const fallback=fallbackRoadmapForMvp(count);
+  const targetDates=spreadDatesBetween(new Date(),S?.user?.deadline||addDaysToDateInput(toDateInputValue(new Date()),count*4),count);
   return Array.from({length:count},(_,index)=>{
     const candidate=source[index]||{};
     const fallbackStage=fallback[index]||fallback[fallback.length-1]||{};
@@ -3690,43 +3949,55 @@ function normalizeRoadmapSkeleton(raw){
       objective:candidate?.objective||fallbackStage?.objective||'',
       outcome:candidate?.outcome||fallbackStage?.outcome||''
     },index);
+    const completionCriteria=normalizeCompletionCriteria(
+      candidate?.completion_criteria||fallbackStage?.completion_criteria||fallbackStage?.days||[],
+      normalized.objective||normalized.outcome||fallbackStage?.objective||''
+    );
     return {
       week:index+1,
       title:normalized.title,
       objective:normalized.objective,
       outcome:normalized.outcome,
-      target_date:toIsoDateOnly(candidate?.target_date||fallbackStage?.target_date||''),
-      completion_criteria:[],
-      reasoning:'',
-      days:[]
+      target_date:toIsoDateOnly(candidate?.target_date||fallbackStage?.target_date||targetDates[index]||''),
+      completion_criteria:completionCriteria,
+      reasoning:clipText(candidate?.reasoning||fallbackStage?.reasoning||'',220),
+      days:tasksToDays(completionCriteria,count<=3?5:Math.max(3,Math.round(getRoadmapDeadlineDays(S?.user?.deadline)/count)),'2-4ч')
     };
   });
 }
 function buildMilestoneTasksPrompt(ms1,_countDesc,intensityDesc='',options={}){
   const stage=normalizeStageForEnrichment(ms1||{},Number(options.stageIndex)||0);
   const context=options.context||buildRoadmapOnboardingContext();
+  const taskCount=Math.max(1,Number(options.taskCount)||5);
   const stageTitle=clipText(stage.title||'Этап 1',60)||'Этап 1';
   const stageObjective=clipText(stage.objective||'',170)||'проверить спрос и довести MVP до первых пользователей';
   const goal=clipText(context.primary_goal||S.user.goal||'',140)||'запуск продукта';
   const deadline=context.deadline||S.user.deadline||'не задан';
-  return `Generate 3 execution tasks.
+  const stageWindowStart=clipText(options.stageStartDate||'',20)||'today';
+  const stageWindowEnd=clipText(options.stageTargetDate||deadline,20);
+  return `Generate ${taskCount} execution tasks.
 
 Context:
 Goal: ${goal}
 Stage: ${stageTitle}
 Objective: ${stageObjective}
 Deadline: ${deadline}
+Stage window start: ${stageWindowStart}
+Stage window end: ${stageWindowEnd}
 
 Output:
 TASKS_SKELETON_START
 1 | <task title>
 2 | <task title>
-3 | <task title>
+...
+${taskCount} | <task title>
 TASKS_SKELETON_END
 
 Rules:
-- exactly 3 lines
+- exactly ${taskCount} lines
 - short action titles (max 6-8 words)
+- each task must be concrete and stage-specific
+- prefer execution work, not placeholders
 - no extra text
 
 Language: Russian`;
@@ -3734,6 +4005,8 @@ Language: Russian`;
 function buildMilestoneTaskDetailPrompt(taskSkeleton,stage,intensityDesc='',options={}){
   const normalizedStage=normalizeStageForEnrichment(stage||{},Number(options.stageIndex)||0);
   const context=options.context||buildRoadmapOnboardingContext();
+  const taskCount=Math.max(1,Number(options.taskCount)||5);
+  const taskIndex=Math.max(1,Number(options.taskIndex)||1);
   const outputLanguage=detectTaskOutputLanguage(
     taskSkeleton?.title||'',
     normalizedStage.title||'',
@@ -3749,37 +4022,30 @@ function buildMilestoneTaskDetailPrompt(taskSkeleton,stage,intensityDesc='',opti
   const stageOutcome=clipText(normalizedStage.outcome||'',130)||(isEnglish?'a measurable outcome for this stage':'измеримый результат текущего этапа');
   const goal=clipText(context.primary_goal||S.user.goal||'',140)||(isEnglish?'ship the product':'запуск продукта');
   const deadline=context.deadline||S.user.deadline||(isEnglish?'not set':'не задан');
-  return `Task detail for one startup execution task.
-
-Language: ${outputLanguage}
+  const stageStart=clipText(options.stageStartDate||'',20)||toDateInputValue(new Date());
+  const stageTarget=clipText(options.stageTargetDate||deadline,20)||deadline;
+  return `Task detail.
+Lang: ${outputLanguage}
 Goal: ${goal}
 Stage: ${stageTitle}
 Objective: ${stageObjective}
-Outcome: ${stageOutcome}
 Task: ${clipText(taskSkeleton?.title||'',96)}
 Deadline: ${deadline}
+Window: ${stageStart} -> ${stageTarget}
+Slot: ${taskIndex}/${taskCount}
 
-Output:
+Return only:
 TASK_DETAIL_START
-TITLE | <refined task title>
-DESCRIPTION | <one sentence>
-WHY | <one sentence>
-DELIVERABLE | <one sentence>
-DONE | <one sentence>
+TITLE | ...
+DESCRIPTION | ...
+WHY | ...
+DELIVERABLE | ...
+DONE | ...
 PRIORITY | high|med|low
 DEADLINE | YYYY-MM-DD or none
 TASK_DETAIL_END
 
-Rules:
-- one short line per field
-- DESCRIPTION max 1 sentence
-- WHY max 1 sentence
-- DELIVERABLE max 1 sentence
-- DONE max 1 sentence
-- be specific, execution-focused, founder-grade
-- avoid generic filler and pseudo-work
-- no extra text
-- no markdown
+Keep each field to one short sentence. No extra text.
 
 ${taskPlainTextLanguageRules(outputLanguage)}`;
 }
@@ -4110,12 +4376,7 @@ function obNext(from){
   obGo(from+1);
 }
 function calcWeeksFromDeadline(deadline){
-  if(!deadline) return 4;
-  const days=Math.round((new Date(deadline)-new Date())/(1000*60*60*24));
-  if(days<=7) return 1;
-  if(days<=14) return 2;
-  const weeks=Math.min(4,Math.max(2,Math.round(days/7)));
-  return weeks;
+  return getDesiredRoadmapStageCount(deadline);
 }
 async function obGenerateRoadmap(){
   const btn=document.getElementById('ob-gen-btn'),loading=document.getElementById('ob-gen-loading');
@@ -4236,7 +4497,7 @@ function obShowGoals(){
       reasoning:getStageReasoningText(stage)||getStageReasoningText(S.roadmap?.[index]||{})||''
     }))
     : (S.roadmap||[]);
-  const newGoals=stageSource.slice(0,3).map((wk,i)=>({id:Date.now()+i,title:wk.title,deadline:'',desc:[wk.objective,wk.reasoning?`Why this stage matters: ${wk.reasoning}`:''].filter(Boolean).join(' · '),pct:0}));
+  const newGoals=stageSource.slice(0,7).map((wk,i)=>({id:Date.now()+i,title:wk.title,deadline:'',desc:[wk.objective,wk.reasoning?`Why this stage matters: ${wk.reasoning}`:''].filter(Boolean).join(' · '),pct:0}));
   S.goals=newGoals;saveGoals();
   const el=document.getElementById('ob-goals-preview');
   el.innerHTML=newGoals.map(g=>`<div style="background:var(--surface);border:1px solid var(--border2);padding:10px;margin-bottom:8px;"><div style="font-family:var(--head);font-size:13px;font-weight:900;color:var(--ink);text-transform:uppercase;">${escHtml(g.title)}</div><div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:3px;">${escHtml(g.desc)}</div></div>`).join('');

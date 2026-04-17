@@ -56,7 +56,7 @@ const ACTION_MAX_OUTPUT_TOKENS = {
   chat: 900,
 };
 const ACTION_CONTEXT_LIMITS = {
-  roadmap: { promptChars: 12000, systemChars: 2600, totalChars: 14000 },
+  roadmap: { promptChars: 9000, systemChars: 2200, totalChars: 11000 },
   tasks: { promptChars: 7000, systemChars: 1800, totalChars: 8200 },
   tasks_skeleton: { promptChars: 5200, systemChars: 1500, totalChars: 6200 },
   task_detail: { promptChars: 6000, systemChars: 1600, totalChars: 7000 },
@@ -104,6 +104,28 @@ function trimContextByAction(action, prompt, systemCtx) {
     prompt: trimmedPrompt,
     systemCtx: trimmedSystem,
     trimmed,
+  };
+}
+
+function compactRoadmapPrompt(prompt, systemCtx, requestedCount = 0) {
+  const promptText = String(prompt || '').replace(/\n{3,}/g, '\n\n').trim();
+  const systemText = String(systemCtx || '').replace(/\n{3,}/g, '\n\n').trim();
+  const compactCount = requestedCount > 3 ? Math.max(3, requestedCount - 1) : requestedCount;
+  const compactHint = compactCount
+    ? `\nCOMPACT RETRY: if token budget is tight, return only ${compactCount} stages and keep each stage to very short title/objective/outcome lines.`
+    : '\nCOMPACT RETRY: keep the answer much shorter than the first attempt.';
+  return {
+    prompt: `${promptText.length > 4200 ? `${promptText.slice(0, 3200)}\n...[compact]\n${promptText.slice(-240)}` : promptText}${compactHint}`,
+    systemCtx: systemText.length > 1600 ? `${systemText.slice(0, 1200)}\n...[compact]\n${systemText.slice(-180)}` : systemText,
+  };
+}
+
+function compactTaskDetailPrompt(prompt, systemCtx) {
+  const promptText = String(prompt || '').replace(/\n{3,}/g, '\n\n').trim();
+  const systemText = String(systemCtx || '').replace(/\n{3,}/g, '\n\n').trim();
+  return {
+    prompt: `${promptText.replace(/\nStage outcome:[^\n]*/i, '')}\nCOMPACT RETRY: return the task_detail contract only, with one short sentence per field.`,
+    systemCtx: systemText.length > 1200 ? `${systemText.slice(0, 900)}\n...[compact]\n${systemText.slice(-120)}` : systemText,
   };
 }
 
@@ -286,16 +308,27 @@ function salvageTaskDetail(raw) {
       fields.set(String(match[1] || '').toUpperCase(), `${String(match[1] || '').toUpperCase()} | ${String(match[2] || '').trim()}`);
     }
   });
-  const hasCore = fields.has('TITLE') && fields.has('DESCRIPTION') && fields.has('WHY');
-  const hasCompletion = fields.has('DELIVERABLE') || fields.has('DONE');
-  if (!hasCore || !hasCompletion) {
+  const titleValue = String(fields.get('TITLE') || '').replace(/^TITLE\s*\|\s*/i, '').trim();
+  if (!titleValue) {
     return { usable: false, repairedText: '' };
+  }
+  if (!fields.has('DESCRIPTION')) {
+    fields.set('DESCRIPTION', `DESCRIPTION | Выполнить задачу "${titleValue}" как конкретный следующий шаг.`);
+  }
+  if (!fields.has('WHY')) {
+    fields.set('WHY', `WHY | Держит текущий этап в execution и снижает риск простоя.`);
   }
   if (!fields.has('DELIVERABLE') && fields.has('DONE')) {
     fields.set('DELIVERABLE', `DELIVERABLE | ${String(fields.get('DONE') || '').replace(/^DONE\s*\|\s*/i, '')}`);
   }
   if (!fields.has('DONE') && fields.has('DELIVERABLE')) {
     fields.set('DONE', `DONE | ${String(fields.get('DELIVERABLE') || '').replace(/^DELIVERABLE\s*\|\s*/i, '')}`);
+  }
+  if (!fields.has('DELIVERABLE')) {
+    fields.set('DELIVERABLE', `DELIVERABLE | Проверяемый артефакт или измеримый результат по задаче "${titleValue}".`);
+  }
+  if (!fields.has('DONE')) {
+    fields.set('DONE', `DONE | Есть завершённый результат и короткая фиксация вывода.`);
   }
   if (!fields.has('PRIORITY')) {
     fields.set('PRIORITY', 'PRIORITY | med');
@@ -310,6 +343,188 @@ function salvageTaskDetail(raw) {
     'TASK_DETAIL_END',
   ].join('\n');
   return { usable: true, repairedText: repairedText.trim() };
+}
+
+function extractTaskDetailPromptContext(prompt) {
+  const text = String(prompt || '');
+  const pick = (pattern) => {
+    const match = text.match(pattern);
+    return match ? String(match[1] || '').trim() : '';
+  };
+  return {
+    title: pick(/^Task:\s*(.+)$/im),
+    stageTitle: pick(/^Stage:\s*(.+)$/im),
+    objective: pick(/^Objective:\s*(.+)$/im),
+    outcome: pick(/^Outcome:\s*(.+)$/im),
+    deadline: pick(/^Deadline:\s*(.+)$/im),
+    stageWindow: pick(/^Stage window:\s*(.+)$/im),
+    taskSlot: pick(/^Task slot:\s*(.+)$/im),
+  };
+}
+
+function buildFallbackTaskDetailContract(prompt, opts = {}) {
+  const promptCtx = extractTaskDetailPromptContext(prompt);
+  const title = String(promptCtx.title || opts?.taskTitle || opts?.stageTitle || 'Task').trim();
+  const stageTitle = String(promptCtx.stageTitle || opts?.stageTitle || 'Stage').trim();
+  const objective = String(promptCtx.objective || opts?.stageObjective || 'validate demand and keep execution moving').trim();
+  const outcome = String(promptCtx.outcome || opts?.stageOutcome || 'a measurable stage outcome').trim();
+  const deadline = String(promptCtx.deadline || opts?.deadline || 'none').trim();
+  const description = `Execute "${title}" for ${stageTitle}.`;
+  const why = `WHY | Keeps ${objective} moving with a concrete execution step.`;
+  const deliverable = `DELIVERABLE | A verifiable result for "${title}".`;
+  const done = `DONE | The task is finished and the result is recorded.`;
+  return {
+    usable: true,
+    repairedText: [
+      'TASK_DETAIL_START',
+      `TITLE | ${title}`,
+      `DESCRIPTION | ${description}`,
+      why,
+      deliverable,
+      done,
+      'PRIORITY | med',
+      `DEADLINE | ${deadline || 'none'}`,
+      'TASK_DETAIL_END',
+    ].join('\n'),
+    title,
+    stageTitle,
+    objective,
+    outcome,
+    deadline,
+  };
+}
+
+function extractRoadmapTargetCount(prompt, fallbackCount = 0) {
+  const text = String(prompt || '');
+  const patterns = [
+    /exactly\s+(\d+)\s+(?:stages?|milestones?)/i,
+    /return\s+(\d+)\s+(?:stages?|milestones?)/i,
+    /(?:stages?|milestones?|weeks?)\s+(\d+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const count = Number(match[1]);
+      if (Number.isFinite(count) && count > 0) return count;
+    }
+  }
+  return Math.max(0, Number(fallbackCount) || 0);
+}
+
+function normalizeRoadmapStageCandidate(candidate, index) {
+  const raw = typeof candidate === 'string' ? { title: candidate } : (candidate || {});
+  const title = String(raw.title || raw.name || raw.week || raw.stage || '').trim();
+  const objective = String(raw.objective || raw.goal || raw.description || '').trim();
+  const outcome = String(raw.outcome || raw.result || raw.expectedOutcome || '').trim();
+  const reasoning = String(raw.reasoning || raw.why || raw.rationale || raw.note || '').trim();
+  const safeTitle = title || `Stage ${index + 1}`;
+  const safeObjective = objective || outcome || 'Concrete execution step';
+  const safeOutcome = outcome || objective || 'Measurable output';
+  const parts = [`${index + 1}. ${safeTitle}`, safeObjective, safeOutcome];
+  if (reasoning) parts.push(reasoning);
+  return parts.join(' || ');
+}
+
+function salvageRoadmapSkeleton(raw, desiredCount = 0) {
+  const text = String(raw || '').replace(/\r/g, '').trim();
+  if (!text) return { usable: false, repairedText: '', stageCount: 0 };
+
+  const parsedStages = [];
+  const tryPushStage = (candidate) => {
+    if (!candidate) return;
+    parsedStages.push(candidate);
+  };
+
+  const jsonVariants = [stripCodeFences(raw), extractJsonChunk(raw)].filter(Boolean);
+  for (const candidate of jsonVariants) {
+    try {
+      const parsed = JSON.parse(candidate);
+      const source = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.stages)
+          ? parsed.stages
+          : Array.isArray(parsed?.phases)
+            ? parsed.phases
+            : [];
+      if (source.length) {
+        source.forEach((item) => tryPushStage(item));
+        break;
+      }
+    } catch (_err) {
+      // no-op
+    }
+  }
+  if (!parsedStages.length) {
+    for (const candidate of jsonVariants.map((value) => repairTruncatedJsonCandidate(value)).filter(Boolean)) {
+      try {
+        const parsed = JSON.parse(candidate);
+        const source = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed?.stages)
+            ? parsed.stages
+            : Array.isArray(parsed?.phases)
+              ? parsed.phases
+              : [];
+        if (source.length) {
+          source.forEach((item) => tryPushStage(item));
+          break;
+        }
+      } catch (_err) {
+        // no-op
+      }
+    }
+  }
+
+  if (!parsedStages.length) {
+      const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+      lines.forEach((line) => {
+        if (/^(?:\.\.\.|…)$/.test(line)) return;
+        const match = line.match(/^(\d+)[\.\)]?\s*(.+)$/);
+        if (!match) return;
+        const payload = match[2].replace(/^\s*\|\s*/, '').trim();
+        if (!payload) return;
+        const parts = payload.split(/\s*\|\|\s*|\s*\|\s*/).map((part) => part.trim()).filter(Boolean);
+        if (!parts.length) return;
+        tryPushStage({
+          title: parts[0],
+          objective: parts[1] || '',
+          outcome: parts[2] || '',
+          reasoning: parts.slice(3).join(' || '),
+        });
+      });
+    }
+
+  if (!parsedStages.length) {
+    return { usable: false, repairedText: '', stageCount: 0 };
+  }
+
+  const targetCount = Math.max(
+    3,
+    desiredCount > 0 ? desiredCount : parsedStages.length
+  );
+  const filled = [];
+  for (let i = 0; i < targetCount; i += 1) {
+    const candidate = parsedStages[i] || parsedStages[parsedStages.length - 1] || {};
+    if (i < parsedStages.length) {
+      filled.push(normalizeRoadmapStageCandidate(candidate, i));
+      continue;
+    }
+    const prev = parsedStages[i - 1] || parsedStages[parsedStages.length - 1] || {};
+    const prevTitle = String(prev.title || prev.name || '').trim();
+    const prevObjective = String(prev.objective || prev.goal || '').trim();
+    const prevOutcome = String(prev.outcome || prev.result || '').trim();
+    const fallbackTitle = prevTitle ? `Next: ${prevTitle}` : `Stage ${i + 1}`;
+    const fallbackObjective = prevObjective
+      ? `Advance ${prevObjective}`
+      : `Deliver the next concrete execution step`;
+    const fallbackOutcome = prevOutcome
+      ? `Extend ${prevOutcome}`
+      : `A measurable milestone outcome`;
+    filled.push(`${i + 1}. ${fallbackTitle} || ${fallbackObjective} || ${fallbackOutcome}`);
+  }
+
+  const repairedText = ['TASKS_SKELETON_START', ...filled, 'TASKS_SKELETON_END'].join('\n');
+  return { usable: true, repairedText, stageCount: Math.min(parsedStages.length, targetCount) };
 }
 
 function classifyFailure({ timedOut, parseFailed, upstreamStatus, upstreamErrorCode, finishReason }) {
@@ -825,6 +1040,9 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
           : safeAction === 'task_detail'
             ? Math.min(1100, Math.max(850, requestedMaxTokens))
         : requestedMaxTokens;
+    const requestedRoadmapCount = safeAction === 'roadmap'
+      ? extractRoadmapTargetCount(String(opts?.milestoneCount || opts?.roadmapMilestoneCount || ''), 0)
+      : 0;
     const actionCap = ACTION_MAX_OUTPUT_TOKENS[safeAction] || ACTION_MAX_OUTPUT_TOKENS.chat;
     const effectiveMaxTokens = Math.min(normalizedRequestedMaxTokens, actionCap);
     const trimmedCtx = trimContextByAction(safeAction, prompt, systemCtx);
@@ -899,6 +1117,15 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
         systemCtx: trimmedCtx.systemCtx,
       },
     ];
+    if (safeAction === 'roadmap') {
+      attempts.push({
+        maxTokens: Math.max(1200, Math.min(1600, effectiveMaxTokens - 240)),
+        prompt: trimmedCtx.prompt,
+        systemCtx: trimmedCtx.systemCtx,
+        compactRetry: true,
+        compactRoadmapCount: requestedRoadmapCount,
+      });
+    }
     if (safeAction === 'tasks' && effectiveMaxTokens > 1000) {
       attempts.push({
         maxTokens: Math.max(900, Math.min(1000, effectiveMaxTokens - 120)),
@@ -926,7 +1153,12 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
       lastAttemptMaxTokens = attempt.maxTokens;
       generationConfig.maxOutputTokens = attempt.maxTokens;
       baseLog.effectiveMaxTokens = attempt.maxTokens;
-      const fullPrompt = attempt.systemCtx ? `${attempt.systemCtx}\n\n---\n\n${attempt.prompt}` : attempt.prompt;
+      const attemptPrompt = safeAction === 'roadmap' && attemptIndex > 0
+        ? compactRoadmapPrompt(trimmedCtx.prompt, trimmedCtx.systemCtx, requestedRoadmapCount)
+        : safeAction === 'task_detail' && attemptIndex > 0
+          ? compactTaskDetailPrompt(trimmedCtx.prompt, trimmedCtx.systemCtx)
+        : { prompt: attempt.prompt, systemCtx: attempt.systemCtx };
+      const fullPrompt = attemptPrompt.systemCtx ? `${attemptPrompt.systemCtx}\n\n---\n\n${attemptPrompt.prompt}` : attemptPrompt.prompt;
       for (let retryIndex = 0; retryIndex <= retryBackoffMs.length; retryIndex += 1) {
         providerAttempt += 1;
         logGeminiRequest({
@@ -1096,6 +1328,72 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
                   truncated: true,
                 });
               }
+              const fallbackDetail = buildFallbackTaskDetailContract(trimmedCtx.prompt, opts);
+              logGeminiRequest({
+                ...baseLog,
+                logType: 'truncated_response_usable',
+                upstreamStatus: result.upstreamStatus,
+                upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
+                finishReason: result.finishReason || '',
+                attempt: providerAttempt,
+                chainAttempt: attemptIndex + 1,
+                retryAttempt: retryIndex,
+                latencyMs: Date.now() - attemptStartedAt,
+              });
+              baseLog.logType = 'success';
+              baseLog.upstreamStatus = result.upstreamStatus;
+              baseLog.upstreamErrorCode = result.upstreamErrorCode;
+              baseLog.finishReason = result.finishReason;
+              baseLog.latencyMs = Date.now() - startedAt;
+              baseLog.attempt = providerAttempt;
+              baseLog.chainAttempt = attemptIndex + 1;
+              baseLog.retryAttempt = retryIndex;
+              lastRetryAttempt = retryIndex;
+              logGeminiRequest(baseLog);
+              return res.json({
+                text: fallbackDetail.repairedText,
+                finishReason: result.finishReason || '',
+                requestId,
+                status: 'degraded_success',
+                degraded: true,
+                truncated: true,
+              });
+            }
+            if (safeAction === 'roadmap') {
+              const roadmapCountHint = requestedRoadmapCount || extractRoadmapTargetCount(trimmedCtx.prompt, 0);
+              const salvagedRoadmap = salvageRoadmapSkeleton(result.text || '', roadmapCountHint || 0);
+              if (salvagedRoadmap.usable) {
+                logGeminiRequest({
+                  ...baseLog,
+                  logType: 'truncated_response_usable',
+                  upstreamStatus: result.upstreamStatus,
+                  upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
+                  finishReason: result.finishReason || '',
+                  attempt: providerAttempt,
+                  chainAttempt: attemptIndex + 1,
+                  retryAttempt: retryIndex,
+                  latencyMs: Date.now() - attemptStartedAt,
+                  salvagedStageCount: salvagedRoadmap.stageCount,
+                });
+                baseLog.logType = 'success';
+                baseLog.upstreamStatus = result.upstreamStatus;
+                baseLog.upstreamErrorCode = result.upstreamErrorCode;
+                baseLog.finishReason = result.finishReason;
+                baseLog.latencyMs = Date.now() - startedAt;
+                baseLog.attempt = providerAttempt;
+                baseLog.chainAttempt = attemptIndex + 1;
+                baseLog.retryAttempt = retryIndex;
+                lastRetryAttempt = retryIndex;
+                logGeminiRequest(baseLog);
+                return res.json({
+                  text: salvagedRoadmap.repairedText,
+                  finishReason: result.finishReason || '',
+                  requestId,
+                  status: 'degraded_success',
+                  degraded: true,
+                  truncated: true,
+                });
+              }
             }
             if (!TASK_GENERATION_ACTIONS.has(safeAction)) {
               const repaired = parseJsonWithRepair(result.text || '');
@@ -1189,6 +1487,104 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
           effectiveMaxTokens: attempt.maxTokens,
         });
 
+        if (safeAction === 'roadmap' && failure.code === 'RESPONSE_TRUNCATED') {
+          const roadmapCountHint = requestedRoadmapCount || extractRoadmapTargetCount(trimmedCtx.prompt, 0);
+          const salvagedRoadmap = salvageRoadmapSkeleton(result.text || '', roadmapCountHint || 0);
+          if (salvagedRoadmap.usable) {
+            logGeminiRequest({
+              ...baseLog,
+              logType: 'truncated_response_usable',
+              upstreamStatus: result.timedOut ? 'TIMEOUT' : result.upstreamStatus,
+              upstreamErrorCode: result.upstreamErrorCode || failure.code,
+              finishReason: result.finishReason || '',
+              attempt: providerAttempt,
+              chainAttempt: attemptIndex + 1,
+              retryAttempt: retryIndex,
+              latencyMs: Date.now() - attemptStartedAt,
+              salvagedStageCount: salvagedRoadmap.stageCount,
+            });
+            baseLog.logType = 'success';
+            baseLog.upstreamStatus = result.timedOut ? 'TIMEOUT' : result.upstreamStatus;
+            baseLog.upstreamErrorCode = result.upstreamErrorCode || failure.code;
+            baseLog.finishReason = result.finishReason || '';
+            baseLog.latencyMs = Date.now() - startedAt;
+            baseLog.attempt = providerAttempt;
+            baseLog.chainAttempt = attemptIndex + 1;
+            baseLog.retryAttempt = retryIndex;
+            logGeminiRequest(baseLog);
+            return res.json({
+              text: salvagedRoadmap.repairedText,
+              finishReason: result.finishReason || '',
+              requestId,
+              status: 'degraded_success',
+              degraded: true,
+              truncated: true,
+            });
+          }
+        }
+        if (safeAction === 'task_detail' && failure.code === 'RESPONSE_TRUNCATED') {
+          const salvagedDetail = salvageTaskDetail(result.text || '');
+          if (salvagedDetail.usable) {
+            logGeminiRequest({
+              ...baseLog,
+              logType: 'truncated_response_usable',
+              upstreamStatus: result.timedOut ? 'TIMEOUT' : result.upstreamStatus,
+              upstreamErrorCode: result.upstreamErrorCode || failure.code,
+              finishReason: result.finishReason || '',
+              attempt: providerAttempt,
+              chainAttempt: attemptIndex + 1,
+              retryAttempt: retryIndex,
+              latencyMs: Date.now() - attemptStartedAt,
+            });
+            baseLog.logType = 'success';
+            baseLog.upstreamStatus = result.timedOut ? 'TIMEOUT' : result.upstreamStatus;
+            baseLog.upstreamErrorCode = result.upstreamErrorCode || failure.code;
+            baseLog.finishReason = result.finishReason || '';
+            baseLog.latencyMs = Date.now() - startedAt;
+            baseLog.attempt = providerAttempt;
+            baseLog.chainAttempt = attemptIndex + 1;
+            baseLog.retryAttempt = retryIndex;
+            logGeminiRequest(baseLog);
+            return res.json({
+              text: salvagedDetail.repairedText,
+              finishReason: result.finishReason || '',
+              requestId,
+              status: 'degraded_success',
+              degraded: true,
+              truncated: true,
+            });
+          }
+          const fallbackDetail = buildFallbackTaskDetailContract(trimmedCtx.prompt, opts);
+          logGeminiRequest({
+            ...baseLog,
+            logType: 'truncated_response_usable',
+            upstreamStatus: result.timedOut ? 'TIMEOUT' : result.upstreamStatus,
+            upstreamErrorCode: result.upstreamErrorCode || failure.code,
+            finishReason: result.finishReason || '',
+            attempt: providerAttempt,
+            chainAttempt: attemptIndex + 1,
+            retryAttempt: retryIndex,
+            latencyMs: Date.now() - attemptStartedAt,
+          });
+          baseLog.logType = 'success';
+          baseLog.upstreamStatus = result.timedOut ? 'TIMEOUT' : result.upstreamStatus;
+          baseLog.upstreamErrorCode = result.upstreamErrorCode || failure.code;
+          baseLog.finishReason = result.finishReason || '';
+          baseLog.latencyMs = Date.now() - startedAt;
+          baseLog.attempt = providerAttempt;
+          baseLog.chainAttempt = attemptIndex + 1;
+          baseLog.retryAttempt = retryIndex;
+          logGeminiRequest(baseLog);
+          return res.json({
+            text: fallbackDetail.repairedText,
+            finishReason: result.finishReason || '',
+            requestId,
+            status: 'degraded_success',
+            degraded: true,
+            truncated: true,
+          });
+        }
+
         if (
           (safeAction === 'tasks' || safeAction === 'tasks_skeleton' || safeAction === 'task_detail') &&
           failure.code === 'RESPONSE_TRUNCATED' &&
@@ -1221,6 +1617,41 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
       ) {
         break;
       }
+    }
+
+    if (safeAction === 'task_detail') {
+      const fallbackDetail = buildFallbackTaskDetailContract(trimmedCtx.prompt, opts);
+      const fallbackLogType = lastFailure?.code === 'RESPONSE_TRUNCATED' || lastFailure?.finishReason === 'MAX_TOKENS'
+        ? 'truncated_response_usable'
+        : 'task_detail_fallback_used';
+      logGeminiRequest({
+        ...baseLog,
+        logType: fallbackLogType,
+        upstreamStatus: lastFailure?.timedOut ? 'TIMEOUT' : lastFailure?.upstreamStatus || 0,
+        upstreamErrorCode: lastFailure?.upstreamErrorCode || lastFailure?.code || 'TASK_DETAIL_FALLBACK',
+        finishReason: lastFailure?.finishReason || '',
+        attempt: providerAttempt,
+        chainAttempt: lastChainAttempt,
+        retryAttempt: lastRetryAttempt,
+        latencyMs: Date.now() - startedAt,
+      });
+      baseLog.logType = 'success';
+      baseLog.upstreamStatus = lastFailure?.timedOut ? 'TIMEOUT' : lastFailure?.upstreamStatus || 0;
+      baseLog.upstreamErrorCode = lastFailure?.upstreamErrorCode || lastFailure?.code || 'TASK_DETAIL_FALLBACK';
+      baseLog.finishReason = lastFailure?.finishReason || '';
+      baseLog.latencyMs = Date.now() - startedAt;
+      baseLog.attempt = providerAttempt;
+      baseLog.chainAttempt = lastChainAttempt;
+      baseLog.retryAttempt = lastRetryAttempt;
+      logGeminiRequest(baseLog);
+      return res.json({
+        text: fallbackDetail.repairedText,
+        finishReason: lastFailure?.finishReason || '',
+        requestId,
+        status: 'degraded_success',
+        degraded: true,
+        truncated: Boolean(lastFailure?.code === 'RESPONSE_TRUNCATED' || lastFailure?.finishReason === 'MAX_TOKENS'),
+      });
     }
 
     const safeFailure = lastFailure || { code: 'UPSTREAM_5XX', httpStatus: 502, upstreamStatus: 0 };
