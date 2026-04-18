@@ -3463,7 +3463,7 @@ async function handleSignedInUser(user){
     if(hasProfile){
       if(ob) ob.style.display='none';
       if(app){
-        app.style.display='flex';
+        app.style.display='grid';
         app.classList.add('app-on');
       }
       applyUserToUI();
@@ -3578,13 +3578,14 @@ function buildRoadmapOnboardingContext(){
     startup_idea:clipText(S.user.idea,220),
     primary_goal:clipText(S.user.goal,140),
     current_stage:clipText(S.user.stage,50),
-    built_status:clipText(S.user.built,180),
+    built_status:clipText(S.user.built||S.user.idea||'',180),
     niche:clipText(S.user.niche,90),
     target_audience:clipText(S.user.audience,120),
-    resources:clipText(S.user.resources,180),
+    resources:clipText(S.user.resources||S.user.executionStyle||'',180),
     blocker:clipText(S.user.blockers,120),
     daily_hours:clipText(S.user.hours,40),
-    deadline:clipText(S.user.deadline,30)
+    deadline:clipText(S.user.deadline,30),
+    execution_style:clipText(S.user.executionStyle||S.user.resources||'',180)
   };
 }
 function roadmapContextPresence(context){
@@ -3597,6 +3598,7 @@ function roadmapContextPresence(context){
     'niche',
     'target_audience',
     'resources',
+    'execution_style',
     'blocker',
     'daily_hours',
     'deadline'
@@ -3621,6 +3623,7 @@ function buildContextSummaryFromState(){
     ctx.built_status?`Уже сделано: ${ctx.built_status}`:'Уже сделано: не указано',
     ctx.niche?`Ниша: ${ctx.niche}`:'Ниша: не указана',
     ctx.target_audience?`Аудитория: ${ctx.target_audience}`:'Аудитория: не указана',
+    ctx.execution_style?`Execution style: ${ctx.execution_style}`:'Execution style: not set',
     ctx.resources?`Ресурсы: ${ctx.resources}`:'Ресурсы: не указаны',
     `Дедлайн: ${ctx.deadline||'гибкий'}`,
     `Часы/день: ${ctx.daily_hours||'1-2'}`,
@@ -3848,6 +3851,10 @@ function buildRoadmapPrompt(weeksCount,strategyDesc=''){
 - Built: ${ctx.built_status||'не указано'}
 - Niche: ${ctx.niche||'не указано'}
 - Audience: ${ctx.target_audience||'не указано'}
+<<<<<<< Updated upstream
+=======
+- Execution style: ${ctx.execution_style||'не указано'}
+>>>>>>> Stashed changes
 - Resources: ${ctx.resources||'не указано'}
 - Blocker: ${ctx.blocker||'нет явных'}
 - Hours/day: ${ctx.daily_hours||'не указано'}
@@ -3881,6 +3888,7 @@ function buildRoadmapSkeletonPrompt(context={}){
 - Built: ${ctx.built_status||'не указано'}
 - Niche: ${ctx.niche||'не указано'}
 - Audience: ${ctx.target_audience||'не указано'}
+- Execution style: ${ctx.execution_style||'не указано'}
 - Resources: ${ctx.resources||'не указано'}
 - Blocker: ${ctx.blocker||'нет явных'}
 - Hours/day: ${ctx.daily_hours||'не указано'}
@@ -4311,7 +4319,7 @@ function syncTaskVariantUI(){
   });
 }
 function enforceBetaOnboardingModes(){
-  obVariant=BETA_ALLOWED_ROADMAP_VARIANT;
+  obVariant=normalizeRoadmapVariant(S.user.roadmapStyle||obVariant||BETA_ALLOWED_ROADMAP_VARIANT);
   obTaskVariant=BETA_ALLOWED_TASK_VARIANT;
   syncRoadmapVariantUI();
   syncTaskVariantUI();
@@ -4324,16 +4332,51 @@ function enforceBetaOnboardingState(){
   return deadlineChanged||prevRoadmap!==obVariant||prevTask!==obTaskVariant;
 }
 function obSelectVariant(v){
-  if(v!==BETA_ALLOWED_ROADMAP_VARIANT) return;
-  obVariant=BETA_ALLOWED_ROADMAP_VARIANT;
+  obVariant=normalizeRoadmapVariant(v);
+  S.user.roadmapStyle=obVariant;
   syncRoadmapVariantUI();
+  renderObReview();
 }
 function obSelectTaskVar(v){
   if(v!==BETA_ALLOWED_TASK_VARIANT) return;
   obTaskVariant=BETA_ALLOWED_TASK_VARIANT;
   syncTaskVariantUI();
 }
-function obGo(step){document.querySelectorAll('.ob-step').forEach(s=>s.classList.remove('on'));document.getElementById('obs-'+step).classList.add('on');for(let i=0;i<=6;i++){const d=document.getElementById('pd'+i);if(d)d.classList.toggle('done',i<=step);}}
+function capitalizeLabel(value){
+  const map={safe:'Conservative',balanced:'Balanced',aggressive:'Aggressive'};
+  return map[String(value||'').trim().toLowerCase()]||'Balanced';
+}
+function renderObReview(){
+  const host=document.getElementById('ob-review');
+  if(!host) return;
+  const rows=[
+    ['Your name',S.user.name||'Not set'],
+    ['Project / company',S.user.project||'Not set'],
+    ['Primary goal',S.user.goal||'Not set'],
+    ['Deadline',S.user.deadline||'Not set'],
+    ['Daily hours',S.user.hours||'Not set'],
+    ['Biggest blocker',S.user.blockers||'Not set'],
+    ['Stage',S.user.stage||'Not set'],
+    ['Niche',S.user.niche||'Not set'],
+    ['Target audience',S.user.audience||'Not set'],
+    ['Execution style',clipText(S.user.executionStyle||S.user.resources||'',120)||'Not set'],
+    ['Roadmap style',capitalizeLabel(normalizeRoadmapVariant(S.user.roadmapStyle||obVariant))],
+    ['90-day vision',S.user.win||'Not set']
+  ];
+  host.innerHTML=rows.map(([label,value])=>`<div class="ob-review-item"><div class="ob-review-label">${escHtml(label)}</div><div class="ob-review-value">${escHtml(value)}</div></div>`).join('');
+}
+function obGo(step){
+  const maxStep=3;
+  const safeStep=Math.max(0,Math.min(maxStep,Number(step)||0));
+  document.querySelectorAll('.ob-step').forEach((s)=>s.classList.remove('on'));
+  const active=document.getElementById(`obs-${safeStep}`);
+  if(active) active.classList.add('on');
+  for(let i=0;i<=maxStep;i++){
+    const d=document.getElementById(`pd${i}`);
+    if(d)d.classList.toggle('done',i<=safeStep);
+  }
+  if(safeStep===3) renderObReview();
+}
 function obNext(from){
   if(from===0){
     const n=document.getElementById('ob-nm').value.trim();
@@ -4342,6 +4385,7 @@ function obNext(from){
     S.user.name=n;S.user.project=p;S.user.mode=obMode;S.user.role=resolveUserRole();
   }
   if(from===1){
+    S.user.goal=document.getElementById('ob-goal').value.trim();
     const deadlineInput=document.getElementById('ob-deadline');
     const deadlineCheck=validateBetaDeadline(deadlineInput?.value||'');
     if(!deadlineCheck.ok){
@@ -4350,17 +4394,19 @@ function obNext(from){
       return;
     }
     setObDeadlineError('');
-    S.user.goal=document.getElementById('ob-goal').value.trim();
     S.user.deadline=deadlineCheck.value;
     S.user.hours=document.getElementById('ob-hrs').value;
     S.user.blockers=document.getElementById('ob-block').value.trim();
     S.user.idea=document.getElementById('ob-idea').value.trim();
+    S.user.built=S.user.idea;
+  }
+  if(from===2){
     S.user.stage=document.getElementById('ob-stage').value;
-    S.user.built=document.getElementById('ob-built').value.trim();
     S.user.niche=document.getElementById('ob-niche').value.trim();
     S.user.audience=document.getElementById('ob-audience').value.trim();
     S.user.resources=document.getElementById('ob-resources').value.trim();
-    S.user.styles=getSelectedPills('ob-pills');
+    S.user.executionStyle=S.user.resources;
+    S.user.roadmapStyle=normalizeRoadmapVariant(obVariant);
     S.user.win=document.getElementById('ob-win').value.trim();
     const ctx=buildRoadmapOnboardingContext();
     const mapping=roadmapContextPresence(ctx);
@@ -4372,6 +4418,7 @@ function obNext(from){
       presentFields:mapping.present,
       missingFields:mapping.missing
     });
+    renderObReview();
   }
   obGo(from+1);
 }
@@ -4393,10 +4440,11 @@ async function obGenerateRoadmap(){
     const deadlineInput=document.getElementById('ob-deadline');
     if(deadlineInput) deadlineInput.value=deadlineCheck.value;
     setObDeadlineError('');
-    const roadmapVariant=BETA_ALLOWED_ROADMAP_VARIANT;
+    const roadmapVariant=normalizeRoadmapVariant(obVariant);
     obVariant=roadmapVariant;
+    S.user.roadmapStyle=roadmapVariant;
     syncRoadmapVariantUI();
-    const variantDesc={safe:'Консервативный темп: 2-4 часа в день, упор на устойчивость и низкий риск',balanced:'Сбалансированный темп: 4-6 часов в день, сочетание скорости и качества',aggressive:'Агрессивный темп: 8-10 часов в день, высокий фокус на быстрый результат'}[roadmapVariant];
+    const variantDesc={safe:'Conservative pace: 2-4 focused hours per day, lower risk and tighter scope',balanced:'Balanced pace: 4-6 focused hours per day, steady shipping rhythm',aggressive:'Aggressive pace: 8-10 intense hours per day, maximum output'}[roadmapVariant];
     const weeksCount=calcWeeksFromDeadline(S.user.deadline);
     const roadmapCtx=buildRoadmapOnboardingContext();
     const pipelineResult=await runRoadmapPipeline({
@@ -4434,7 +4482,9 @@ async function obGenerateRoadmap(){
           });
         }
         obShowGoals();
-        obGo(3);
+        saveAll();
+        obLaunch({startTour:false});
+        gp('roadmap');
         if(pipelineResult?.degraded){
           toast2('Roadmap готов','Roadmap показан в degraded mode.');
         }
@@ -4446,7 +4496,7 @@ async function obGenerateRoadmap(){
           action:'onboarding_post_roadmap_nonfatal',
           errorMessage:String(postError?.message||'')
         });
-        try{obGo(3);}catch(_e){}
+        try{obLaunch({startTour:false});gp('roadmap');}catch(_e){}
       }
     }
   }catch(e){
@@ -4471,7 +4521,9 @@ async function obGenerateRoadmap(){
         if(!getExecutionStages().length) initializeExecutionFromRoadmap({resetVisibleTasks:true});
         saveAll();
         obShowGoals();
-        obGo(3);
+        saveAll();
+        obLaunch({startTour:false});
+        gp('roadmap');
       }catch(_degradedError){}
       toast2('Roadmap готов','Roadmap показан в degraded mode.');
       return;
@@ -4500,6 +4552,7 @@ function obShowGoals(){
   const newGoals=stageSource.slice(0,7).map((wk,i)=>({id:Date.now()+i,title:wk.title,deadline:'',desc:[wk.objective,wk.reasoning?`Why this stage matters: ${wk.reasoning}`:''].filter(Boolean).join(' · '),pct:0}));
   S.goals=newGoals;saveGoals();
   const el=document.getElementById('ob-goals-preview');
+  if(!el) return;
   el.innerHTML=newGoals.map(g=>`<div style="background:var(--surface);border:1px solid var(--border2);padding:10px;margin-bottom:8px;"><div style="font-family:var(--head);font-size:13px;font-weight:900;color:var(--ink);text-transform:uppercase;">${escHtml(g.title)}</div><div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:3px;">${escHtml(g.desc)}</div></div>`).join('');
 }
 function renderOnboardingTaskPreview(){
@@ -4667,7 +4720,7 @@ function obLaunch(opts={}){
   const obScreen=document.getElementById('ob');
   const appScreen=document.getElementById('app');
   if(obScreen)obScreen.style.display='none';
-  if(appScreen){appScreen.style.display='flex';appScreen.classList.add('app-on');}
+  if(appScreen){appScreen.style.display='grid';appScreen.classList.add('app-on');}
   S.user.role=resolveUserRole();
   try{applyUserToUI();}catch(e){}
   try{initHM();}catch(e){}
@@ -4687,6 +4740,22 @@ function gp(id){
   if(id==='chat'){toast2('Removed','AI Coach tab has been removed from the MVP');id='dashboard';}
   if(id==='analytics'&&!isAdmin()){toast2('Restricted','Analytics is available only to admins');id='dashboard';}
   closeTaskDetail(true);
+  const topbarMap={
+    dashboard:{eyebrow:'Strategy Hub',title:'Dashboard'},
+    work:{eyebrow:'Execution Loop',title:'Tasks & Goals'},
+    notes:{eyebrow:'Knowledge Base',title:'Notes'},
+    roadmap:{eyebrow:'Roadmap Command',title:'Roadmap'},
+    analytics:{eyebrow:'Signal Center',title:'Analytics'},
+    settings:{eyebrow:'Workspace',title:'Settings'},
+    billing:{eyebrow:'Monetization',title:'Plans & Billing'}
+  };
+  const topbar=topbarMap[id]||topbarMap.dashboard;
+  const topbarEyebrow=document.getElementById('topbar-eyebrow');
+  const topbarTitle=document.getElementById('topbar-title');
+  if(topbarEyebrow) topbarEyebrow.textContent=topbar.eyebrow;
+  if(topbarTitle) topbarTitle.textContent=topbar.title;
+  document.title=`StriveAI // ${topbar.title}`;
+  document.body.dataset.activeView=id;
   document.querySelectorAll('.pg').forEach(p=>p.classList.remove('on'));
   document.querySelectorAll('.htab').forEach(b=>b.classList.remove('on'));
   const pg=document.getElementById('pg-'+id);if(pg)pg.classList.add('on');
@@ -5106,6 +5175,39 @@ function getRoadmapStageCriteria(index){
   const wk=S.roadmap?.[index];
   return Array.isArray(wk?.days)?wk.days:[];
 }
+function getRoadmapCanvasLayout(total){
+  const safeTotal=Math.max(1,Number(total)||0);
+  const leftPad=8;
+  const rightPad=8;
+  const span=100-leftPad-rightPad;
+  return Array.from({length:safeTotal},(_,index)=>{
+    const t=safeTotal===1?0.5:index/(safeTotal-1);
+    const wave=Math.sin((t*1.7*Math.PI)-(Math.PI/3));
+    const drift=index%2===0?-3.5:3.5;
+    return {
+      x:Math.max(6,Math.min(94,leftPad+(span*t))),
+      y:Math.max(18,Math.min(82,50+(wave*20)+drift))
+    };
+  });
+}
+function buildRoadmapPath(points=[]){
+  if(!points.length) return '';
+  const scaleX=(value)=>Math.round(value*10);
+  const scaleY=(value)=>Math.round(value*4.2);
+  let d=`M ${scaleX(points[0].x)} ${scaleY(points[0].y)}`;
+  for(let i=1;i<points.length;i++){
+    const prev=points[i-1];
+    const curr=points[i];
+    const prevX=scaleX(prev.x);
+    const prevY=scaleY(prev.y);
+    const currX=scaleX(curr.x);
+    const currY=scaleY(curr.y);
+    const deltaY=currY-prevY;
+    const ctrlOffset=Math.max(42,Math.min(120,Math.abs(currX-prevX)*0.42));
+    d+=` C ${prevX+ctrlOffset} ${prevY+(deltaY<0?-70:70)}, ${currX-ctrlOffset} ${currY+(deltaY>0?70:-70)}, ${currX} ${currY}`;
+  }
+  return d;
+}
 function buildRoadmapDetailPanel(index){
   if(index===null||index===undefined||!S.roadmap||!S.roadmap[index]) return '';
   const wk=S.roadmap[index];
@@ -5115,42 +5217,53 @@ function buildRoadmapDetailPanel(index){
   const stageOutcome=getStageOutcomeText(stage||wk)||'';
   const stageReasoning=getStageReasoningText(stage||wk)||'';
   const pct=getRoadmapStagePct(index);
-  const related=getRoadmapRelatedTasks(index).slice(0,6);
+  const taskCount=getTasksForStage(index,{includeArchived:false}).length;
   const stageCriteria=getRoadmapStageCriteria(index);
   const criteriaCount=Math.max(1,stageCriteria.length);
   const criteriaDone=Math.round((pct/100)*criteriaCount);
-  const checklist=stageCriteria.slice(0,4).map((day,dayIndex)=>{
+  const checklist=stageCriteria.slice(0,3).map((day,dayIndex)=>{
     let status='pending';
     if(getRoadmapStageStatus(index)==='done') status='done';
     else if(getRoadmapStageStatus(index)==='active'){
       if(dayIndex<criteriaDone) status='done';
       else if(dayIndex===criteriaDone) status='active';
     }
-    return `<div class="rm-check-item ${status}"><div class="rm-check-icon">${status==='done'?'✓':status==='active'?'●':'·'}</div><div class="rm-check-copy"><strong>${escHtml(day.task||'Шаг этапа')}</strong><span>${escHtml(day.day||'DAY')} · ${escHtml(day.duration||'без оценки')}</span></div></div>`;
+    return `<div class="rm-check-item ${status}"><div class="rm-check-icon">${status==='done'?'✓':status==='active'?'●':'·'}</div><div class="rm-check-copy"><strong>${escHtml(day.task||'Milestone step')}</strong><span>${escHtml(day.day||'DAY')} · ${escHtml(day.duration||'no estimate')}</span></div></div>`;
   }).join('');
   return `<div class="rm-detail-head">
     <div>
-      <div class="rm-detail-kicker">Milestone Detail</div>
+      <div class="rm-detail-kicker">Milestone snapshot</div>
       <div class="rm-detail-title">${escHtml(stageTitle)}</div>
-      <div class="rm-detail-copy">${escHtml(stageObjective)}${stageOutcome?` · Outcome: ${escHtml(stageOutcome)}`:''}</div>
-      ${stageReasoning?`<div class="rm-detail-copy"><strong>Why this stage matters:</strong> ${escHtml(stageReasoning)}</div>`:''}
+      <div class="rm-detail-copy">${escHtml(clipText([stageObjective,stageOutcome].filter(Boolean).join(' · ')||'Execution objective pending',180))}</div>
     </div>
     <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${index})">Close</button>
   </div>
   <div class="rm-detail-grid">
     <div class="rm-detail-stat"><strong>${pct}%</strong><span>Progress</span></div>
-    <div class="rm-detail-stat"><strong>${escHtml(getRoadmapTargetDate(index,S.roadmap.length))}</strong><span>Target date</span></div>
-    <div class="rm-detail-stat"><strong>${stageCriteria.length}</strong><span>Requirements</span></div>
+    <div class="rm-detail-stat"><strong>${taskCount}</strong><span>Tasks</span></div>
+    <div class="rm-detail-stat"><strong>${escHtml(getRoadmapTargetDate(index,S.roadmap.length))}</strong><span>Target</span></div>
+    <div class="rm-detail-stat"><strong>${stageCriteria.length}</strong><span>Checks</span></div>
   </div>
   <div class="rm-detail-list">
     <div>
-      <div class="rm-list-title">Success Criteria</div>
-      <div class="rm-checklist">${checklist}</div>
+      <div class="rm-list-title">Milestone checks</div>
+      <div class="rm-checklist">${checklist||'<div class="rm-check-item pending"><div class="rm-check-icon">·</div><div class="rm-check-copy"><strong>No criteria yet</strong><span>Waiting for generated stage details</span></div></div>'}</div>
     </div>
     <div>
-      <div class="rm-list-title">Related Tasks</div>
-      <div class="rm-related-list">${related.map(item=>`<div class="rm-related-item ${item.taskId?'clickable':''}" ${item.taskId?`onclick="openTaskDetail(${item.taskId})"`:''}><div class="rm-check-icon">→</div><div class="rm-related-copy"><strong>${escHtml(item.title)}</strong><span>${escHtml(item.meta)}</span></div></div>`).join('')}</div>
+      <div class="rm-list-title">Execution brief</div>
+      <div class="rm-related-list">
+        <div class="rm-related-item rm-related-item--brief">
+          <div class="rm-check-icon">↗</div>
+          <div class="rm-related-copy">
+            <strong>Tasks live in Tasks &amp; Goals</strong>
+            <span>${escHtml(clipText(stageReasoning||stageObjective||stageOutcome||'Open the execution list to work through the full task inventory for this milestone.',160))}</span>
+          </div>
+        </div>
+      </div>
     </div>
+  </div>
+  <div class="rm-detail-actions">
+    <button class="btn btn-primary btn-sm" onclick="openExecutionTasks()">Go to Tasks &amp; Goals</button>
   </div>`;
 }
 
@@ -5257,7 +5370,6 @@ function renderRM(){
   if(!S.roadmap||!S.roadmap.length)return;
   ensureExecutionState();
   const rb=document.getElementById('rb');
-  const strip=document.getElementById('rm-milestone-strip');
   const detail=document.getElementById('rm-detail-panel');
   const activeIndex=getRoadmapActiveIndex();
   const lastIndex=S.roadmap.length-1;
@@ -5271,18 +5383,19 @@ function renderRM(){
   const focusedPct=getRoadmapStagePct(focusedRoadmapStageIndex);
   const focusedStatus=getRoadmapStageStatus(focusedRoadmapStageIndex);
   const focusTasks=getTasksForStage(focusedRoadmapStageIndex,{includeArchived:false});
-  const focusDoneCount=focusTasks.filter((task)=>task.status==='done'||task.done).length;
-  const focusTotal=(focusedMilestone?.days||[]).length;
-  const stageRelatedTasks=getRoadmapRelatedTasks(activeIndex).slice(0,8);
   const completedStages=getExecutionStages().length
     ? getExecutionStages().filter((stage)=>stage.status==='completed').length
     : Math.min(activeIndex,S.roadmap.length);
-  const timelineProgress=totalPct();
   const focusStatusLabel=focusedStatus==='done'?'Completed':focusedStatus==='active'?'Active':'Upcoming';
   const focusTitle=(focusedStage?.title||focusedMilestone.title||`Stage ${focusedRoadmapStageIndex+1}`);
   const focusObjective=getStageObjectiveText(focusedStage||focusedMilestone)||'Execution objective not specified yet.';
   const focusOutcome=getStageOutcomeText(focusedStage||focusedMilestone);
   const focusReasoning=getStageReasoningText(focusedStage||focusedMilestone);
+  const layout=getRoadmapCanvasLayout(S.roadmap.length);
+  const pathD=buildRoadmapPath(layout);
+  const focusSummary=clipText([focusObjective,focusOutcome].filter(Boolean).join(' · ')||'Execution objective not specified yet.',180);
+  const focusStageLabel=`Stage ${focusedRoadmapStageIndex+1} of ${S.roadmap.length}`;
+  const focusTaskCount=focusTasks.length;
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
@@ -5293,70 +5406,88 @@ function renderRM(){
     stages:summarizeRoadmapStagesForLog(getExecutionStages().length?getExecutionStages():S.roadmap)
   });
   const timelineMeta=`${S.roadmap.length} stages · ${completedStages} completed · Active stage ${activeIndex+1}`;
-  if(strip){
-    strip.innerHTML=`<div class="rm-timeline-track">
-      <div class="rm-timeline-track-fill" style="width:${timelineProgress}%"></div>
+  const html=`<div class="rm-roadmap-shell">
+      <section class="rm-roadmap-canvas">
+        <div class="rm-roadmap-canvas-head">
+          <div>
+            <div class="rm-canvas-kicker">Roadmap canvas</div>
+            <div class="rm-canvas-title">Milestones flow along a single execution path</div>
+          </div>
+          <div class="rm-canvas-meta">${timelineMeta}</div>
+        </div>
+        <div class="rm-roadmap-canvas-inner">
+          <svg class="rm-roadmap-path" viewBox="0 0 1000 420" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="rm-roadmap-line-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="rgba(143,188,255,0.18)"/>
+                <stop offset="40%" stop-color="rgba(143,188,255,0.86)"/>
+                <stop offset="100%" stop-color="rgba(143,188,255,0.28)"/>
+              </linearGradient>
+              <filter id="rm-roadmap-glow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="6" result="blur"/>
+                <feMerge>
+                  <feMergeNode in="blur"/>
+                  <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+              </filter>
+            </defs>
+            <path class="rm-roadmap-path-shadow" d="${pathD}"></path>
+            <path class="rm-roadmap-path-line" d="${pathD}"></path>
+          </svg>
+          <div class="rm-roadmap-nodes">
+            ${S.roadmap.map((wk,i)=>{
+              const status=getRoadmapStageStatus(i);
+              const isSelected=focusedRoadmapStageIndex===i;
+              const pos=layout[i]||{x:50,y:50};
+              const stageNumber=String(i+1).padStart(2,'0');
+              const stageTitle=wk.title||`Stage ${i+1}`;
+              return `<button class="rm-roadmap-node ${status} ${isSelected?'selected':''}" style="left:${pos.x}%;top:${pos.y}%;" onclick="focusRoadmapStage(${i})" aria-label="Focus stage ${i+1} - ${escHtml(stageTitle)}">
+                <span class="rm-roadmap-node-badge">${stageNumber}</span>
+              </button>`;
+            }).join('')}
+          </div>
+        </div>
+      </section>
+      <aside class="rm-roadmap-focus" id="rm-focus-panel">
+        <div class="rm-focus-kicker">${focusedStatus==='active'?'Current milestone':'Selected milestone'}</div>
+        <div class="rm-focus-head">
+          <div>
+            <div class="rm-focus-title">${escHtml(focusTitle)}</div>
+            <div class="rm-focus-sub">${escHtml(focusStageLabel)} · ${escHtml(focusStatusLabel)} · ${focusTaskCount} tasks</div>
+          </div>
+          <div class="rm-focus-score">${focusedPct}%</div>
+        </div>
+        <p class="rm-focus-copy">${escHtml(focusSummary)}</p>
+        ${focusReasoning?`<div class="rm-focus-note"><span>Why it matters</span><p>${escHtml(focusReasoning)}</p></div>`:''}
+        <div class="rm-focus-mini-grid">
+          <div class="rm-focus-mini"><span>Progress</span><strong>${focusedPct}%</strong></div>
+          <div class="rm-focus-mini"><span>Tasks</span><strong>${focusTaskCount}</strong></div>
+          <div class="rm-focus-mini"><span>Target</span><strong>${escHtml(getRoadmapTargetDate(focusedRoadmapStageIndex,S.roadmap.length))}</strong></div>
+        </div>
+        <div class="rm-focus-actions">
+          <button class="btn btn-primary btn-sm" onclick="openExecutionTasks()">Go to Tasks &amp; Goals</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${focusedRoadmapStageIndex})">${openRoadmapMilestoneIndex===focusedRoadmapStageIndex?'Hide detail':'Open detail'}</button>
+        </div>
+      </aside>
     </div>
-    <div class="rm-node-row">
-      ${S.roadmap.map((wk,i)=>{
-      const status=getRoadmapStageStatus(i);
-      const isSelected=focusedRoadmapStageIndex===i;
-      const timelineStage=getExecutionStage(i);
-      return `<button class="rm-timeline-node ${status} ${isSelected?'selected':''}" onclick="focusRoadmapStage(${i})" aria-label="Focus stage ${i+1}">
-        <span class="rm-node-dot">${status==='done'?'✓':''}</span>
-        <span class="rm-node-label">STAGE ${wk.week||i+1}</span>
-        <span class="rm-node-title">${escHtml(timelineStage?.title||wk.title||`Stage ${i+1}`)}</span>
-      </button>`;
-    }).join('')}
-    </div>`;
-  }
-  if(detail){
-    if(openRoadmapMilestoneIndex===null) detail.style.display='none';
-    else{
-      detail.style.display='';
-      detail.innerHTML=buildRoadmapDetailPanel(openRoadmapMilestoneIndex);
+    <div class="rm-roadmap-footer">
+      <span class="rm-roadmap-footer-chip">Path-driven roadmap</span>
+      <span class="rm-roadmap-footer-chip">${timelineMeta}</span>
+      <span class="rm-roadmap-footer-chip">Target ${escHtml(getRoadmapTargetDate(activeIndex,S.roadmap.length)).toUpperCase()}</span>
+    </div>
+    <section class="rm-detail-panel" id="rm-detail-panel" style="display:${openRoadmapMilestoneIndex===null?'none':'block'}"></section>
+    ${S.roadmap.map((_,i)=>`<div id="rm-stage-${i}" class="rm-stage-anchor" aria-hidden="true"></div>`).join('')}`;
+  rb.innerHTML=html;
+  const detailEl=document.getElementById('rm-detail-panel');
+  if(detailEl){
+    if(openRoadmapMilestoneIndex===null){
+      detailEl.style.display='none';
+      detailEl.innerHTML='';
+    }else{
+      detailEl.style.display='';
+      detailEl.innerHTML=buildRoadmapDetailPanel(openRoadmapMilestoneIndex);
     }
   }
-  let html=`<div class="rm-stage-focus" id="rm-focus-panel">
-    <div class="rm-focus-left">
-      <div class="rm-focus-kicker">${focusedStatus==='active'?'FOCUSING PHASE':'STAGE OVERVIEW'}</div>
-      <h2 class="rm-focus-title">${escHtml(focusTitle)}</h2>
-      <p class="rm-focus-copy">${escHtml(focusObjective)}${focusOutcome?` · Outcome: ${escHtml(focusOutcome)}`:''}</p>
-      ${focusReasoning?`<p class="rm-focus-copy"><strong>Why this stage matters:</strong> ${escHtml(focusReasoning)}</p>`:''}
-      <div class="rm-focus-actions">
-        <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${focusedRoadmapStageIndex})">${openRoadmapMilestoneIndex===focusedRoadmapStageIndex?'Hide Milestone Detail':'Open Milestone Detail'}</button>
-        ${focusedRoadmapStageIndex===activeIndex?'<button class="btn btn-primary btn-sm" onclick="openExecutionTasks()">Open Execution Tasks →</button>':''}
-      </div>
-    </div>
-    <div class="rm-focus-right">
-      <div class="rm-focus-progress-head">
-        <div>
-          <div class="rm-focus-metric-label">Completion</div>
-          <div class="rm-focus-progress-value">${focusedPct}%</div>
-        </div>
-        <div class="rm-focus-meta">
-          <span>${focusTasks.length?`${focusDoneCount}/${focusTasks.length} tasks`:`${focusDoneCount}/${focusTotal||0} criteria`}</span>
-          <span>${escHtml(getRoadmapTargetDate(focusedRoadmapStageIndex,S.roadmap.length))}</span>
-          <span>${focusStatusLabel}</span>
-        </div>
-      </div>
-      <div class="rm-focus-track"><div class="rm-focus-fill" style="width:${focusedPct}%"></div></div>
-      <div class="rm-stage-task-list">
-        ${stageRelatedTasks.length?stageRelatedTasks.map((item,idx)=>`<div class="rm-stage-task ${idx===0?'primary':''} ${item.taskId?'clickable':''}" ${item.taskId?`onclick="openTaskDetail(${item.taskId})"`:''}>
-          <div class="rm-stage-task-title">${escHtml(item.title)}</div>
-          <div class="rm-stage-task-meta">${escHtml(item.meta)}${item.taskId?' · open details':''}</div>
-        </div>`).join(''):'<div class="rm-stage-task"><div class="rm-stage-task-title">No linked tasks yet</div><div class="rm-stage-task-meta">This stage has no mapped criteria.</div></div>'}
-      </div>
-    </div>
-  </div>
-  ${S.roadmap.map((_,i)=>`<div id="rm-stage-${i}" class="rm-stage-anchor" aria-hidden="true"></div>`).join('')}
-  <div class="rm-bottom-strip">
-    <div class="rm-bottom-label">SYSTEM STATUS</div>
-    <div class="rm-bottom-meta">${escHtml(timelineMeta)}</div>
-    <div class="rm-bottom-meta">${S.progress.sessions} sessions · ${S.progress.tasksDone||0} tasks shipped</div>
-    <div class="rm-bottom-meta">TARGET ${escHtml(getRoadmapTargetDate(activeIndex,S.roadmap.length)).toUpperCase()}</div>
-  </div>`;
-  rb.innerHTML=html;
   document.getElementById('rm-span').textContent=`Plan for ${S.roadmap.length} stages · Active stage ${Math.min(activeIndex+1,S.roadmap.length)}`;
 }
 
@@ -5647,9 +5778,9 @@ function renderTasks(){
   }
   el.innerHTML=f.map(t=>{
     const prio=normalizeTaskPrio(t.prio);
-    const support=clipText(getTaskSupportLine(t)||'Открой задачу, чтобы увидеть полный execution-brief.',120);
+    const support=clipText(getTaskSupportLine(t)||'Open the task detail for the full execution brief.',96);
     const stageLabel=`Stage ${Math.max(1,(Number(t.linkedStageIndex)||0)+1)}`;
-    const status=t.done?'DONE':'ACTIVE';
+    const status=t.done?'Done':'Active';
     return `<div class="task-item ${t.done?'done-item':''}" onclick="openTaskDetail(${t.id})">
       <button class="task-cb ${t.done?'checked':''}" onclick="event.stopPropagation();toggleTask(${t.id})" aria-label="${t.done?'Mark as active':'Mark as done'}"></button>
       <div class="task-body">

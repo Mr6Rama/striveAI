@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StriveAI Unified Site</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@400,0&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="site-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark"><span class="material-symbols-outlined">rocket_launch</span></div>
+        <div>
+          <div class="brand-title">StriveAI</div>
+          <div class="brand-subtitle">Cinematic Growth</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item is-active" data-view-target="roadmap">
+          <span class="material-symbols-outlined">timeline</span>
+          <span>Roadmap</span>
+        </button>
+        <button class="nav-item" data-view-target="checkin">
+          <span class="material-symbols-outlined">forum</span>
+          <span>Daily Check-in</span>
+        </button>
+        <button class="nav-item" data-view-target="result">
+          <span class="material-symbols-outlined">insights</span>
+          <span>Insights</span>
+        </button>
+        <button class="nav-item" data-view-target="plans">
+          <span class="material-symbols-outlined">bolt</span>
+          <span>Plans</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-card">
+        <div class="eyebrow">Current plan</div>
+        <div class="sidebar-card-title">Balanced Founder</div>
+        <p>Shared shell, shared components, single site structure.</p>
+        <button class="button button-primary button-block" data-view-target="plans">Upgrade to Pro</button>
+      </div>
+
+      <div class="profile-card">
+        <div class="avatar avatar-large">R</div>
+        <div>
+          <div class="profile-name">Founder Mode</div>
+          <div class="profile-meta">14 day streak</div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="app-frame">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow" id="topbar-eyebrow">Strategy Hub</div>
+          <h1 class="topbar-title" id="topbar-title">Roadmap</h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="icon-button"><span class="material-symbols-outlined">dark_mode</span></button>
+          <button class="icon-button"><span class="material-symbols-outlined">notifications</span></button>
+          <div class="avatar">AI</div>
+        </div>
+      </header>
+
+      <main class="content-area">
+        <section class="view is-active roadmap-view-exact" data-view="roadmap" data-title="Roadmap View" data-eyebrow="Strategy">
+          <div class="roadmap-page">
+            <div class="roadmap-toolbar">
+              <div class="roadmap-toolbar-left">
+                <h2 class="roadmap-page-title">Roadmap View</h2>
+                <div class="roadmap-page-tabs">
+                  <button class="roadmap-page-tab is-active">Strategy</button>
+                  <button class="roadmap-page-tab">Execution</button>
+                  <button class="roadmap-page-tab">Archive</button>
+                </div>
+              </div>
+              <div class="roadmap-toolbar-right">
+                <label class="roadmap-search">
+                  <span class="material-symbols-outlined">search</span>
+                  <input type="text" placeholder="Search assets...">
+                </label>
+                <button class="roadmap-project-button">
+                  <span class="material-symbols-outlined">add</span>
+                  <span>New Project</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="roadmap-stats-row">
+              <article class="roadmap-stat-card">
+                <span class="roadmap-stat-label">Current Progress</span>
+                <strong class="roadmap-stat-value">68%</strong>
+                <div class="roadmap-stat-bar"><span style="width:68%"></span></div>
+              </article>
+              <article class="roadmap-stat-card roadmap-stat-card-center">
+                <span class="roadmap-stat-label">Active Phase</span>
+                <strong class="roadmap-stat-title">Scale Engine</strong>
+                <span class="roadmap-stat-meta">Stage 2 of 4</span>
+              </article>
+              <article class="roadmap-stat-card roadmap-stat-card-right">
+                <span class="roadmap-stat-label">Growth Streak</span>
+                <div class="roadmap-streak-line">
+                  <strong class="roadmap-streak-value">14</strong>
+                  <span class="roadmap-streak-unit">days</span>
+                </div>
+                <div class="roadmap-streak-bars">
+                  <span></span><span></span><span></span><span></span><span class="tall"></span>
+                </div>
+              </article>
+            </div>
+
+            <section class="roadmap-canvas-exact">
+              <svg class="roadmap-curve" viewBox="0 0 1000 400" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M50 200C150 200 200 100 350 100C500 100 550 300 700 300C850 300 900 200 950 200" />
+              </svg>
+
+              <article class="roadmap-node roadmap-node-genesis">
+                <div class="roadmap-node-circle roadmap-node-circle-solid">
+                  <span class="material-symbols-outlined">check</span>
+                </div>
+                <h3>Genesis</h3>
+                <span class="roadmap-node-stage">Stage 1</span>
+              </article>
+
+              <article class="roadmap-node roadmap-node-active">
+                <div class="roadmap-node-circle roadmap-node-circle-active">02</div>
+                <h3>Scale Engine</h3>
+                <div class="roadmap-active-card">
+                  <div class="roadmap-active-card-head">
+                    <span>Metrics</span>
+                    <span>6/10 Tasks</span>
+                  </div>
+                  <p>Scaling computational nodes<br>and optimizing neural feedback<br>loops.</p>
+                </div>
+              </article>
+
+              <article class="roadmap-node roadmap-node-expansion">
+                <div class="roadmap-node-circle roadmap-node-circle-muted">
+                  <span class="material-symbols-outlined">lock</span>
+                </div>
+                <h3>Expansion</h3>
+                <span class="roadmap-node-stage">Stage 3</span>
+              </article>
+
+              <article class="roadmap-node roadmap-node-singularity">
+                <div class="roadmap-node-circle roadmap-node-circle-ghost">
+                  <span class="material-symbols-outlined">auto_awesome</span>
+                </div>
+                <h3>Singularity</h3>
+                <span class="roadmap-node-stage">Stage 4</span>
+              </article>
+            </section>
+
+            <div class="roadmap-bottom-exact">
+              <section class="roadmap-focus-block">
+                <div class="roadmap-bottom-heading">
+                  <span>Current Focus</span>
+                  <div class="roadmap-heading-line"></div>
+                </div>
+                <div class="roadmap-focus-list">
+                  <article class="roadmap-focus-item is-active">
+                    <div class="roadmap-focus-main">
+                      <span class="roadmap-focus-dot"></span>
+                      <span>Neural Mesh Optimization</span>
+                    </div>
+                    <span class="roadmap-focus-meta">Due Tomorrow</span>
+                  </article>
+                  <article class="roadmap-focus-item">
+                    <div class="roadmap-focus-main">
+                      <span class="roadmap-focus-dot roadmap-focus-dot-muted"></span>
+                      <span>Asset Protocol Refinement</span>
+                    </div>
+                    <span class="roadmap-focus-meta">3 Days Left</span>
+                  </article>
+                </div>
+              </section>
+
+              <aside class="roadmap-insight-block">
+                <div class="roadmap-bottom-heading roadmap-bottom-heading-right">
+                  <span>Architect Insights</span>
+                </div>
+                <div class="roadmap-insight-card">
+                  <div class="roadmap-insight-visual"></div>
+                  <div class="roadmap-insight-content">
+                    <span class="roadmap-insight-kicker">New Opportunity</span>
+                    <p>Efficiency can be increased by 14% by rerouting Logic Stage 3.</p>
+                  </div>
+                </div>
+                <button class="roadmap-analytics-button" data-view-target="result">View Detailed Analytics</button>
+              </aside>
+            </div>
+
+            <button class="roadmap-fab" aria-label="Quick action">
+              <span class="material-symbols-outlined">bolt</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="view" data-view="checkin" data-title="Daily Check-in" data-eyebrow="Execution Loop">
+          <div class="hero-block">
+            <div>
+              <div class="eyebrow">Daily loop</div>
+              <h2 class="hero-title">Check in, adjust, and move the roadmap forward.</h2>
+              <p class="hero-copy">This view uses the same shell, so the product now feels like one site instead of separate mock pages.</p>
+            </div>
+          </div>
+
+          <section class="chat-layout">
+            <article class="chat-message chat-message-ai">
+              <div class="chat-avatar"><span class="material-symbols-outlined">auto_awesome</span></div>
+              <div class="chat-bubble">
+                <p>Good morning. You completed 85% of your roadmap goals this week. How are you feeling about the deep work session scheduled for 2 PM?</p>
+                <div class="chip-row">
+                  <span class="chip">Focused</span>
+                  <span class="chip">High performance</span>
+                </div>
+              </div>
+            </article>
+
+            <article class="chat-message chat-message-user">
+              <div class="chat-avatar user-avatar">R</div>
+              <div class="chat-bubble user-bubble">
+                <p>I am ready, but my energy dipped around that time yesterday. Maybe we should shift the sequence.</p>
+              </div>
+            </article>
+
+            <article class="chat-message chat-message-ai">
+              <div class="chat-avatar"><span class="material-symbols-outlined">auto_awesome</span></div>
+              <div class="chat-bubble">
+                <p>An insightful observation. Would you prefer a 20 minute restorative break at 1:40 PM, or should we move the heavy cognitive load to 10 AM tomorrow?</p>
+                <div class="option-grid">
+                  <button class="option-card">
+                    <span class="option-kicker">Option A</span>
+                    <strong>Restorative break</strong>
+                  </button>
+                  <button class="option-card">
+                    <span class="option-kicker">Option B</span>
+                    <strong>Shift to AM window</strong>
+                  </button>
+                </div>
+              </div>
+            </article>
+          </section>
+
+          <div class="composer glass-card">
+            <button class="icon-button"><span class="material-symbols-outlined">attach_file</span></button>
+            <input type="text" placeholder="Type your reflection or response...">
+            <button class="icon-button icon-button-primary"><span class="material-symbols-outlined">send</span></button>
+          </div>
+        </section>
+
+        <section class="view" data-view="result" data-title="Insights" data-eyebrow="Assessment Complete">
+          <div class="hero-block">
+            <div>
+              <div class="eyebrow">Check-in result</div>
+              <h2 class="hero-title">You are moving faster than 82% of peers today.</h2>
+              <p class="hero-copy">The result screen is now part of the same product shell and can be reached directly from the sidebar or from Daily Check-in.</p>
+            </div>
+            <div class="streak-card panel slim-panel">
+              <span class="metric-label">Deep work streak</span>
+              <strong class="metric-title">14 days</strong>
+              <span class="metric-meta">High clarity window</span>
+            </div>
+          </div>
+
+          <div class="bento-grid">
+            <section class="panel panel-xl focus-panel">
+              <div class="section-head compact">
+                <div>
+                  <div class="eyebrow">Recommended focus</div>
+                  <h3 class="section-title">Refine the architecture docs</h3>
+                </div>
+              </div>
+              <p class="panel-copy">Based on your check-in, your energy levels are peaking. This is the optimal window to tackle the core technical debt and roadmap clarity issues.</p>
+              <div class="button-row">
+                <button class="button button-primary">Start focus session</button>
+                <button class="button button-soft">Remind me in 1h</button>
+              </div>
+            </section>
+
+            <aside class="panel vitals-panel">
+              <div class="eyebrow">Cognitive load</div>
+              <div class="vital-block">
+                <div class="vital-row"><span>Focus capacity</span><strong>92%</strong></div>
+                <div class="progress-bar thin"><div class="progress-fill" style="width:92%"></div></div>
+              </div>
+              <div class="vital-block">
+                <div class="vital-row"><span>Mental fatigue</span><strong class="danger-text">14%</strong></div>
+                <div class="progress-bar thin danger"><div class="progress-fill" style="width:14%"></div></div>
+              </div>
+              <p class="quote">Your clarity is exceptionally high today. Perfect for high-stakes decision making.</p>
+            </aside>
+
+            <article class="panel stat-panel">
+              <div class="icon-badge"><span class="material-symbols-outlined">psychology</span></div>
+              <h4>Strategic alignment</h4>
+              <p>Your current trajectory aligns 100% with the Q3 roadmap goals.</p>
+            </article>
+            <article class="panel stat-panel">
+              <div class="icon-badge"><span class="material-symbols-outlined">speed</span></div>
+              <h4>Velocity check</h4>
+              <p>Task completion rate is up 12% since last Tuesday.</p>
+            </article>
+            <article class="panel stat-panel stat-score">
+              <strong>8 / 10</strong>
+              <span>Flow score</span>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" data-view="plans" data-title="Plans" data-eyebrow="Monetization">
+          <div class="hero-block">
+            <div>
+              <div class="eyebrow">Growth velocity</div>
+              <h2 class="hero-title">Choose a plan without leaving the same product shell.</h2>
+              <p class="hero-copy">The pricing screen now feels like part of the product, not a disconnected page with a different structure.</p>
+            </div>
+          </div>
+
+          <div class="pricing-grid">
+            <article class="plan-card panel">
+              <div class="plan-icon"><span class="material-symbols-outlined">shield</span></div>
+              <h3>Conservative</h3>
+              <p>Sustainable progress focused on long-term foundations.</p>
+              <div class="price-row"><strong>$49</strong><span>/ month</span></div>
+              <button class="button button-soft button-block">Select foundation</button>
+            </article>
+
+            <article class="plan-card panel plan-card-featured">
+              <div class="plan-badge">Recommended</div>
+              <div class="plan-icon plan-icon-featured"><span class="material-symbols-outlined">rocket_launch</span></div>
+              <h3>Balanced</h3>
+              <p>High-impact growth with calculated risk mitigation.</p>
+              <div class="price-row"><strong>$99</strong><span>/ month</span></div>
+              <button class="button button-primary button-block">Deploy strategy</button>
+            </article>
+
+            <article class="plan-card panel">
+              <div class="plan-icon"><span class="material-symbols-outlined">bolt</span></div>
+              <h3>Aggressive</h3>
+              <p>Maximum velocity for founders ready to scale rapidly.</p>
+              <div class="price-row"><strong>$199</strong><span>/ month</span></div>
+              <button class="button button-soft button-block">Ignite growth</button>
+            </article>
+          </div>
+
+          <section class="panel comparison-panel">
+            <div class="section-head compact">
+              <div>
+                <div class="eyebrow">Comparison</div>
+                <h3 class="section-title">Strategic features</h3>
+              </div>
+            </div>
+            <div class="comparison-table">
+              <div class="comparison-row comparison-head">
+                <span>Feature</span><span>Conservative</span><span>Balanced</span><span>Aggressive</span>
+              </div>
+              <div class="comparison-row"><span>Roadmap updates</span><span>Weekly</span><span>Daily</span><span>Real-time</span></div>
+              <div class="comparison-row"><span>Growth analytics</span><span>Standard</span><span>Advanced</span><span>Predictive AI</span></div>
+              <div class="comparison-row"><span>Projects</span><span>1</span><span>5</span><span>Unlimited</span></div>
+              <div class="comparison-row"><span>Concierge support</span><span>No</span><span>Email priority</span><span>Dedicated</span></div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
