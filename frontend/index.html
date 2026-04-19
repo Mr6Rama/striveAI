@@ -211,7 +211,7 @@
       <button class="htab on" id="tab-dashboard" onclick="gp('dashboard')"><span class="tab-icon">⊞</span> <span>Dashboard</span></button>
       <!-- MERGED: Tasks + Goals into one tab -->
       <button class="htab" id="tab-work" onclick="gp('work')"><span class="tab-icon">☑</span> <span>Tasks &amp; Goals</span> <span class="htab-badge" id="task-badge" style="display:none">0</span></button>
-      <button class="htab" id="tab-notes" onclick="gp('notes')"><span class="tab-icon">≡</span> <span>Notes</span></button>
+      <button class="htab" id="tab-notes" onclick="gp('notes')"><span class="tab-icon">≡</span> <span>AI Chat</span></button>
       <!-- MERGED: Roadmap contains Progress inside -->
       <button class="htab" id="tab-roadmap" onclick="gp('roadmap')"><span class="tab-icon">⊢</span> <span>Roadmap</span></button>
       <button class="htab" id="tab-analytics" onclick="gp('analytics')"><span class="tab-icon">◉</span> <span>Analytics</span></button>
@@ -236,7 +236,7 @@
         <button class="icon-button" onclick="gp('roadmap')" aria-label="Open roadmap">
           <span class="material-symbols-outlined">timeline</span>
         </button>
-        <button class="icon-button" onclick="gp('notes')" aria-label="Open notes">
+        <button class="icon-button" onclick="gp('notes')" aria-label="Open AI chat">
           <span class="material-symbols-outlined">sticky_note_2</span>
         </button>
         <button class="icon-button icon-button-primary" onclick="gp('settings')" aria-label="Open settings">
@@ -281,11 +281,9 @@
                 <div class="session-timer on" id="session-timer-display">00:00</div>
                 <div class="dash-actions">
                   <button class="btn btn-green" onclick="markDone()">✓ Session Done</button>
-                  <button class="btn btn-ghost btn-sm" onclick="gp('roadmap');setTimeout(genVariants,100)">Build Plan →</button>
                 </div>
               </div>
               <div id="default-actions" class="dash-actions" style="margin-top:10px;">
-                <button class="btn btn-ghost btn-sm" onclick="gp('roadmap');setTimeout(genVariants,100)">Build Plan →</button>
               </div>
             </div>
             <div class="dash-hero-right" id="hero-right-panel">
@@ -410,35 +408,17 @@
       </div>
     </div>
 
-    <!-- NOTES -->
+    <!-- AI CHAT -->
     <div class="pg" id="pg-notes">
-      <div class="notes-wrap">
+      <div class="notes-wrap chat-wrap">
         <div class="page-head">
-          <div><div class="page-title">Notes</div><div class="page-sub">Free-form — AI can summarize or restructure</div></div>
+          <div><div class="page-title">AI Chat</div><div class="page-sub">Daily check-ins, blockers, and quick prompts</div></div>
           <div class="page-actions">
-            <button class="btn btn-ghost btn-sm" onclick="aiProcessNote()">⚡ AI Process</button>
-            <button class="btn btn-primary btn-sm" onclick="addNote()">+ New Note</button>
+            <button class="btn btn-ghost btn-sm" onclick="gp('roadmap')">Roadmap</button>
+            <button class="btn btn-primary btn-sm" onclick="gp('work')">Tasks &amp; Goals</button>
           </div>
         </div>
-        <div class="ai-bar" id="notes-ai-bar" style="display:none;margin:10px 18px 0">
-          <div class="ai-bar-icon">⚡</div>
-          <div class="ai-bar-txt" id="notes-ai-txt"></div>
-          <div class="ai-bar-actions">
-            <button class="btn btn-primary btn-sm" onclick="applyAiNote()">Apply</button>
-            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('notes-ai-bar').style.display='none'">✕</button>
-          </div>
-        </div>
-        <div class="notes-body">
-          <div class="note-list-col" id="note-list"></div>
-          <div class="note-editor-col">
-            <div class="note-editor-header">
-              <input class="note-title-in" id="note-title" placeholder="Note title…" oninput="autoSaveNote()"/>
-              <button class="btn btn-primary btn-sm" onclick="saveCurrentNote()">Save</button>
-              <button class="btn btn-ghost btn-sm" onclick="deleteCurrentNote()">Delete</button>
-            </div>
-            <textarea class="note-body" id="note-body" placeholder="Write anything… ideas, plans, research." oninput="autoSaveNote()"></textarea>
-          </div>
-        </div>
+        <div id="chat-inner"></div>
       </div>
     </div>
 
@@ -447,10 +427,6 @@
       <div class="roadmap-wrap" style="padding-top:20px;">
         <div class="page-head" style="background:transparent;border:none;padding:0 0 14px;max-width:860px;margin:0 auto;">
           <div><div class="page-title">Roadmap</div><div class="page-sub" id="rm-span">Your 8-week execution plan</div></div>
-          <div class="rm-rebuild-wrap">
-            <button class="btn btn-outline btn-sm" id="rm-rebuild-btn" onclick="onRebuildPlanClick()">↻ Rebuild Plan</button>
-            <div class="rm-rebuild-limit" id="rm-rebuild-limit" style="display:none">Rebuild limit reached (2/2)</div>
-          </div>
         </div>
 
         <!-- Progress panel INSIDE roadmap -->
@@ -548,7 +524,7 @@
           <div class="ss-row"><div><div class="ss-row-name">Name</div></div><div style="font-family:var(--mono);font-size:12px;color:var(--muted)" id="set-name">—</div></div>
           <div class="ss-row"><div><div class="ss-row-name">Project</div></div><div style="font-family:var(--mono);font-size:12px;color:var(--muted)" id="set-proj">—</div></div>
           <div class="ss-row"><div><div class="ss-row-name">Current Plan</div></div><div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--blue-l)" id="set-plan">Free</div></div>
-          <div class="ss-row"><div><div class="ss-row-name">Upgrade to Pro</div><div class="ss-row-sub">Unlock adaptive rebuilds, unlimited roadmaps, AI task cleanup</div></div><button class="btn btn-primary btn-sm" onclick="gp('billing')">View Plans →</button></div>
+          <div class="ss-row"><div><div class="ss-row-name">Upgrade to Pro</div><div class="ss-row-sub">Unlock adaptive rebuilds, unlimited roadmaps, premium AI chat</div></div><button class="btn btn-primary btn-sm" onclick="gp('billing')">View Plans →</button></div>
           <div class="ss-row"><div><div class="ss-row-name">Sign Out</div><div class="ss-row-sub">Sign out from this account and return to login screen</div></div><button class="btn btn-ghost btn-sm" onclick="authSignOut()">Sign Out</button></div>
           <div class="ss-row"><div><div class="ss-row-name">Reset All Data</div><div class="ss-row-sub">Clear everything and start fresh</div></div><button class="btn btn-danger btn-sm" onclick="resetAllData()">Reset</button></div>
         </div>
@@ -562,8 +538,8 @@
         <div class="page-head" style="background:transparent;border:none;padding:0 0 14px;max-width:860px;margin:0 auto;"><div><div class="page-title">Plans &amp; Billing</div><div class="page-sub">Powered by PayPal · Cancel anytime</div></div></div>
         <div class="billing-current"><div class="bc-info"><div class="bc-plan" id="bc-plan-name">Free Plan</div><div class="bc-detail" id="bc-detail">Basic tracking · No AI features</div></div><div class="bc-status free" id="bc-status">Active</div></div>
         <div class="plans-grid">
-          <div class="plan-card"><div class="plan-card-head"><div class="plan-price">$0 <span class="plan-period">/mo</span></div><div class="plan-name">Free</div></div><div class="plan-divider"></div><div class="plan-features"><div class="plan-feat"><div class="feat-check">✓</div>Dashboard workspace</div><div class="plan-feat"><div class="feat-check">✓</div>Tasks, Goals, Notes</div><div class="plan-feat"><div class="feat-check">✓</div>7-day trial roadmap</div><div class="plan-feat dim"><div class="feat-dash">—</div>Adaptive rebuilds</div><div class="plan-feat dim"><div class="feat-dash">—</div>Full 8-week roadmap</div></div><div class="plan-cta"><button class="plan-btn current" id="free-btn">✓ Current Plan</button></div></div>
-          <div class="plan-card popular"><div class="plan-card-head"><div class="plan-pop-badge">Most Popular</div><div class="plan-price">$19 <span class="plan-period">/mo</span></div><div class="plan-name">Pro</div></div><div class="plan-divider"></div><div class="plan-features"><div class="plan-feat"><div class="feat-check">✓</div>Everything in Free</div><div class="plan-feat"><div class="feat-check">✓</div>Full 8-week AI roadmap</div><div class="plan-feat"><div class="feat-check">✓</div><strong>Adaptive rebuilds</strong></div><div class="plan-feat"><div class="feat-check">✓</div>AI task cleanup &amp; review</div><div class="plan-feat"><div class="feat-check">✓</div>3 projects</div></div><div class="plan-cta"><div id="pp-btn-pro"><button class="plan-btn primary" onclick="initPayPal('pro','pp-btn-pro')">Upgrade to Pro →</button></div></div></div>
+          <div class="plan-card"><div class="plan-card-head"><div class="plan-price">$0 <span class="plan-period">/mo</span></div><div class="plan-name">Free</div></div><div class="plan-divider"></div><div class="plan-features"><div class="plan-feat"><div class="feat-check">✓</div>Dashboard workspace</div><div class="plan-feat"><div class="feat-check">✓</div>Tasks, Goals, AI Chat</div><div class="plan-feat"><div class="feat-check">✓</div>7-day trial roadmap</div><div class="plan-feat dim"><div class="feat-dash">—</div>Adaptive rebuilds</div><div class="plan-feat dim"><div class="feat-dash">—</div>Full 8-week roadmap</div></div><div class="plan-cta"><button class="plan-btn current" id="free-btn">✓ Current Plan</button></div></div>
+          <div class="plan-card popular"><div class="plan-card-head"><div class="plan-pop-badge">Most Popular</div><div class="plan-price">$19 <span class="plan-period">/mo</span></div><div class="plan-name">Pro</div></div><div class="plan-divider"></div><div class="plan-features"><div class="plan-feat"><div class="feat-check">✓</div>Everything in Free</div><div class="plan-feat"><div class="feat-check">✓</div>Full 8-week AI roadmap</div><div class="plan-feat"><div class="feat-check">✓</div><strong>Adaptive rebuilds</strong></div><div class="plan-feat"><div class="feat-check">✓</div>Premium AI chat support</div><div class="plan-feat"><div class="feat-check">✓</div>3 projects</div></div><div class="plan-cta"><div id="pp-btn-pro"><button class="plan-btn primary" onclick="initPayPal('pro','pp-btn-pro')">Upgrade to Pro →</button></div></div></div>
           <div class="plan-card"><div class="plan-card-head"><div class="plan-price">$49 <span class="plan-period">/mo</span></div><div class="plan-name">Team</div></div><div class="plan-divider"></div><div class="plan-features"><div class="plan-feat"><div class="feat-check">✓</div>Everything in Pro</div><div class="plan-feat"><div class="feat-check">✓</div>Team groups</div><div class="plan-feat"><div class="feat-check">✓</div>Shared roadmap</div><div class="plan-feat"><div class="feat-check">✓</div>Unlimited projects</div></div><div class="plan-cta"><div id="pp-btn-team"><button class="plan-btn secondary" onclick="initPayPal('team','pp-btn-team')">Upgrade to Team →</button></div></div></div>
         </div>
         <div class="paypal-setup"><div class="paypal-setup-title">⚙️ PayPal Setup Required</div><div class="paypal-step"><div class="ps-num">1</div><div class="ps-txt"><strong>developer.paypal.com</strong> → My Apps → Create App → copy <code>CLIENT_ID</code> → paste into <code>PAYPAL_CLIENT_ID</code> in script</div></div><div class="paypal-step"><div class="ps-num">2</div><div class="ps-txt">PayPal → Subscriptions → Plans → Create <code>$19/mo PRO</code> and <code>$49/mo TEAM</code> → paste IDs into <code>PLAN_PRO</code> and <code>PLAN_TEAM</code></div></div></div>
@@ -603,6 +579,19 @@
 <div class="task-detail-overlay" id="task-detail-overlay" onclick="onTaskDetailOverlayClick(event)">
   <div class="task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="task-detail-title" onclick="event.stopPropagation()">
     <div id="task-detail-content"></div>
+  </div>
+</div>
+
+<div class="flow-overlay" id="flow-overlay" aria-hidden="true">
+  <div class="flow-card" id="flow-card">
+    <div class="flow-kicker" id="flow-kicker">Loading</div>
+    <div class="flow-spinner-wrap">
+      <div class="flow-spinner" id="flow-spinner"></div>
+    </div>
+    <div class="flow-title" id="flow-title">Generating roadmap</div>
+    <div class="flow-copy" id="flow-copy"></div>
+    <div class="flow-rotator" id="flow-rotator"></div>
+    <div class="flow-actions" id="flow-actions"></div>
   </div>
 </div>
 

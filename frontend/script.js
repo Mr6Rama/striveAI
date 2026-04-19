@@ -4238,6 +4238,86 @@ function setRoadmapButtonsBusy(isBusy){
   });
   updateRoadmapRebuildUi();
 }
+let flowOverlayTimer=null;
+let flowOverlayMessages=[];
+let flowOverlayIndex=0;
+function stopFlowOverlayTimer(){
+  if(flowOverlayTimer){
+    clearInterval(flowOverlayTimer);
+    flowOverlayTimer=null;
+  }
+}
+function updateFlowOverlayMessage(){
+  const el=document.getElementById('flow-rotator');
+  if(!el) return;
+  if(!flowOverlayMessages.length){
+    el.textContent='';
+    return;
+  }
+  const index=flowOverlayIndex%flowOverlayMessages.length;
+  el.textContent=flowOverlayMessages[index];
+  flowOverlayIndex+=1;
+}
+function setFlowOverlayMode(mode,{kicker='',title='',copy='',messages=[],actionsHtml=''}={}){
+  const overlay=document.getElementById('flow-overlay');
+  const card=document.getElementById('flow-card');
+  const kickerEl=document.getElementById('flow-kicker');
+  const titleEl=document.getElementById('flow-title');
+  const copyEl=document.getElementById('flow-copy');
+  const rotatorEl=document.getElementById('flow-rotator');
+  const actionsEl=document.getElementById('flow-actions');
+  const spinnerEl=document.getElementById('flow-spinner');
+  if(!overlay||!card) return;
+  stopFlowOverlayTimer();
+  flowOverlayMessages=Array.isArray(messages)?messages.filter(Boolean):[];
+  flowOverlayIndex=0;
+  overlay.classList.add('on');
+  overlay.dataset.mode=mode||'loading';
+  card.classList.toggle('is-loading',mode==='loading');
+  card.classList.toggle('is-prompt',mode!=='loading');
+  if(kickerEl) kickerEl.textContent=kicker||'';
+  if(titleEl) titleEl.textContent=title||'';
+  if(copyEl) copyEl.textContent=copy||'';
+  if(rotatorEl) rotatorEl.textContent='';
+  if(actionsEl) actionsEl.innerHTML=actionsHtml||'';
+  if(spinnerEl) spinnerEl.classList.toggle('idle',mode!=='loading');
+  if(flowOverlayMessages.length){
+    updateFlowOverlayMessage();
+    if(mode==='loading'){
+      flowOverlayTimer=setInterval(updateFlowOverlayMessage,1400);
+    }
+  }
+}
+function hideFlowOverlay(){
+  stopFlowOverlayTimer();
+  flowOverlayMessages=[];
+  flowOverlayIndex=0;
+  const overlay=document.getElementById('flow-overlay');
+  const actionsEl=document.getElementById('flow-actions');
+  if(overlay) overlay.classList.remove('on');
+  if(actionsEl) actionsEl.innerHTML='';
+}
+function showRoadmapReadyPrompt(){
+  setFlowOverlayMode('prompt',{
+    kicker:'Roadmap ready',
+    title:'Create tasks for the first milestone',
+    copy:'The roadmap is generated. Continue to build the execution list for the first milestone, then you will enter Tasks & Goals.',
+    messages:[
+      'Milestones mapped.',
+      'Execution window ready.',
+      'Preparing first-stage tasks.'
+    ],
+    actionsHtml:'<button class="btn btn-primary btn-sm" onclick="runFirstMilestoneTaskFlow()">Create tasks for the first milestone</button>'
+  });
+}
+function showFlowLoading(title,copy,messages){
+  setFlowOverlayMode('loading',{
+    kicker:'Processing',
+    title:title||'Loading',
+    copy:copy||'',
+    messages:messages||['Building the next step...']
+  });
+}
 function toDateInputValue(date){
   const year=date.getFullYear();
   const month=String(date.getMonth()+1).padStart(2,'0');
@@ -4426,14 +4506,16 @@ function calcWeeksFromDeadline(deadline){
   return getDesiredRoadmapStageCount(deadline);
 }
 async function obGenerateRoadmap(){
-  const btn=document.getElementById('ob-gen-btn'),loading=document.getElementById('ob-gen-loading');
   const {pipelineId,signal}=startRoadmapPipelineSession();
   roadmapRequestInFlight=true;
   setRoadmapButtonsBusy(true);
-  if(btn) btn.disabled=true;
-  if(loading) loading.style.display='';
+  showFlowLoading(
+    'Generating roadmap',
+    'The roadmap pipeline is shaping milestones, execution windows, and the first task scaffold.',
+    ['Mapping the path to the deadline.', 'Balancing scope and sequence.', 'Preparing the first milestone.']
+  );
+  let roadmapReady=false;
   try{
-    let pipelineCompleted=false;
     const deadlineCheck=validateBetaDeadline(S.user.deadline);
     if(!deadlineCheck.ok) throw new Error(deadlineCheck.error);
     S.user.deadline=deadlineCheck.value;
@@ -4456,48 +4538,33 @@ async function obGenerateRoadmap(){
       signal
     });
     if(!isRoadmapPipelineActive(pipelineId)) return;
-    pipelineCompleted=true;
-
-    if(pipelineCompleted){
-      try{
-        saveAll();
-        logInfo({
-          area:'frontend',
-          module:'frontend/script.js',
-          function:'obGenerateRoadmap',
-          action:'execution_persisted',
-          activeStageIndex:getExecutionActiveStageIndex(),
-          stages:summarizeRoadmapStagesForLog(getExecutionStages()),
-          degraded:Boolean(pipelineResult?.degraded),
-          degradedStage:String(pipelineResult?.degradedStage||'')
-        });
-        if(pipelineResult?.degraded){
-          logRoadmapPipelineEvent('roadmap_pipeline_rendered_degraded',{
-            roadmapId:S.execution?.id||'',
-            stageCount:getExecutionStages().length||(Array.isArray(S.roadmap)?S.roadmap.length:0),
-            activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
-            activeStageIndex:getExecutionActiveStageIndex(),
-            errorMessage:String(pipelineResult?.errorMessage||''),
-            degradedStage:String(pipelineResult?.degradedStage||'')
-          });
-        }
-        obShowGoals();
-        saveAll();
-        obLaunch({startTour:false});
-        gp('roadmap');
-        if(pipelineResult?.degraded){
-          toast2('Roadmap готов','Roadmap показан в degraded mode.');
-        }
-      }catch(postError){
-        logWarn({
-          area:'frontend',
-          module:'frontend/script.js',
-          function:'obGenerateRoadmap',
-          action:'onboarding_post_roadmap_nonfatal',
-          errorMessage:String(postError?.message||'')
-        });
-        try{obLaunch({startTour:false});gp('roadmap');}catch(_e){}
-      }
+    roadmapReady=true;
+    saveAll();
+    logInfo({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'obGenerateRoadmap',
+      action:'execution_persisted',
+      activeStageIndex:getExecutionActiveStageIndex(),
+      stages:summarizeRoadmapStagesForLog(getExecutionStages()),
+      degraded:Boolean(pipelineResult?.degraded),
+      degradedStage:String(pipelineResult?.degradedStage||'')
+    });
+    if(pipelineResult?.degraded){
+      logRoadmapPipelineEvent('roadmap_pipeline_rendered_degraded',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length||(Array.isArray(S.roadmap)?S.roadmap.length:0),
+        activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+        activeStageIndex:getExecutionActiveStageIndex(),
+        errorMessage:String(pipelineResult?.errorMessage||''),
+        degradedStage:String(pipelineResult?.degradedStage||'')
+      });
+    }
+    obShowGoals();
+    saveAll();
+    showRoadmapReadyPrompt();
+    if(pipelineResult?.degraded){
+      toast2('Roadmap ready','Roadmap shown in degraded mode.');
     }
   }catch(e){
     if(isAbortError(e)||!isRoadmapPipelineActive(pipelineId)) return;
@@ -4522,8 +4589,8 @@ async function obGenerateRoadmap(){
         saveAll();
         obShowGoals();
         saveAll();
-        obLaunch({startTour:false});
-        gp('roadmap');
+        hideFlowOverlay();
+        obLaunch({startTour:false,page:'roadmap'});
       }catch(_degradedError){}
       toast2('Roadmap готов','Roadmap показан в degraded mode.');
       return;
@@ -4535,8 +4602,7 @@ async function obGenerateRoadmap(){
     activeRoadmapAbortController=null;
     roadmapRequestInFlight=false;
     setRoadmapButtonsBusy(false);
-    if(btn) btn.disabled=false;
-    if(loading) loading.style.display='none';
+    if(!roadmapReady) hideFlowOverlay();
   }
 }
 function obShowGoals(){
@@ -4597,13 +4663,10 @@ function obPrepLaunch(){
   if(ms)ms.textContent=String((getExecutionStages().length||S.roadmap?.length||0));
   if(tk)tk.textContent=String((getActiveStageTasks().length||0));
 }
-function obContinueToLaunch(){obPrepLaunch();obGo(6);}
+function obContinueToLaunch(){obPrepLaunch();obLaunch({startTour:true});}
 async function handleGenerateTasksClick(){
   if(!S.roadmap||taskRequestInFlight)return;
-  const btn=document.getElementById('ob-tasks-btn'),loading=document.getElementById('ob-tasks-loading');
   taskRequestInFlight=true;
-  if(btn) btn.disabled=true;
-  if(loading) loading.style.display='';
   try{
     obTaskVariant=BETA_ALLOWED_TASK_VARIANT;
     syncTaskVariantUI();
@@ -4675,7 +4738,8 @@ async function handleGenerateTasksClick(){
       activeStageIndex:getExecutionActiveStageIndex(),
       taskCount:Array.isArray(tasks)?tasks.length:S.tasks.length
     });
-    renderOnboardingTaskPreview();obPrepLaunch();toast2('Задачи сгенерированы',`Подготовлено ${S.tasks.length} задач для первого этапа`);obGo(5);
+    toast2('Задачи сгенерированы',`Подготовлено ${S.tasks.length} задач для первого этапа`);
+    return tasks;
   }catch(e){
     logRoadmapPipelineEvent('execution_recovery_failed',{
       roadmapId:S.execution?.id||'',
@@ -4692,14 +4756,28 @@ async function handleGenerateTasksClick(){
       errorMessage:String(e?.message||'')
     });
     toast2('Task generation failed',mapGeminiErrorMessage(e,'tasks'));
+    throw e;
   }finally{
     taskRequestInFlight=false;
-    if(btn) btn.disabled=false;
-    if(loading) loading.style.display='none';
   }
 }
 async function obGenerateTasks(){
   return handleGenerateTasksClick();
+}
+async function runFirstMilestoneTaskFlow(){
+  if(!S.roadmap||taskRequestInFlight)return;
+  showFlowLoading(
+    'Creating tasks for the first milestone',
+    'The execution list is being built from the active milestone before opening Tasks & Goals.',
+    ['Translating milestone intent into tasks.', 'Checking scope against the first execution window.', 'Preparing the task board.']
+  );
+  try{
+    await handleGenerateTasksClick();
+    hideFlowOverlay();
+    obLaunch({startTour:false,page:'work',workTab:'tasks'});
+  }catch(e){
+    hideFlowOverlay();
+  }
 }
 function obFinish(){
   const btn=document.getElementById('ob-launch-btn');
@@ -4727,7 +4805,9 @@ function obLaunch(opts={}){
   try{if(S.roadmap){updDashboard();renderRM();updRoadmapProgress();}}catch(e){}
   try{saveAll();}catch(e){}
   markUserRegistered();
-  gp('dashboard');
+  const targetPage=opts.page||'dashboard';
+  gp(targetPage);
+  if(targetPage==='work') switchWorkTab(opts.workTab||'tasks');
   feedLine(`System initialized for ${S.user.name}.`);
   trackEvent('app_start');
   trackEvent('registration');
@@ -4737,13 +4817,13 @@ function obLaunch(opts={}){
 
 /* ══ PAGE NAV ══ */
 function gp(id){
-  if(id==='chat'){toast2('Removed','AI Coach tab has been removed from the MVP');id='dashboard';}
+  if(id==='chat') id='notes';
   if(id==='analytics'&&!isAdmin()){toast2('Restricted','Analytics is available only to admins');id='dashboard';}
   closeTaskDetail(true);
   const topbarMap={
     dashboard:{eyebrow:'Strategy Hub',title:'Dashboard'},
     work:{eyebrow:'Execution Loop',title:'Tasks & Goals'},
-    notes:{eyebrow:'Knowledge Base',title:'Notes'},
+    notes:{eyebrow:'Daily Loop',title:'AI Chat'},
     roadmap:{eyebrow:'Roadmap Command',title:'Roadmap'},
     analytics:{eyebrow:'Signal Center',title:'Analytics'},
     settings:{eyebrow:'Workspace',title:'Settings'},
@@ -4765,7 +4845,7 @@ function gp(id){
     renderGoals();
     updTaskBadge();
   }
-  if(id==='notes'){renderNoteList();if(!activeNoteId&&(S.notes||[]).length)openNote(S.notes[0].id);}
+  if(id==='notes'){renderChatPage();}
   if(id==='analytics'){renderAnalytics();}
   if(id==='roadmap'){updRoadmapProgress();if(S.roadmap)renderRM();}
   if(id==='billing'){renderBillingBtns();}
@@ -4778,7 +4858,7 @@ function getGuidedTourSteps(){
   const steps=[
     {page:'dashboard',target:'tab-dashboard',title:'Dashboard',body:'This is your operating surface. Daily focus, session state, streak, and execution signal live here.'},
     {page:'work',target:'tab-work',title:'Tasks & Goals',body:'Your daily tasks and milestone goals stay in one place. This is where the plan turns into concrete work.'},
-    {page:'notes',target:'tab-notes',title:'Notes',body:'Capture blockers, decisions, and raw thinking here. Keep the execution context close to the plan.'},
+    {page:'notes',target:'tab-notes',title:'AI Chat',body:'Use this space for daily check-ins, blockers, and quick guidance from the coach.'},
     {page:'roadmap',target:'tab-roadmap',title:'Roadmap',body:'This view now shows the actual roadmap: milestones, sequencing, and the active execution window instead of an activity graph.'},
     {page:'settings',target:'tab-settings',title:'Settings',body:'This area now focuses on account, plan, and system actions for the MVP.'}
   ];
@@ -4870,9 +4950,9 @@ function switchWorkTab(tab){
   // Swap action buttons
   const actions=document.getElementById('work-actions');
   if(tab==='tasks'){
-    actions.innerHTML=`<button class="btn btn-ghost btn-sm" onclick="aiEditTasks()">⚡ AI Cleanup</button><button class="btn btn-primary btn-sm" onclick="focusTaskInput()">+ Add Task</button>`;
+    actions.innerHTML=`<button class="btn btn-primary btn-sm" onclick="focusTaskInput()">+ Add Task</button>`;
   } else {
-    actions.innerHTML=`<button class="btn btn-ghost btn-sm" onclick="aiReviewGoals()">⚡ AI Review</button><button class="btn btn-primary btn-sm" onclick="addGoal()">+ Add Goal</button>`;
+    actions.innerHTML=`<button class="btn btn-primary btn-sm" onclick="addGoal()">+ Add Goal</button>`;
   }
 }
 
@@ -5177,23 +5257,24 @@ function getRoadmapStageCriteria(index){
 }
 function getRoadmapCanvasLayout(total){
   const safeTotal=Math.max(1,Number(total)||0);
-  const leftPad=8;
-  const rightPad=8;
+  const leftPad=10;
+  const rightPad=10;
   const span=100-leftPad-rightPad;
   return Array.from({length:safeTotal},(_,index)=>{
     const t=safeTotal===1?0.5:index/(safeTotal-1);
-    const wave=Math.sin((t*1.7*Math.PI)-(Math.PI/3));
-    const drift=index%2===0?-3.5:3.5;
+    const base=index%2===0?32:68;
+    const micro=index%4===0?-6:index%4===1?3:index%4===2?6:-3;
+    const drift=index%2===0?-2:2;
     return {
       x:Math.max(6,Math.min(94,leftPad+(span*t))),
-      y:Math.max(18,Math.min(82,50+(wave*20)+drift))
+      y:Math.max(14,Math.min(86,base+micro+drift))
     };
   });
 }
-function buildRoadmapPath(points=[]){
+function buildRoadmapPath(points=[],width=1000,height=420){
   if(!points.length) return '';
-  const scaleX=(value)=>Math.round(value*10);
-  const scaleY=(value)=>Math.round(value*4.2);
+  const scaleX=(value)=>Math.round((value/100)*width);
+  const scaleY=(value)=>Math.round((value/100)*height);
   let d=`M ${scaleX(points[0].x)} ${scaleY(points[0].y)}`;
   for(let i=1;i<points.length;i++){
     const prev=points[i-1];
@@ -5203,8 +5284,9 @@ function buildRoadmapPath(points=[]){
     const currX=scaleX(curr.x);
     const currY=scaleY(curr.y);
     const deltaY=currY-prevY;
-    const ctrlOffset=Math.max(42,Math.min(120,Math.abs(currX-prevX)*0.42));
-    d+=` C ${prevX+ctrlOffset} ${prevY+(deltaY<0?-70:70)}, ${currX-ctrlOffset} ${currY+(deltaY>0?70:-70)}, ${currX} ${currY}`;
+    const ctrlOffset=Math.max(64,Math.min(180,Math.abs(currX-prevX)*0.42));
+    const bend=deltaY<0?-100:100;
+    d+=` C ${prevX+ctrlOffset} ${prevY+bend}, ${currX-ctrlOffset} ${currY-bend}, ${currX} ${currY}`;
   }
   return d;
 }
@@ -5392,7 +5474,9 @@ function renderRM(){
   const focusOutcome=getStageOutcomeText(focusedStage||focusedMilestone);
   const focusReasoning=getStageReasoningText(focusedStage||focusedMilestone);
   const layout=getRoadmapCanvasLayout(S.roadmap.length);
-  const pathD=buildRoadmapPath(layout);
+  const canvasWidth=Math.max(1000,Math.round(S.roadmap.length*180));
+  const canvasHeight=420;
+  const pathD=buildRoadmapPath(layout,canvasWidth,canvasHeight);
   const focusSummary=clipText([focusObjective,focusOutcome].filter(Boolean).join(' · ')||'Execution objective not specified yet.',180);
   const focusStageLabel=`Stage ${focusedRoadmapStageIndex+1} of ${S.roadmap.length}`;
   const focusTaskCount=focusTasks.length;
@@ -5415,8 +5499,9 @@ function renderRM(){
           </div>
           <div class="rm-canvas-meta">${timelineMeta}</div>
         </div>
-        <div class="rm-roadmap-canvas-inner">
-          <svg class="rm-roadmap-path" viewBox="0 0 1000 420" preserveAspectRatio="none" aria-hidden="true">
+        <div class="rm-roadmap-canvas-scroll">
+        <div class="rm-roadmap-canvas-inner" style="min-width:${canvasWidth}px;">
+          <svg class="rm-roadmap-path" viewBox="0 0 ${canvasWidth} ${canvasHeight}" preserveAspectRatio="none" aria-hidden="true">
             <defs>
               <linearGradient id="rm-roadmap-line-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
                 <stop offset="0%" stop-color="rgba(143,188,255,0.18)"/>
@@ -5446,6 +5531,7 @@ function renderRM(){
               </button>`;
             }).join('')}
           </div>
+        </div>
         </div>
       </section>
       <aside class="rm-roadmap-focus" id="rm-focus-panel">
@@ -5499,15 +5585,15 @@ function renderChatPage(){
   if(plan==='free'){
     wrap.innerHTML=`<div class="paywall-overlay">
       <div class="paywall-icon">✦</div>
-      <div class="paywall-title">AI Coach</div>
-      <div class="paywall-desc">Get unlimited access to your personal AI execution coach. Ask for tactical advice, roadmap reviews, and strategic guidance — powered by Gemini.</div>
+      <div class="paywall-title">AI Chat</div>
+      <div class="paywall-desc">Get unlimited access to your personal AI execution coach. Use it for daily check-ins, blockers, planning, and quick guidance — powered by Gemini.</div>
       <div class="paywall-features">
         <div class="paywall-feat">Unlimited AI chat sessions</div>
-        <div class="paywall-feat">Tactical roadmap advice</div>
-        <div class="paywall-feat">AI task cleanup &amp; review</div>
-        <div class="paywall-feat">Goal analysis &amp; feedback</div>
+        <div class="paywall-feat">Daily check-ins</div>
         <div class="paywall-feat">Blocker breakthrough prompts</div>
-        <div class="paywall-feat">Weekly performance review</div>
+        <div class="paywall-feat">Quick planning prompts</div>
+        <div class="paywall-feat">Roadmap guidance</div>
+        <div class="paywall-feat">Weekly reflection loops</div>
       </div>
       <div class="paywall-plans">
         <div class="paywall-plan featured">

@@ -424,9 +424,6 @@ button,input,textarea,select{font-family:var(--mono);}
 .btn-sm{padding:5px 10px;font-size:10px;}
 .btn:disabled{opacity:.4;cursor:not-allowed;}
 .btn:active{transform:translateY(1px);}
-.rm-rebuild-wrap{display:flex;flex-direction:column;align-items:flex-end;gap:6px;}
-.rm-rebuild-limit{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
-
 /* CARDS */
 .card{background:var(--surface);border:1px solid var(--border2);}
 
@@ -1250,10 +1247,10 @@ body::after{
   bottom:18px;
   left:18px;
   width:290px;
-  padding:28px 20px 24px;
+  padding:24px 18px 20px;
   display:flex;
   flex-direction:column;
-  gap:22px;
+  gap:18px;
   background:linear-gradient(180deg, rgba(7, 11, 20, .98), rgba(11, 16, 29, .96));
   border-right:1px solid rgba(255,255,255,.04);
   border-top-right-radius:42px;
@@ -1266,8 +1263,8 @@ body::after{
   display:flex;
   align-items:center;
   gap:12px;
-  padding:8px 12px;
-  margin-top:48px;
+  padding:6px 10px;
+  margin-top:42px;
 }
 
 .app-logo-mark{
@@ -1288,22 +1285,23 @@ body::after{
 
 .header-tabs{
   display:grid;
-  gap:8px;
+  gap:10px;
   flex:1;
-  padding-top:6px;
+  padding-top:8px;
   border-left:none;
   overflow:visible;
 }
 
 .htab{
-  min-height:54px;
-  padding:0 18px;
+  min-height:52px;
+  padding:0 16px;
   border-radius:18px;
   justify-content:flex-start;
-  gap:10px;
+  align-items:center;
+  gap:12px;
   text-transform:uppercase;
-  letter-spacing:.12em;
-  font-size:12px;
+  letter-spacing:.1em;
+  font-size:11px;
   font-weight:700;
   color:var(--muted);
   background:transparent;
@@ -1317,20 +1315,23 @@ body::after{
 
 .htab.on{
   color:var(--blue);
-  background:linear-gradient(90deg, rgba(143,188,255,.18), rgba(143,188,255,0));
-  box-shadow:inset 3px 0 0 var(--blue);
+  background:linear-gradient(90deg, rgba(143,188,255,.16), rgba(143,188,255,0));
+  box-shadow:inset 2px 0 0 var(--blue);
 }
 
 .header-right{
   margin-top:auto;
   display:grid;
-  gap:12px;
-  padding-top:4px;
+  gap:10px;
+  padding-top:8px;
 }
 
 .plan-chip{
   justify-self:flex-start;
-  padding:8px 12px;
+  min-height:34px;
+  display:inline-flex;
+  align-items:center;
+  padding:0 12px;
   border-radius:999px;
   background:rgba(255,255,255,.05);
   border:1px solid rgba(255,255,255,.08);
@@ -1339,17 +1340,17 @@ body::after{
 .header-user{
   display:flex;
   align-items:center;
-  gap:12px;
-  padding:14px 16px;
-  border-radius:22px;
+  gap:10px;
+  padding:12px 14px;
+  border-radius:18px;
   background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
   border:1px solid rgba(255,255,255,.06);
   cursor:pointer;
 }
 
 .user-avatar{
-  width:42px;
-  height:42px;
+  width:40px;
+  height:40px;
   border-radius:999px;
   display:grid;
   place-items:center;
@@ -3267,5 +3268,240 @@ select{
   .ob-cta-inline{
     min-width:0;
     width:100%;
+  }
+}
+
+/* ═══ FLOW / ROADMAP / WORK REFRESH OVERRIDES ═══ */
+#app > .app-header .header-tabs{
+  gap:10px;
+}
+
+#app > .app-header .htab{
+  min-height:50px;
+  padding:0 16px;
+  border-radius:18px;
+}
+
+#app > .app-header .header-right{
+  gap:10px;
+}
+
+#app > .app-header .header-user{
+  padding:12px 14px;
+  border-radius:18px;
+}
+
+#app > .app-header .plan-chip{
+  min-height:34px;
+}
+
+.flow-overlay{
+  position:fixed;
+  inset:0;
+  z-index:1200;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  background:rgba(4,8,16,.76);
+  backdrop-filter:blur(18px);
+}
+
+.flow-overlay.on{
+  display:flex;
+}
+
+.flow-card{
+  width:min(560px,100%);
+  min-height:360px;
+  border-radius:32px;
+  padding:28px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:14px;
+  text-align:center;
+  background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03));
+  border:1px solid rgba(255,255,255,.10);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05), 0 30px 90px rgba(0,0,0,.45);
+}
+
+.flow-card.is-prompt{
+  align-items:stretch;
+}
+
+.flow-kicker{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  color:var(--blue-l);
+}
+
+.flow-spinner-wrap{
+  width:110px;
+  height:110px;
+  display:grid;
+  place-items:center;
+  border-radius:999px;
+  background:radial-gradient(circle, rgba(143,188,255,.10), transparent 68%);
+}
+
+.flow-spinner{
+  width:52px;
+  height:52px;
+  border-radius:999px;
+  border:3px solid rgba(255,255,255,.10);
+  border-top-color:var(--blue);
+  border-right-color:rgba(143,188,255,.7);
+  animation:spin .9s linear infinite;
+}
+
+.flow-title{
+  font-family:var(--head);
+  font-size:28px;
+  line-height:1.05;
+  letter-spacing:-.04em;
+  color:var(--ink);
+  text-transform:uppercase;
+}
+
+.flow-copy{
+  max-width:42ch;
+  font-family:var(--sans);
+  font-size:14px;
+  line-height:1.6;
+  color:var(--ink2);
+}
+
+.flow-rotator{
+  min-height:20px;
+  font-family:var(--mono);
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--muted);
+}
+
+.flow-actions{
+  width:100%;
+  display:flex;
+  justify-content:center;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-top:4px;
+}
+
+.flow-actions .btn{
+  min-width:240px;
+}
+
+.rm-roadmap-canvas-scroll{
+  overflow-x:auto;
+  overflow-y:hidden;
+  padding-bottom:8px;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(143,188,255,.34) rgba(255,255,255,.04);
+}
+
+.rm-roadmap-canvas-scroll::-webkit-scrollbar{
+  height:8px;
+}
+
+.rm-roadmap-canvas-scroll::-webkit-scrollbar-track{
+  background:rgba(255,255,255,.04);
+  border-radius:999px;
+}
+
+.rm-roadmap-canvas-scroll::-webkit-scrollbar-thumb{
+  background:rgba(143,188,255,.30);
+  border-radius:999px;
+}
+
+.rm-roadmap-canvas-inner{
+  min-height:430px;
+}
+
+.rm-roadmap-path{
+  width:100%;
+  height:100%;
+}
+
+.rm-roadmap-nodes{
+  overflow:hidden;
+}
+
+#pg-work .goal-card{
+  border-radius:22px;
+}
+
+#pg-work .goal-card-body{
+  padding:12px 14px 10px;
+}
+
+#pg-work .goal-card-title{
+  font-size:13px;
+  margin-bottom:3px;
+}
+
+#pg-work .goal-card-desc{
+  font-size:11px;
+  line-height:1.45;
+  margin-bottom:6px;
+}
+
+#pg-work .goal-card-meta{
+  gap:6px;
+}
+
+#pg-work .goal-card-footer{
+  padding:8px 12px;
+}
+
+#pg-work .goal-pct-in{
+  width:46px;
+}
+
+#pg-work .goal-card-footer .btn{
+  min-width:0;
+}
+
+#pg-work .task-stage-banner{
+  padding:12px 14px;
+  margin:12px 0 10px;
+}
+
+#pg-work .tg-sub-tabs{
+  border-bottom-color:rgba(255,255,255,.06);
+}
+
+#pg-notes .page-head{
+  margin-bottom:14px;
+}
+
+@media (max-width: 900px){
+  .flow-card{
+    min-height:0;
+    padding:24px 18px;
+    border-radius:28px;
+  }
+
+  .flow-title{
+    font-size:24px;
+  }
+
+  .flow-actions .btn{
+    min-width:0;
+    width:100%;
+  }
+
+  #app > .app-header .header-tabs{
+    gap:6px;
+  }
+
+  #app > .app-header .htab{
+    padding:0 12px;
   }
 }
