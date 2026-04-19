@@ -4078,10 +4078,10 @@ async function advanceRoadmapStage(options={}){
       S.execution.updatedAt=nowIso();
       refreshExecutionProgress();
       syncActiveTasksFromExecution();
-      openMilestoneCheckpointForStage(currentIndex,{
-        finalCompleted:true,
-        forceRehydrate:true
-      });
+        openMilestoneCheckpointForStage(currentIndex,{
+          finalCompleted:true,
+          forceRehydrate:true
+        });
       saveTasks();
       saveAll();
       updDashboard();
@@ -4130,10 +4130,11 @@ async function advanceRoadmapStage(options={}){
         title:String(nextStage?.title||`Stage ${nextIndex+1}`)
       });
       toast2('Milestone completed',`${currentStage.title||`Stage ${currentIndex+1}`} is complete. Next: ${nextStage?.title||`Stage ${nextIndex+1}`}`);
-      openMilestoneCheckpointForStage(currentIndex,{
-        nextStageIndex:nextIndex,
-        forceRehydrate:true
-      });
+        openMilestoneCheckpointForStage(currentIndex,{
+          nextStageIndex:nextIndex,
+          deferRender:shouldDeferMilestoneCheckpointPresentation(),
+          forceRehydrate:true
+        });
       saveTasks();
       saveAll();
       updDashboard();
@@ -4217,7 +4218,9 @@ function openMilestoneCheckpointForStage(completedStageIndex,options={}){
   };
   setExecutionPendingMilestoneCheckpoint(pendingCheckpoint);
   if(options.forceRehydrate!==false) saveAll();
-  renderMilestoneCheckpoint();
+  if(options.deferRender!==true){
+    renderMilestoneCheckpoint();
+  }
   return milestoneCheckpointState;
 }
 function rehydrateMilestoneCheckpointState(){
@@ -4253,10 +4256,28 @@ function clearMilestoneCheckpointState(options={}){
   const overlay=document.getElementById('milestone-checkpoint-overlay');
   if(overlay) overlay.classList.remove('on');
 }
+function shouldDeferMilestoneCheckpointPresentation(){
+  const session=getExecutionSession();
+  return Boolean(session&&(
+    session.status==='running'
+    || isSessionReviewOpen()
+    || sessionOverlayMode==='setup'
+  ));
+}
+function presentMilestoneCheckpointIfReady(){
+  if(!milestoneCheckpointState) return null;
+  if(shouldDeferMilestoneCheckpointPresentation()) return milestoneCheckpointState;
+  renderMilestoneCheckpoint();
+  return milestoneCheckpointState;
+}
 function renderMilestoneCheckpoint(){
   rehydrateMilestoneCheckpointState();
   const overlay=document.getElementById('milestone-checkpoint-overlay');
   if(!overlay){
+    return;
+  }
+  if(shouldDeferMilestoneCheckpointPresentation()){
+    overlay.classList.remove('on');
     return;
   }
   if(!milestoneCheckpointState){
@@ -4296,9 +4317,12 @@ function renderMilestoneCheckpoint(){
 async function generateTasksForNextMilestone(){
   ensureExecutionState();
   if(!milestoneCheckpointState) return [];
+  if(milestoneCheckpointGenerationInFlight) return [];
+  milestoneCheckpointGenerationInFlight=true;
   if(milestoneCheckpointState.finalCompleted){
     clearMilestoneCheckpointState({resolved:true});
     toast2('Roadmap complete','No next milestone is available.');
+    milestoneCheckpointGenerationInFlight=false;
     return [];
   }
   const stageIndex=Number(milestoneCheckpointState.nextStageIndex);
@@ -4306,36 +4330,65 @@ async function generateTasksForNextMilestone(){
   if(!stage){
     clearMilestoneCheckpointState({resolved:true});
     toast2('Roadmap complete','No next milestone is available.');
+    milestoneCheckpointGenerationInFlight=false;
     return [];
   }
-  milestoneCheckpointState.taskGenerationStarted=true;
-  renderMilestoneCheckpoint();
+  const checkpointSnapshot=JSON.parse(JSON.stringify(milestoneCheckpointState));
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
     function:'execution_flow',
-    action:'next_milestone_task_generation_started',
-    stageIndex,
-    stageId:stage.id,
-    title:stage.title||`Stage ${stageIndex+1}`
+    action:'milestone_checkpoint_create_tasks_clicked',
+    completedStageIndex:Number(checkpointSnapshot.completedStageIndex),
+    nextStageIndex:stageIndex,
+    nextStageId:stage.id,
+    nextStageTitle:stage.title||`Stage ${stageIndex+1}`
   });
-  const generated=await initializeTasksForActiveStage({force:true,silentFallback:false,reason:'next_milestone_checkpoint'});
-  logInfo({
-    area:'frontend',
-    module:'frontend/script.js',
-    function:'execution_flow',
-    action:'next_milestone_task_preview_ready',
-    stageIndex,
-    stageId:stage.id,
-    taskCount:Array.isArray(generated)?generated.length:0
-  });
-  clearMilestoneCheckpointState({resolved:true});
-  renderTasks();
-  renderSessionWorkspace();
-  renderSessionOverlay();
-  if(S.roadmap) refreshRoadmapSelectionViews();
-  showTaskPreviewPrompt({stageIndex,regenerated:false});
-  return generated;
+  clearMilestoneCheckpointState({persist:false});
+  hideFlowOverlay();
+  showFlowLoading(
+    'Preparing next milestone',
+    'Generating tasks for the newly completed milestone and opening the same preview flow used at startup.',
+    ['Loading milestone scope.', 'Building AI tasks for the next milestone.', 'Preparing the preview and review screen.']
+  );
+  try{
+    logInfo({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'execution_flow',
+      action:'next_milestone_task_generation_started',
+      stageIndex,
+      stageId:stage.id,
+      title:stage.title||`Stage ${stageIndex+1}`
+    });
+    const generated=await handleGenerateTasksClick({
+      force:true,
+      skipPreview:false,
+      reason:'next_milestone_checkpoint'
+    });
+    logInfo({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'execution_flow',
+      action:'next_milestone_task_preview_ready',
+      stageIndex,
+      stageId:stage.id,
+      taskCount:Array.isArray(generated)?generated.length:0
+    });
+    clearMilestoneCheckpointState({resolved:true});
+    hideFlowOverlay();
+    return generated;
+  }catch(error){
+    openMilestoneCheckpointForStage(checkpointSnapshot.completedStageIndex,{
+      nextStageIndex:stageIndex,
+      forceRehydrate:true
+    });
+    hideFlowOverlay();
+    toast2('Task generation failed',mapGeminiErrorMessage(error,'tasks'));
+    throw error;
+  }finally{
+    milestoneCheckpointGenerationInFlight=false;
+  }
 }
 async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx='',opts={},action='chat'){
   const callOpts={
@@ -7561,6 +7614,7 @@ let taskFilter='all',aiTasksDraft=null,activeTaskDetailId=null,taskDetailEscBoun
 let taskCalendarMonthAnchor=null,taskCalendarSelectedDate='',taskCalendarSelectedTaskId=null;
 let sessionOverlayMode='';
 let milestoneCheckpointState=null;
+let milestoneCheckpointGenerationInFlight=false;
 let isApplyingReview=false;
 let sessionReviewSubmitError='';
 function setSessionReviewSubmitState(isBusy,errorMessage=''){
@@ -8249,6 +8303,7 @@ function completeSessionTask(taskId){
   renderTasks();
   renderSessionWorkspace();
   renderSessionOverlay();
+  presentMilestoneCheckpointIfReady();
   updTaskBadge();
   updMilestoneBar();
   updRoadmapProgress();
