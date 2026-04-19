@@ -376,8 +376,7 @@ function parseStages(text){
       }
       return parts[0]||null;
     })
-    .filter(Boolean)
-    .slice(0,ROADMAP_MAX_STAGES);
+    .filter(Boolean);
 }
 function normalizeTaskContractValue(value,maxLen=220){
   return clipText(String(value||'').replace(/\s+/g,' ').trim(),maxLen);
@@ -492,14 +491,46 @@ function parseTaskDetailContract(raw){
   if(!parsed.priority) parsed.priority='med';
   return parsed;
 }
-const ROADMAP_MIN_STAGES=3;
-const ROADMAP_MAX_STAGES=7;
 const ROADMAP_DEFAULT_MAX_TOKENS = 1700;
 const TASKS_DEFAULT_MAX_TOKENS = 1000;
 const TASK_SKELETON_DEFAULT_MAX_TOKENS = 500;
 const TASK_DETAIL_DEFAULT_MAX_TOKENS = 1000;
 const ROADMAP_SKELETON_MAX_TOKENS = 1600;
 const ACTIVE_STAGE_ENRICH_MAX_TOKENS = 180;
+function resolveRoadmapStageCountHint(options={},fallback=1){
+  const fromOptions=Number(options?.stageCount);
+  if(Number.isFinite(fromOptions)&&fromOptions>0) return Math.max(1,Math.floor(fromOptions));
+  const fromExecution=Array.isArray(S?.execution?.stages)?S.execution.stages.length:0;
+  if(fromExecution>0) return fromExecution;
+  const fromRoadmap=Array.isArray(S?.roadmap)?S.roadmap.length:0;
+  if(fromRoadmap>0) return fromRoadmap;
+  const fallbackCount=Number(fallback);
+  return Number.isFinite(fallbackCount)&&fallbackCount>0?Math.max(1,Math.floor(fallbackCount)):1;
+}
+function estimateFallbackRoadmapStageCount(context={}){
+  const ctx=context?.context||context||buildRoadmapOnboardingContext();
+  const deadlineDays=getRoadmapDeadlineDays(ctx?.deadline||S?.user?.deadline||'');
+  const signals=[
+    ctx?.project_name,
+    ctx?.primary_goal,
+    ctx?.current_stage,
+    ctx?.built_status,
+    ctx?.niche,
+    ctx?.target_audience,
+    ctx?.execution_style,
+    ctx?.resources,
+    ctx?.blocker,
+    ctx?.daily_hours
+  ].filter(Boolean).length;
+  const deadlineBias=
+    deadlineDays<=7?2:
+    deadlineDays<=14?3:
+    deadlineDays<=21?4:
+    deadlineDays<=35?5:
+    6;
+  const complexityBias=Math.max(0,Math.ceil(signals/3));
+  return Math.max(2,deadlineBias+complexityBias);
+}
 const MVP_STAGE_DETAILS_DEFAULTS=Object.freeze({
   whyThisStageMatters:'This stage moves the project toward the current goal.',
   completionCriteria:[
@@ -832,17 +863,6 @@ function getRoadmapWindowDays(deadline){
 function getRoadmapDeadlineDays(deadline){
   return Math.max(1,getRoadmapWindowDays(deadline));
 }
-function getDesiredRoadmapStageCount(deadline,sourceLength=0){
-  const days=getRoadmapDeadlineDays(deadline);
-  let target=3;
-  if(days<=14) target=3;
-  else if(days<=21) target=4;
-  else if(days<=28) target=5;
-  else if(days<=35) target=6;
-  else target=7;
-  const sourceCount=Math.max(0,Number(sourceLength)||0);
-  return Math.max(target,Math.min(ROADMAP_MAX_STAGES,sourceCount||target));
-}
 function getTargetTaskCountForStage(stageIndex,stageCount,deadline){
   const days=getRoadmapDeadlineDays(deadline);
   const safeStageCount=Math.max(1,Number(stageCount)||1);
@@ -890,10 +910,38 @@ function spreadDatesBetween(startDate,endDate,count){
   }
   return out;
 }
+function clampIsoDateToWindow(value,startDate='',endDate=''){
+  const normalized=toIsoDateOnly(value);
+  const start=toIsoDateOnly(startDate);
+  const end=toIsoDateOnly(endDate);
+  if(!normalized){
+    if(start) return start;
+    if(end) return end;
+    return '';
+  }
+  let time=new Date(`${normalized}T00:00:00`).getTime();
+  if(start){
+    const startTime=new Date(`${start}T00:00:00`).getTime();
+    if(Number.isFinite(startTime)&&time<startTime) time=startTime;
+  }
+  if(end){
+    const endTime=new Date(`${end}T00:00:00`).getTime();
+    if(Number.isFinite(endTime)&&time>endTime) time=endTime;
+  }
+  return toDateInputValue(new Date(time));
+}
 function buildTaskDeadlinePlan({stageStartDate='',stageTargetDate='',deadline='',taskCount=1}={}){
-  const fallbackStart=toDateInputValueSafe(stageStartDate)||toDateInputValueSafe(new Date());
-  const fallbackEnd=toDateInputValueSafe(stageTargetDate)||toDateInputValueSafe(deadline);
-  return spreadDatesBetween(fallbackStart,fallbackEnd,Math.max(1,Number(taskCount)||1));
+  const total=Math.max(1,Number(taskCount)||1);
+  const today=toDateInputValue(new Date());
+  const rawStart=toIsoDateOnly(stageStartDate)||today;
+  const rawEnd=toIsoDateOnly(stageTargetDate)||toIsoDateOnly(deadline)||addDaysToDateInput(rawStart,Math.max(total,3));
+  const effectiveStart=clampIsoDateToWindow(rawStart,today,rawEnd)||today;
+  let effectiveEnd=clampIsoDateToWindow(rawEnd,effectiveStart,rawEnd)||rawEnd||effectiveStart;
+  if(!effectiveEnd||effectiveEnd<=effectiveStart){
+    effectiveEnd=addDaysToDateInput(effectiveStart,Math.max(total,3));
+  }
+  const planned=spreadDatesBetween(effectiveStart,effectiveEnd,total);
+  return planned.map((date)=>clampIsoDateToWindow(date,effectiveStart,effectiveEnd)||effectiveEnd);
 }
 function phaseDayLabels(totalDays,count){
   const labels=[];
@@ -942,7 +990,7 @@ function fallbackRoadmapForMvp(count){
   const project=clipText((S?.user?.project||S?.user?.idea||''),70)||'проект';
   const goal=clipText((S?.user?.goal||''),70)||'ключевой цели';
   const horizonDays=getRoadmapDeadlineDays(S?.user?.deadline);
-  const targetCount=Math.max(3,Math.min(ROADMAP_MAX_STAGES,Number(count)||getDesiredRoadmapStageCount(S?.user?.deadline)));
+  const targetCount=Math.max(3,Number(count)||estimateFallbackRoadmapStageCount({context:buildRoadmapOnboardingContext()}));
   const targetDates=spreadDatesBetween(new Date(),S?.user?.deadline||addDaysToDateInput(toDateInputValue(new Date()),targetCount*4),targetCount);
   const templates=[
     {
@@ -1042,11 +1090,20 @@ function normalizeBetaRoadmap(raw){
       : Array.isArray(raw?.phases)
         ? raw.phases
         : (raw&&typeof raw==='object'?[raw]:[]);
-  const targetCount=getDesiredRoadmapStageCount(S?.user?.deadline,source.length||0);
+  const targetCount=Math.max(3,source.length||estimateFallbackRoadmapStageCount({context:buildRoadmapOnboardingContext()}));
   const base=fallbackRoadmapForMvp(targetCount);
   const activeWindow=getRoadmapDeadlineDays(S?.user?.deadline);
   const phaseFallbackTasks=base[0]?.days?.map((d)=>d.task)||[];
   const fallbackFlags=[];
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'normalizeBetaRoadmap',
+    action:'roadmap_count_resolved',
+    sourceStageCount:source.length,
+    fallbackStageCount:base.length,
+    normalizedStageCount:targetCount
+  });
   const normalized=Array.from({length:targetCount},(_,index)=>{
     const candidate=source[index]||{};
     const rawTitle=clipText(candidate?.title||'',80);
@@ -1110,12 +1167,95 @@ function normalizeTaskPriority(value){
   if(raw==='medium') return 'med';
   return 'med';
 }
+function getTaskPriorityWeight(task){
+  const priority=normalizeTaskPriority(task?.priority||task?.prio);
+  if(priority==='high') return 30;
+  if(priority==='med') return 20;
+  return 10;
+}
 function normalizeTaskDeadlineValue(value){
   const raw=String(value||'').trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(raw)?raw:'';
 }
+function normalizeTaskDeadlineValueInWindow(value,options={}){
+  const parsed=normalizeTaskDeadlineValue(value);
+  if(!parsed) return '';
+  return clampIsoDateToWindow(parsed,options.stageStartDate||'',options.stageTargetDate||options.deadline||'');
+}
+function getMilestonePalette(index,total=0){
+  const palette=[
+    {accent:'#8FB7FF', tint:'rgba(143,183,255,.12)', border:'rgba(143,183,255,.24)', glow:'rgba(143,183,255,.16)'},
+    {accent:'#83E4D0', tint:'rgba(131,228,208,.12)', border:'rgba(131,228,208,.22)', glow:'rgba(131,228,208,.14)'},
+    {accent:'#F3C66C', tint:'rgba(243,198,108,.11)', border:'rgba(243,198,108,.22)', glow:'rgba(243,198,108,.14)'},
+    {accent:'#C2A6FF', tint:'rgba(194,166,255,.11)', border:'rgba(194,166,255,.22)', glow:'rgba(194,166,255,.14)'},
+    {accent:'#F59FB2', tint:'rgba(245,159,178,.11)', border:'rgba(245,159,178,.22)', glow:'rgba(245,159,178,.14)'},
+    {accent:'#9BE19E', tint:'rgba(155,225,158,.11)', border:'rgba(155,225,158,.22)', glow:'rgba(155,225,158,.14)'},
+    {accent:'#7FD4F9', tint:'rgba(127,212,249,.11)', border:'rgba(127,212,249,.22)', glow:'rgba(127,212,249,.14)'}
+  ];
+  const safeIndex=Number.isFinite(Number(index))?Math.max(0,Number(index)):0;
+  return palette[safeIndex%palette.length];
+}
+function getMilestoneVisualMeta(stageIndex,total=getExecutionStages().length||S.roadmap?.length||1){
+  const stage=getExecutionStage(stageIndex)||S.roadmap?.[stageIndex]||{};
+  const palette=getMilestonePalette(stageIndex,total);
+  const startDate=toIsoDateOnly(stage?.startDate||stage?.start_date||'')||'';
+  const targetDate=toIsoDateOnly(stage?.targetDate||stage?.target_date||'')||'';
+  return {
+    stageIndex,
+    stageId:String(stage?.id||''),
+    title:String(stage?.title||`Stage ${stageIndex+1}`),
+    label:`M${stageIndex+1}`,
+    startDate,
+    targetDate,
+    rangeLabel:[startDate,targetDate].filter(Boolean).join(' → ')||'Window not set',
+    ...palette
+  };
+}
+function getCalendarMilestoneIndexForDate(dateKey){
+  const day=normalizeTaskCalendarDate(dateKey);
+  if(!day) return -1;
+  const dateTime=new Date(`${day}T00:00:00`).getTime();
+  if(!Number.isFinite(dateTime)) return -1;
+  const stages=getExecutionStages().length?getExecutionStages():(Array.isArray(S.roadmap)?S.roadmap:[]);
+  let matchIndex=-1;
+  stages.forEach((stage,idx)=>{
+    const start=toIsoDateOnly(stage?.startDate||stage?.start_date||'');
+    const end=toIsoDateOnly(stage?.targetDate||stage?.target_date||'');
+    const startTime=start?new Date(`${start}T00:00:00`).getTime():NaN;
+    const endTime=end?new Date(`${end}T00:00:00`).getTime():NaN;
+    if(Number.isFinite(startTime)&&Number.isFinite(endTime)&&dateTime>=startTime&&dateTime<=endTime){
+      matchIndex=idx;
+    }
+  });
+  return matchIndex;
+}
+function getMilestoneVisualMetaForDate(dateKey){
+  const stageIndex=getCalendarMilestoneIndexForDate(dateKey);
+  if(stageIndex<0) return null;
+  return getMilestoneVisualMeta(stageIndex);
+}
 function getTaskTitle(task){
   return clipText(task?.title||task?.text||'Задача',80)||'Задача';
+}
+function decorateTaskWithMilestoneMeta(task){
+  if(!task) return task;
+  const stageIndex=Number.isFinite(Number(task?.linkedStageIndex))
+    ? Math.max(0,Number(task.linkedStageIndex))
+    : Math.max(0,(Number(task?.linkedStage)||1)-1);
+  const meta=getMilestoneVisualMeta(stageIndex,getExecutionStages().length||S.roadmap?.length||1);
+  return {
+    ...task,
+    milestoneId:String(task?.milestoneId||meta.stageId||''),
+    milestoneIndex:stageIndex,
+    milestoneTitle:String(task?.milestoneTitle||meta.title||`Stage ${stageIndex+1}`),
+    milestoneLabel:String(task?.milestoneLabel||meta.label||`M${stageIndex+1}`),
+    milestoneColor:String(task?.milestoneColor||meta.accent||''),
+    milestoneTint:String(task?.milestoneTint||meta.tint||''),
+    milestoneBorder:String(task?.milestoneBorder||meta.border||''),
+    milestoneGlow:String(task?.milestoneGlow||meta.glow||''),
+    milestoneStartDate:String(task?.milestoneStartDate||meta.startDate||''),
+    milestoneTargetDate:String(task?.milestoneTargetDate||meta.targetDate||'')
+  };
 }
 function getTaskSupportLine(task){
   return clipText(task?.deliverable||task?.description||task?.doneDefinition||task?.whyItMatters||'',140);
@@ -1258,11 +1398,16 @@ function fallbackFounderTaskBlueprints({goal='',stageObjective='',deadline='',st
 function normalizeFounderTask(raw,options={}){
   const stageObjective=clipText(options.stageObjective||raw?.stageObjective||'',150);
   const stageIndex=Number.isFinite(Number(raw?.linked_stage??raw?.linkedStage))?Number(raw?.linked_stage??raw?.linkedStage):Number(options.stageIndex||0);
+  const stageCount=resolveRoadmapStageCountHint(options,stageIndex+1);
   const stageLabel=clipText(options.stageTitle||'',40)||'Stage 1';
   const title=getTaskTitle(raw);
   const deadlinePlan=Array.isArray(options.deadlinePlan)?options.deadlinePlan:[];
   const taskIndex=Number.isFinite(Number(options.taskIndex))?Number(options.taskIndex):0;
   const plannedDeadline=deadlinePlan[taskIndex]||deadlinePlan[deadlinePlan.length-1]||'';
+  const windowStart=options.stageStartDate||'';
+  const windowEnd=options.stageTargetDate||options.deadline||'';
+  const rawDeadline=normalizeTaskDeadlineValueInWindow(raw?.deadline,{stageStartDate:windowStart,stageTargetDate:windowEnd});
+  const fallbackDeadline=normalizeTaskDeadlineValueInWindow(plannedDeadline,{stageStartDate:windowStart,stageTargetDate:windowEnd});
   const normalized={
     id:Number(raw?.id)||0,
     title,
@@ -1272,8 +1417,8 @@ function normalizeFounderTask(raw,options={}){
     deliverable:clipText(raw?.deliverable||'',200),
     doneDefinition:clipText(raw?.done_definition||raw?.doneDefinition||'',200),
     prio:normalizeTaskPriority(raw?.priority??raw?.prio),
-    deadline:normalizeTaskDeadlineValue(raw?.deadline)||plannedDeadline,
-    linkedStage:Math.max(1,Math.min(ROADMAP_MAX_STAGES,stageIndex+1)),
+    deadline:rawDeadline||fallbackDeadline||clampIsoDateToWindow(windowEnd,windowStart,windowEnd)||'',
+    linkedStage:Math.max(1,Math.min(stageCount,stageIndex+1)),
     stageObjective:stageObjective||clipText(raw?.objective||'',150),
     done:Boolean(raw?.done),
     created:String(raw?.created||new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short'})).trim()
@@ -1311,7 +1456,7 @@ function buildLocalTaskDetailFallback(taskSkeleton,stage,options={}){
     deliverable:`Проверяемый результат задачи "${taskTitle}".`,
     doneDefinition:`Задача завершена, результат зафиксирован, этап ${stageTitle} продвинут.`,
     priority:'med',
-    deadline:normalizeTaskDeadlineValue(taskSkeleton?.deadline)||deadlinePlan[0]||options.stageTargetDate||options.deadline||S.user.deadline||'',
+    deadline:normalizeTaskDeadlineValueInWindow(taskSkeleton?.deadline,{stageStartDate:options.stageStartDate||'',stageTargetDate:options.stageTargetDate||options.deadline||S.user.deadline||''})||deadlinePlan[0]||options.stageTargetDate||options.deadline||S.user.deadline||'',
     linkedStage:Number(options.stageIndex||0)+1,
     stageObjective,
     stageOutcome
@@ -1319,7 +1464,7 @@ function buildLocalTaskDetailFallback(taskSkeleton,stage,options={}){
     stageObjective,
     stageTitle,
     stageIndex:Number(options.stageIndex||0),
-    deadline:options.deadline||S.user.deadline||'',
+    deadline:options.stageTargetDate||options.deadline||S.user.deadline||'',
     stageStartDate:options.stageStartDate||'',
     stageTargetDate:options.stageTargetDate||'',
     taskIndex:Number(options.taskIndex||0),
@@ -1337,23 +1482,37 @@ function normalizeFounderTasks(raw,options={}){
   const stageTitle=clipText(options.stageTitle||'',40)||'Stage 1';
   const targetCount=Math.max(1,Number(options.targetCount)||5);
   const allowBlueprintFallback=options.allowBlueprintFallback!==false;
+  const stageWindowStart=options.stageStartDate||'';
+  const stageWindowEnd=options.stageTargetDate||options.deadline||S?.user?.deadline||'';
   const fallback=fallbackFounderTaskBlueprints({
     goal:S?.user?.goal||'',
     stageObjective,
-    deadline:options.deadline||S?.user?.deadline||'',
+    deadline:stageWindowEnd,
     stageLabel:stageTitle
   });
   const seen=new Set();
   const out=[];
-  const deadlinePlan=buildTaskDeadlinePlan({
-    stageStartDate:options.stageStartDate||'',
-    stageTargetDate:options.stageTargetDate||'',
-    deadline:options.deadline||S?.user?.deadline||'',
-    taskCount:targetCount
+  const deadlinePlan=Array.isArray(options.deadlinePlan)&&options.deadlinePlan.length
+    ? options.deadlinePlan
+    : buildTaskDeadlinePlan({
+      stageStartDate:stageWindowStart,
+      stageTargetDate:stageWindowEnd,
+      deadline:stageWindowEnd,
+      taskCount:targetCount
+    });
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'normalizeFounderTasks',
+    action:'task_normalization_started',
+    inputCount:source.length,
+    targetCount,
+    stageTitle,
+    stageObjective
   });
   source.forEach((item,index)=>{
     if(out.length>=targetCount) return;
-    const normalized=normalizeFounderTask(item,{...options,stageObjective,stageTitle,taskIndex:index,deadlinePlan});
+    const normalized=normalizeFounderTask(item,{...options,stageObjective,stageTitle,taskIndex:index,deadlinePlan,stageStartDate:stageWindowStart,stageTargetDate:stageWindowEnd,deadline:stageWindowEnd});
     const key=normalized.title.toLowerCase();
     if(seen.has(key)) return;
     seen.add(key);
@@ -1362,13 +1521,23 @@ function normalizeFounderTasks(raw,options={}){
   if(!allowBlueprintFallback) return out.slice(0,targetCount);
   let fallbackIndex=0;
   while(out.length<targetCount){
-    const candidate=normalizeFounderTask(fallback[fallbackIndex%fallback.length],{...options,stageObjective,stageTitle,taskIndex:out.length,deadlinePlan});
+    const candidate=normalizeFounderTask(fallback[fallbackIndex%fallback.length],{...options,stageObjective,stageTitle,taskIndex:out.length,deadlinePlan,stageStartDate:stageWindowStart,stageTargetDate:stageWindowEnd,deadline:stageWindowEnd});
     fallbackIndex+=1;
     const key=candidate.title.toLowerCase();
     if(seen.has(key)) continue;
     seen.add(key);
     out.push(candidate);
   }
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'normalizeFounderTasks',
+    action:'task_normalization_completed',
+    outputCount:out.length,
+    taskIds:out.map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id)),
+    priorities:out.map((task)=>String(task.priority||task.prio||'')),
+    hasPriorityWeight:out.map((task)=>Boolean(task.priorityWeight))
+  });
   return out.slice(0,targetCount);
 }
 function fallbackTasksForMvp(options={}){
@@ -1379,11 +1548,22 @@ function normalizeBetaTasks(raw,options={}){
 }
 function normalizeTaskCollection(raw,options={}){
   const source=Array.isArray(raw)?raw:[];
+  const stageCount=resolveRoadmapStageCountHint(options,source.length||1);
   const normalizedStageIndex=Number.isFinite(Number(options.stageIndex))
-    ? Math.max(0,Math.min(ROADMAP_MAX_STAGES-1,Number(options.stageIndex)))
+    ? Math.max(0,Math.min(stageCount-1,Number(options.stageIndex)))
     : 0;
   const baseId=Date.now();
   const usedIds=new Set();
+  const stageStartDate=options.stageStartDate||'';
+  const stageTargetDate=options.stageTargetDate||options.deadline||'';
+  const deadlinePlan=Array.isArray(options.deadlinePlan)&&options.deadlinePlan.length
+    ? options.deadlinePlan
+    : buildTaskDeadlinePlan({
+      stageStartDate,
+      stageTargetDate,
+      deadline:stageTargetDate,
+      taskCount:Math.max(1,source.length||1)
+    });
   return source.map((item,index)=>{
     const rawId=Number(item?.id);
     let id=Number.isFinite(rawId)&&rawId>0?rawId:(baseId+index);
@@ -1391,17 +1571,20 @@ function normalizeTaskCollection(raw,options={}){
     usedIds.add(id);
     const rawLinkedStage=Number(item?.linkedStage??item?.linked_stage);
     const stageIndex=Number.isFinite(rawLinkedStage)
-      ? Math.max(0,Math.min(ROADMAP_MAX_STAGES-1,rawLinkedStage-1))
+      ? Math.max(0,Math.min(stageCount-1,rawLinkedStage-1))
       : normalizedStageIndex;
     const normalized=normalizeFounderTask(
       {
-        ...item,
-        id,
-        done:Boolean(item?.done)
-      },
+      ...item,
+      id,
+      done:Boolean(item?.done)
+    },
       {
         ...options,
-        stageIndex
+        stageIndex,
+        stageStartDate,
+        stageTargetDate,
+        deadlinePlan
       }
     );
     const created=String(
@@ -1415,7 +1598,7 @@ function normalizeTaskCollection(raw,options={}){
       text:getTaskTitle(normalized),
       done:Boolean(item?.done),
       created,
-      linkedStage:Math.max(1,Math.min(ROADMAP_MAX_STAGES,Number(normalized.linkedStage)||stageIndex+1))
+      linkedStage:Math.max(1,Math.min(stageCount,Number(normalized.linkedStage)||stageIndex+1))
     };
   });
 }
@@ -1467,14 +1650,23 @@ function resolvePhaseCompletionCriteria(phase){
   return normalizeCompletionCriteria(phase?.days||[],phase?.objective||'');
 }
 function normalizeExecutionTask(task,stage){
+  const stageIndex=Math.max(0,(stage?.index||1)-1);
+  const milestoneMeta=getMilestoneVisualMeta(stageIndex,getExecutionStages().length||S.roadmap?.length||1);
   const safe=normalizeFounderTask(task,{
-    stageIndex:Math.max(0,(stage?.index||1)-1),
+    stageIndex,
     stageTitle:stage?.title||'Stage 1',
     stageObjective:stage?.objective||'',
-    deadline:S.user.deadline||''
+    deadline:stage?.targetDate||S.user.deadline||'',
+    stageStartDate:stage?.startDate||'',
+    stageTargetDate:stage?.targetDate||S.user.deadline||'',
+    deadlinePlan:Array.isArray(task?.deadlinePlan)?task.deadlinePlan:[],
+    taskIndex:Number.isFinite(Number(task?.taskIndex))?Number(task.taskIndex):0
   });
   const isDone=Boolean(task?.done)||String(task?.status||'')==='done';
-  const status=isDone?'done':String(task?.status||'active');
+  const rawStatus=String(task?.status||'active');
+  const status=rawStatus==='done'||rawStatus==='blocked'||rawStatus==='archived'
+    ? rawStatus
+    : (isDone?'done':'active');
   return {
     id:Number(task?.id)||nextExecutionTaskId(),
     roadmapId:String(task?.roadmapId||S.execution?.id||''),
@@ -1490,16 +1682,421 @@ function normalizeExecutionTask(task,stage){
     done_definition:clipText(task?.doneDefinition||task?.done_definition||safe.doneDefinition||'',200),
     priority:normalizeTaskPriority(task?.priority??task?.prio??safe.prio),
     prio:normalizeTaskPriority(task?.priority??task?.prio??safe.prio),
-    deadline:normalizeTaskDeadlineValue(task?.deadline||safe.deadline||''),
-    status:status==='archived'?'archived':(status==='done'?'done':'active'),
+    deadline:normalizeTaskDeadlineValueInWindow(task?.deadline||safe.deadline||'',{
+      stageStartDate:stage?.startDate||'',
+      stageTargetDate:stage?.targetDate||S.user.deadline||''
+    }),
+    status:status==='archived'
+      ? 'archived'
+      : (status==='done'?'done':(status==='blocked'?'blocked':'active')),
     done:isDone,
     createdAt:String(task?.createdAt||nowIso()),
     completedAt:isDone?String(task?.completedAt||nowIso()):'',
     created:String(task?.created||new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short'})).trim(),
     stageTitle:stage?.title||'',
     stageObjective:stage?.objective||'',
-    linked_stage:Math.max(1,(Number(task?.linkedStageIndex)||Math.max(0,(stage?.index||1)-1))+1)
+    linked_stage:Math.max(1,(Number(task?.linkedStageIndex)||stageIndex)+1),
+    milestoneId:String(stage?.id||''),
+    milestoneIndex:stageIndex,
+    milestoneTitle:String(stage?.title||`Stage ${stageIndex+1}`),
+    milestoneLabel:milestoneMeta.label,
+    milestoneColor:milestoneMeta.accent,
+    milestoneTint:milestoneMeta.tint,
+    milestoneBorder:milestoneMeta.border,
+    milestoneGlow:milestoneMeta.glow,
+    milestoneStartDate:milestoneMeta.startDate,
+    milestoneTargetDate:milestoneMeta.targetDate
   };
+}
+const SESSION_STATUSES=new Set(['planned','running','completed','interrupted','blocked']);
+function createExecutionSessionTemplate(partial={}){
+  const baseTaskIds=Array.isArray(partial.taskIds)
+    ? partial.taskIds
+    : Array.isArray(partial.selectedTaskIds)
+      ? partial.selectedTaskIds
+      : [];
+  const baseline=partial.baseline&&typeof partial.baseline==='object'
+    ? partial.baseline
+    : {
+        stageDone:0,
+        stageTotal:0,
+        overallDone:0,
+        overallTotal:0,
+        stageProgress:0,
+        overallProgress:0
+      };
+  const review=partial.review&&typeof partial.review==='object'
+    ? partial.review
+    : {};
+  return {
+    id:String(partial.id||createClientRequestId('session')),
+    stageId:String(partial.stageId||''),
+    taskIds:Array.from(new Set(baseTaskIds.map((taskId)=>Number(taskId)).filter((taskId)=>Number.isFinite(taskId)))).slice(0,3),
+    goal:String(partial.goal||''),
+    startedAt:String(partial.startedAt||''),
+    endedAt:String(partial.endedAt||''),
+    status:SESSION_STATUSES.has(String(partial.status||'planned'))?String(partial.status||'planned'):'planned',
+    review:normalizeExecutionSessionReview(review),
+    progressDelta:normalizeSessionProgressDelta(partial.progressDelta),
+    notes:String(partial.notes||''),
+    outcomeSummary:String(partial.outcomeSummary||''),
+    baseline:{
+      stageDone:Number(baseline.stageDone||0),
+      stageTotal:Number(baseline.stageTotal||0),
+      overallDone:Number(baseline.overallDone||0),
+      overallTotal:Number(baseline.overallTotal||0),
+      stageProgress:Number(baseline.stageProgress||0),
+      overallProgress:Number(baseline.overallProgress||0)
+    },
+    reviewOpenedAt:String(partial.reviewOpenedAt||''),
+    reviewAppliedAt:String(partial.reviewAppliedAt||'')
+  };
+}
+function normalizeExecutionSessionReview(raw={}){
+  const safe=raw&&typeof raw==='object'?raw:{};
+  return {
+    openedAt:String(safe.openedAt||''),
+    appliedAt:String(safe.appliedAt||''),
+    summary:String(safe.summary||''),
+    blockers:String(safe.blockers||''),
+    notes:String(safe.notes||''),
+    outcome:String(safe.outcome||''),
+    nextSteps:String(safe.nextSteps||''),
+    answers:normalizeSessionReviewAnswers(safe.answers||safe.responses||{}),
+    interpretation:normalizeSessionReviewInterpretation(safe.interpretation||safe.analysis||{}),
+    appliedChanges:normalizeSessionReviewAppliedChanges(safe.appliedChanges||{})
+  };
+}
+function normalizeSessionReviewAnswers(raw={}){
+  const safe=raw&&typeof raw==='object'?raw:{};
+  return {
+    completed:String(safe.completed||safe.summary||''),
+    blocked:String(safe.blocked||safe.blockers||''),
+    changed:String(safe.changed||safe.notes||safe.nextSteps||'')
+  };
+}
+function normalizeSessionReviewAppliedChanges(raw={}){
+  const safe=raw&&typeof raw==='object'?raw:{};
+  const toIdList=(value)=>Array.from(new Set((Array.isArray(value)?value:[]).map((item)=>Number(item)).filter((item)=>Number.isFinite(item))));
+  return {
+    taskIdsCompleted:toIdList(safe.taskIdsCompleted),
+    taskIdsBlocked:toIdList(safe.taskIdsBlocked),
+    taskIdsPartiallyUpdated:toIdList(safe.taskIdsPartiallyUpdated)
+  };
+}
+function normalizeSessionReviewTaskUpdate(raw={}){
+  const safe=raw&&typeof raw==='object'?raw:{};
+  return {
+    taskId:Number(safe.taskId||0),
+    status:String(safe.status||'partial'),
+    completionPct:clampPercentage(safe.completionPct),
+    note:String(safe.note||''),
+    blockReason:String(safe.blockReason||'')
+  };
+}
+function normalizeSessionReviewMilestoneUpdate(raw={}){
+  const safe=raw&&typeof raw==='object'?raw:{};
+  return {
+    stageId:String(safe.stageId||''),
+    progressPct:clampPercentage(safe.progressPct),
+    progressDelta:clampNumber(safe.progressDelta,-100,100),
+    status:String(safe.status||''),
+    note:String(safe.note||'')
+  };
+}
+function normalizeSessionReviewOverallUpdate(raw={}){
+  const safe=raw&&typeof raw==='object'?raw:{};
+  return {
+    doneDelta:clampNumber(safe.doneDelta,-25,25),
+    pctDelta:clampNumber(safe.pctDelta,-100,100),
+    note:String(safe.note||'')
+  };
+}
+function normalizeSessionReviewNextAction(raw={}){
+  const safe=raw&&typeof raw==='object'?raw:{};
+  return {
+    taskId:Number(safe.taskId||0),
+    stageId:String(safe.stageId||''),
+    title:String(safe.title||''),
+    reason:String(safe.reason||'')
+  };
+}
+function normalizeSessionReviewInterpretation(raw={}){
+  const safe=raw&&typeof raw==='object'?raw:{};
+  return {
+    summary:String(safe.summary||''),
+    taskUpdates:Array.isArray(safe.taskUpdates)
+      ? safe.taskUpdates.map((item)=>normalizeSessionReviewTaskUpdate(item)).filter((item)=>Number.isFinite(item.taskId))
+      : [],
+    milestoneUpdate:normalizeSessionReviewMilestoneUpdate(safe.milestoneUpdate||{}),
+    overallUpdate:normalizeSessionReviewOverallUpdate(safe.overallUpdate||{}),
+    nextBestAction:normalizeSessionReviewNextAction(safe.nextBestAction||{}),
+    signals:{
+      completed:Boolean(safe.signals?.completed),
+      interrupted:Boolean(safe.signals?.interrupted),
+      blocked:Boolean(safe.signals?.blocked)
+    }
+  };
+}
+function normalizeSessionProgressDelta(raw={}){
+  const safe=raw&&typeof raw==='object'?raw:{};
+  return {
+    stageDoneDelta:Number(safe.stageDoneDelta||0),
+    stagePctDelta:Number(safe.stagePctDelta||0),
+    overallDoneDelta:Number(safe.overallDoneDelta||0),
+    overallPctDelta:Number(safe.overallPctDelta||0),
+    stageProgressDelta:Number(safe.stageProgressDelta||0),
+    overallProgressDelta:Number(safe.overallProgressDelta||0)
+  };
+}
+function clampNumber(value,min,max){
+  const n=Number(value);
+  if(!Number.isFinite(n)) return min;
+  if(n<min) return min;
+  if(n>max) return max;
+  return n;
+}
+function clampPercentage(value){
+  return Math.round(clampNumber(value,0,100));
+}
+function normalizeExecutionSession(raw,context={}){
+  const fallbackStageId=String(context.stageId||getExecutionStage(getExecutionActiveStageIndex())?.id||'');
+  const fallbackGoal=String(context.goal||S.user.goal||S.roadmap?.[getExecutionActiveStageIndex()]?.objective||'');
+  const base=createExecutionSessionTemplate({
+    stageId:fallbackStageId,
+    goal:fallbackGoal,
+    status:'planned'
+  });
+  if(!raw||typeof raw!=='object') return base;
+  const session=createExecutionSessionTemplate({
+    ...base,
+    ...raw,
+    stageId:String(raw.stageId||fallbackStageId),
+    goal:String(raw.goal||fallbackGoal),
+    taskIds:Array.isArray(raw.taskIds)?raw.taskIds:Array.isArray(raw.selectedTaskIds)?raw.selectedTaskIds:base.taskIds,
+    review:normalizeExecutionSessionReview(raw.review),
+    progressDelta:normalizeSessionProgressDelta(raw.progressDelta),
+    baseline:raw.baseline&&typeof raw.baseline==='object'
+      ? raw.baseline
+      : base.baseline
+  });
+  session.reviewOpenedAt=String(raw.reviewOpenedAt||session.reviewOpenedAt||session.review.openedAt||'');
+  session.reviewAppliedAt=String(raw.reviewAppliedAt||session.reviewAppliedAt||session.review.appliedAt||'');
+  session.review.openedAt=String(session.review.openedAt||session.reviewOpenedAt||'');
+  session.review.appliedAt=String(session.review.appliedAt||session.reviewAppliedAt||'');
+  if(!SESSION_STATUSES.has(session.status)) session.status='planned';
+  session.taskIds=session.taskIds.slice(0,3);
+  return session;
+}
+function getExecutionSession(){
+  if(!isExecutionStateObject(S.execution)) return null;
+  return normalizeExecutionSession(S.execution.session||null);
+}
+function getExecutionSessionStage(){
+  const session=getExecutionSession();
+  if(!session) return null;
+  const stages=getExecutionStages();
+  return stages.find((stage)=>String(stage.id)===String(session.stageId))||getExecutionStage(getExecutionActiveStageIndex());
+}
+function getExecutionSessionTaskIds(){
+  const session=getExecutionSession();
+  return session?session.taskIds.slice(0,3):[];
+}
+function isSessionRunning(){
+  return String(getExecutionSession()?.status||'')==='running';
+}
+function isSessionReviewOpen(){
+  const session=getExecutionSession();
+  return Boolean(session&&session.review&&session.review.openedAt&&!session.review.appliedAt);
+}
+function syncActiveSessionRuntime(){
+  const session=getExecutionSession();
+  if(!session){
+    if(S.activeSession&&S.activeSession.timerInterval){
+      clearInterval(S.activeSession.timerInterval);
+    }
+    S.activeSession=null;
+    return null;
+  }
+  const timerInterval=S.activeSession?.timerInterval||null;
+  S.activeSession={
+    ...session,
+    timerInterval
+  };
+  return S.activeSession;
+}
+function clearSessionTimer(){
+  if(S.activeSession&&S.activeSession.timerInterval){
+    clearInterval(S.activeSession.timerInterval);
+    S.activeSession.timerInterval=null;
+  }
+}
+function startSessionTimer(){
+  clearSessionTimer();
+  if(!isSessionRunning()) return;
+  if(!S.activeSession) syncActiveSessionRuntime();
+  if(!S.activeSession) return;
+  S.activeSession.timerInterval=setInterval(()=>{
+    renderDashboardSessionControls();
+    renderSessionOverlay();
+    renderSessionWorkspace();
+  },1000);
+}
+function buildSessionBaseline(stageIndex){
+  const stage=getExecutionStage(stageIndex);
+  const stageTasks=stage?getTasksForStage(stageIndex,{includeArchived:false}):[];
+  const overallTasks=getAllExecutionTasks().filter((task)=>task.status!=='archived');
+  return {
+    stageDone:stageTasks.filter((task)=>task.status==='done'||task.done).length,
+    stageTotal:stageTasks.length,
+    overallDone:overallTasks.filter((task)=>task.status==='done'||task.done).length,
+    overallTotal:overallTasks.length,
+    stageProgress:calculateTaskProgressValue(stageTasks),
+    overallProgress:calculateTaskProgressValue(overallTasks)
+  };
+}
+function recommendSessionTaskIds(stageIndex){
+  const stageTasks=getTasksForStage(stageIndex,{includeArchived:false});
+  return stageTasks
+    .filter((task)=>task.status!=='done'&&task.status!=='archived')
+    .sort((a,b)=>{
+      const weightA=getTaskPriorityWeight(a);
+      const weightB=getTaskPriorityWeight(b);
+      if(weightA!==weightB) return weightB-weightA;
+      return String(getTaskTitle(a)||'').localeCompare(String(getTaskTitle(b)||''),undefined,{sensitivity:'base'});
+    })
+    .slice(0,3)
+    .map((task)=>Number(task.id))
+    .filter((taskId)=>Number.isFinite(taskId));
+}
+function prepareExecutionSession(options={}){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return null;
+  const activeIndex=getExecutionActiveStageIndex();
+  const stage=getExecutionStage(activeIndex);
+  if(!stage) return null;
+  const existing=getExecutionSession();
+  const preserveRunning=Boolean(existing&&existing.status==='running'&&!options.forceRetarget);
+  const preserveEnded=Boolean(existing&&existing.status!=='planned'&&existing.status!=='running'&&!options.forceRetarget);
+  const existingTaskIds=getExecutionSessionTaskIds();
+  const sourceTaskIds=preserveRunning||preserveEnded
+    ? existing.taskIds
+    : ((Array.isArray(options.taskIds)&&options.taskIds.length>0)
+      ? options.taskIds
+      : (existingTaskIds.length>0
+        ? existingTaskIds
+        : recommendSessionTaskIds(activeIndex)));
+  const taskIds=Array.from(new Set(sourceTaskIds.map((taskId)=>Number(taskId)).filter((taskId)=>Number.isFinite(taskId)))).slice(0,3);
+  const baseline=(preserveRunning||preserveEnded)&&existing?.baseline
+    ? existing.baseline
+    : buildSessionBaseline(activeIndex);
+  const targetStatus=preserveRunning
+    ? 'running'
+    : (preserveEnded ? existing.status : 'planned');
+  const prepared=normalizeExecutionSession({
+    ...(existing||{}),
+    id:existing?.id||createClientRequestId('session'),
+    stageId:String(stage.id||existing?.stageId||''),
+    goal:String(options.goal||existing?.goal||stage.objective||S.user.goal||''),
+    taskIds:taskIds.length?taskIds:((Array.isArray(existing?.taskIds)&&existing.taskIds.length>0)?existing.taskIds:recommendSessionTaskIds(activeIndex)).slice(0,3),
+    status:targetStatus,
+    startedAt:String((preserveRunning||preserveEnded)?existing?.startedAt||'':''),
+    endedAt:String((preserveRunning||preserveEnded)?existing?.endedAt||'':''),
+    review:(preserveRunning||preserveEnded)?existing?.review||{}:{},
+    baseline,
+    notes:String((preserveRunning||preserveEnded)?existing?.notes||options.notes||'':options.notes||''),
+    outcomeSummary:String((preserveRunning||preserveEnded)?existing?.outcomeSummary||'':'')
+  },{stageId:stage.id,goal:stage.objective||S.user.goal||''});
+  const previousSignature=JSON.stringify(existing?{
+    id:existing.id,
+    stageId:existing.stageId,
+    taskIds:existing.taskIds,
+    goal:existing.goal,
+    status:existing.status
+  }:null);
+  const preparedSignature=JSON.stringify({
+    id:prepared.id,
+    stageId:prepared.stageId,
+    taskIds:prepared.taskIds,
+    goal:prepared.goal,
+    status:prepared.status
+  });
+  S.execution.session=prepared;
+  if(previousSignature!==preparedSignature){
+    S.execution.updatedAt=nowIso();
+  }
+  syncActiveSessionRuntime();
+  if(!options.silent&&previousSignature!==preparedSignature){
+    logInfo({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'session_flow',
+      action:'session_prepared',
+      sessionId:prepared.id,
+      stageId:prepared.stageId,
+      taskIds:prepared.taskIds,
+      goal:prepared.goal
+    });
+  }
+  return prepared;
+}
+function getSessionDurationMinutes(session=getExecutionSession()){
+  if(!session||!session.startedAt) return 0;
+  const startedAt=new Date(session.startedAt);
+  if(Number.isNaN(startedAt.getTime())) return 0;
+  const end=session.endedAt?new Date(session.endedAt):new Date();
+  if(Number.isNaN(end.getTime())) return 0;
+  return Math.max(0,Math.round((end.getTime()-startedAt.getTime())/60000));
+}
+function getSessionTimerLabel(session=getExecutionSession()){
+  if(!session||!session.startedAt) return '00:00';
+  const startedAt=new Date(session.startedAt);
+  if(Number.isNaN(startedAt.getTime())) return '00:00';
+  const end=session.status==='running'?new Date():new Date(session.endedAt||Date.now());
+  const elapsed=Math.max(0,end.getTime()-startedAt.getTime());
+  const minutes=Math.floor(elapsed/60000);
+  const seconds=Math.floor((elapsed%60000)/1000);
+  return `${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')}`;
+}
+function getSessionProgressDelta(session=getExecutionSession(),nextBaseline=null){
+  if(!session) return normalizeSessionProgressDelta();
+  const baseline=session.baseline||{stageDone:0,stageTotal:0,overallDone:0,overallTotal:0};
+  const stageIndex=getExecutionStages().findIndex((stage)=>String(stage.id)===String(session.stageId));
+  const currentStage=stageIndex>=0?getExecutionStage(stageIndex):getExecutionSessionStage();
+  const currentStageTasks=currentStage?getTasksForStage(stageIndex>=0?stageIndex:getExecutionActiveStageIndex(),{includeArchived:false}):[];
+  const currentOverall=getAllExecutionTasks().filter((task)=>task.status!=='archived');
+  const currentStageProgress=calculateTaskProgressValue(currentStageTasks);
+  const currentOverallProgress=calculateTaskProgressValue(currentOverall);
+  const current={
+    stageDone:currentStageTasks.filter((task)=>task.status==='done'||task.done).length,
+    stageTotal:currentStageTasks.length,
+    stageProgress:currentStageProgress,
+    overallDone:currentOverall.filter((task)=>task.status==='done'||task.done).length,
+    overallTotal:currentOverall.length,
+    overallProgress:currentOverallProgress
+  };
+  const before=nextBaseline||baseline;
+  const stagePctBefore=before.stageTotal>0?Math.round((before.stageDone/before.stageTotal)*100):0;
+  const stagePctAfter=current.stageTotal>0?Math.round((current.stageDone/current.stageTotal)*100):0;
+  const overallPctBefore=before.overallTotal>0?Math.round((before.overallDone/before.overallTotal)*100):0;
+  const overallPctAfter=current.overallTotal>0?Math.round((current.overallDone/current.overallTotal)*100):0;
+  return normalizeSessionProgressDelta({
+    stageDoneDelta:current.stageDone-before.stageDone,
+    stagePctDelta:stagePctAfter-stagePctBefore,
+    overallDoneDelta:current.overallDone-before.overallDone,
+    overallPctDelta:overallPctAfter-overallPctBefore,
+    stageProgressDelta:Math.round(current.stageProgress)-Math.round(Number(before.stageProgress||0)),
+    overallProgressDelta:Math.round(current.overallProgress)-Math.round(Number(before.overallProgress||0))
+  });
+}
+function updateSessionRuntimeSession(nextSession){
+  if(!isExecutionStateObject(S.execution)) return;
+  S.execution.session=normalizeExecutionSession(nextSession||getExecutionSession(),{
+    stageId:getExecutionSessionStage()?.id||'',
+    goal:getExecutionSession()?.goal||S.user.goal||''
+  });
+  S.execution.updatedAt=nowIso();
+  syncActiveSessionRuntime();
 }
 function isExecutionStateObject(value){
   return Boolean(
@@ -1515,7 +2112,7 @@ function createExecutionRoadmapFromPhases(phases){
   const list=Array.isArray(phases)?phases:[];
   const createdAt=nowIso();
   const roadmapId=createClientRequestId('roadmapdoc');
-  const total=Math.max(1,list.length);
+  const total=Math.max(3,list.length);
   const baseDate=new Date();
   baseDate.setHours(0,0,0,0);
   const deadline=S.user.deadline?new Date(`${S.user.deadline}T00:00:00`):null;
@@ -1570,10 +2167,18 @@ function createExecutionRoadmapFromPhases(phases){
     status:'active',
     stages,
     tasksById:{},
+    taskHistoryById:{},
+    taskHistoryByStage:{},
     tasksStatus:'not_generated',
     tasksByStage:{},
     taskGenerationByStage:{},
-    taskGenerationErrorsByStage:{}
+    taskGenerationErrorsByStage:{},
+    session:createExecutionSessionTemplate({
+      stageId:list[0]?.id||'',
+      goal:S.user.goal||'',
+      taskIds:[]
+    }),
+    sessionHistory:[]
   };
 }
 function resolveStageTaskStatus(stageIndex){
@@ -1633,11 +2238,61 @@ function getExecutionTaskById(id){
   if(S.execution?.tasksById&&Object.prototype.hasOwnProperty.call(S.execution.tasksById,key)){
     return S.execution.tasksById[key];
   }
+  if(S.execution?.taskHistoryById&&Object.prototype.hasOwnProperty.call(S.execution.taskHistoryById,key)){
+    return S.execution.taskHistoryById[key];
+  }
   return null;
 }
+function getCanonicalExecutionActiveStageIndex(){
+  return getExecutionActiveStageIndex();
+}
+function getCanonicalExecutionActiveStage(){
+  return getExecutionStage(getCanonicalExecutionActiveStageIndex());
+}
+function getExecutionRoadmapView(){
+  const stages=getExecutionStages();
+  return stages.map((stage,index)=>{
+    const stageTasks=getTasksForStage(index,{includeArchived:false});
+    const progress=Number.isFinite(Number(stage?.progress))
+      ? Math.max(0,Math.min(100,Number(stage.progress)))
+      : (stageTasks.length
+        ? Math.round((stageTasks.filter((task)=>task.status==='done'||task.done).length/stageTasks.length)*100)
+        : 0);
+    return {
+      ...stage,
+      index,
+      progress,
+      taskCount:stageTasks.length,
+      tasks:stageTasks
+    };
+  });
+}
+function getRoadmapViewStages(){
+  const executionStages=getExecutionRoadmapView();
+  if(executionStages.length) return executionStages;
+  return Array.isArray(S.roadmap)?S.roadmap:[];
+}
+function getExecutionActiveTasks(){
+  return getTasksForStage(getCanonicalExecutionActiveStageIndex(),{includeArchived:false});
+}
+function getVisibleActiveTasks(){
+  const activeTasks=getExecutionActiveTasks();
+  return activeTasks.length?activeTasks:(Array.isArray(S.tasks)?S.tasks:[]);
+}
 function getAllExecutionTasks(){
-  if(!S.execution?.tasksById||typeof S.execution.tasksById!=='object') return [];
-  return Object.values(S.execution.tasksById);
+  const activeTasks=S.execution?.tasksById&&typeof S.execution.tasksById==='object'
+    ? Object.values(S.execution.tasksById)
+    : [];
+  const historyTasks=S.execution?.taskHistoryById&&typeof S.execution.taskHistoryById==='object'
+    ? Object.values(S.execution.taskHistoryById)
+    : [];
+  const seen=new Set();
+  return [...activeTasks,...historyTasks].filter((task)=>{
+    const key=String(task?.id||'');
+    if(!key||seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 function resolveUniqueExecutionTaskId(preferredId){
   let id=Number(preferredId)||nextExecutionTaskId();
@@ -1652,6 +2307,186 @@ function detachTaskFromOtherStages(taskId,currentStageIndex){
     if(idx===currentStageIndex||!Array.isArray(stage.taskIds)) return;
     stage.taskIds=stage.taskIds.filter((existingId)=>Number(existingId)!==id);
   });
+}
+function ensureExecutionTaskHistoryStore(){
+  if(!isExecutionStateObject(S.execution)) return;
+  if(!S.execution.taskHistoryById||typeof S.execution.taskHistoryById!=='object') S.execution.taskHistoryById={};
+  if(!S.execution.taskHistoryByStage||typeof S.execution.taskHistoryByStage!=='object') S.execution.taskHistoryByStage={};
+}
+function cloneExecutionTaskRecord(task){
+  if(!task) return null;
+  return JSON.parse(JSON.stringify(task));
+}
+function addExecutionTaskToHistory(task,stage){
+  if(!isExecutionStateObject(S.execution)||!task) return;
+  ensureExecutionTaskHistoryStore();
+  const snapshot=cloneExecutionTaskRecord(task);
+  if(!snapshot) return;
+  const stageId=String(stage?.id||snapshot.linkedStageId||'');
+  const key=String(snapshot.id);
+  S.execution.taskHistoryById[key]=snapshot;
+  if(stageId){
+    if(!Array.isArray(S.execution.taskHistoryByStage[stageId])) S.execution.taskHistoryByStage[stageId]=[];
+    if(!S.execution.taskHistoryByStage[stageId].some((existingId)=>String(existingId)===key)){
+      S.execution.taskHistoryByStage[stageId].push(snapshot.id);
+    }
+  }
+}
+function removeExecutionTaskFromActiveStore(taskId){
+  if(!isExecutionStateObject(S.execution)) return;
+  delete S.execution.tasksById[String(taskId)];
+}
+function archiveStageTasksToHistory(stageIndex,opts={}){
+  const stage=getExecutionStage(stageIndex);
+  if(!stage) return [];
+  const includeActive=opts.includeActive!==false;
+  const keepStageTaskIds=opts.keepStageTaskIds!==false;
+  const taskIds=Array.isArray(stage.taskIds)?[...stage.taskIds]:[];
+  const archived=[];
+  taskIds.forEach((taskId)=>{
+    const task=getExecutionTaskById(taskId);
+    if(!task) return;
+    if(task.status==='archived') return;
+    const snapshot=cloneExecutionTaskRecord(task);
+    if(!snapshot) return;
+    snapshot.status='done';
+    snapshot.done=true;
+    snapshot.completedAt=snapshot.completedAt||nowIso();
+    archived.push(snapshot);
+    addExecutionTaskToHistory(snapshot,stage);
+    if(includeActive) removeExecutionTaskFromActiveStore(snapshot.id);
+  });
+  if(!keepStageTaskIds){
+    stage.taskIds=[];
+  }
+  return archived;
+}
+function pruneFutureStageTasks(activeStageIndex){
+  const stages=getExecutionStages();
+  if(!stages.length||!isExecutionStateObject(S.execution)) return false;
+  let changed=false;
+  const futureStageIds=new Set();
+  stages.forEach((stage,idx)=>{
+    if(idx<=activeStageIndex) return;
+    if(Array.isArray(stage.taskIds)&&stage.taskIds.length){
+      stage.taskIds.forEach((taskId)=>{
+        futureStageIds.add(String(taskId));
+        removeExecutionTaskFromActiveStore(taskId);
+      });
+      changed=true;
+    }
+    stage.taskIds=[];
+    stage.tasksGenerated=false;
+    stage.tasksGeneratedAt='';
+    stage.tasksPromptSignature='';
+    const stageId=String(stage.id||'');
+    if(stageId){
+      S.execution.taskGenerationByStage[stageId]='not_generated';
+      if(S.execution.tasksByStage&&typeof S.execution.tasksByStage==='object'){
+        delete S.execution.tasksByStage[stageId];
+      }
+    }
+  });
+  if(futureStageIds.size){
+    Object.keys(S.execution.taskHistoryById||{}).forEach((taskId)=>{
+      if(futureStageIds.has(String(taskId))){
+        delete S.execution.taskHistoryById[taskId];
+      }
+    });
+    Object.keys(S.execution.taskHistoryByStage||{}).forEach((stageId)=>{
+      const ids=Array.isArray(S.execution.taskHistoryByStage[stageId])?S.execution.taskHistoryByStage[stageId]:[];
+      S.execution.taskHistoryByStage[stageId]=ids.filter((taskId)=>!futureStageIds.has(String(taskId)));
+      if(!S.execution.taskHistoryByStage[stageId].length){
+        delete S.execution.taskHistoryByStage[stageId];
+      }
+    });
+  }
+  return changed;
+}
+function reconcileExecutionTaskStores(activeStageIndex){
+  if(!isExecutionStateObject(S.execution)) return false;
+  ensureExecutionTaskHistoryStore();
+  const stages=getExecutionStages();
+  if(!stages.length) return false;
+  const safeActiveIndex=Math.max(0,Math.min(stages.length-1,Number(activeStageIndex)||0));
+  let changed=false;
+  const activeStoreTasks=Object.values(S.execution.tasksById||{});
+  const activeStageTasks=activeStoreTasks.filter((task)=>{
+    const taskStageIndex=Number(task?.linkedStageIndex);
+    return Number.isFinite(taskStageIndex)&&taskStageIndex===safeActiveIndex&&task.status!=='archived';
+  });
+  const activeStageTaskIds=activeStageTasks.map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id));
+  stages.forEach((stage,idx)=>{
+    if(!stage) return;
+    const stageId=String(stage.id||'');
+    const stageTaskIds=Array.isArray(stage.taskIds)?stage.taskIds.map((id)=>Number(id)).filter((id)=>Number.isFinite(id)):[];
+    if(idx<safeActiveIndex){
+      activeStoreTasks.forEach((task)=>{
+        const taskStageIndex=Number(task?.linkedStageIndex);
+        if(!Number.isFinite(taskStageIndex)||taskStageIndex!==idx||task.status==='archived') return;
+        addExecutionTaskToHistory(task,stage);
+        delete S.execution.tasksById[String(task.id)];
+        changed=true;
+      });
+      const mergedIds=new Set(stageTaskIds);
+      Object.values(S.execution.taskHistoryById||{}).forEach((task)=>{
+        if(Number(task?.linkedStageIndex)===idx) mergedIds.add(Number(task.id));
+      });
+      stage.taskIds=[...mergedIds].filter((id)=>Number.isFinite(id));
+      stage.status='completed';
+      stage.progress=100;
+      stage.tasksGenerated=stage.taskIds.length>0;
+      if(stage.taskIds.length) stage.tasksGeneratedAt=stage.tasksGeneratedAt||nowIso();
+      if(stageId){
+        S.execution.tasksByStage[stageId]=[...stage.taskIds];
+        S.execution.taskGenerationByStage[stageId]='ready';
+        delete S.execution.taskGenerationErrorsByStage[stageId];
+      }
+      return;
+    }
+    if(idx===safeActiveIndex){
+      const activeIds=activeStageTaskIds;
+      stage.taskIds=[...activeIds];
+      stage.status='active';
+      stage.tasksGenerated=activeIds.length>0;
+      if(activeIds.length) stage.tasksGeneratedAt=stage.tasksGeneratedAt||nowIso();
+      if(stageId){
+        S.execution.tasksByStage[stageId]=[...stage.taskIds];
+        S.execution.taskGenerationByStage[stageId]=activeIds.length?'ready':'not_generated';
+        delete S.execution.taskGenerationErrorsByStage[stageId];
+      }
+      return;
+    }
+    activeStoreTasks.forEach((task)=>{
+      const taskStageIndex=Number(task?.linkedStageIndex);
+      if(!Number.isFinite(taskStageIndex)||taskStageIndex!==idx||task.status==='archived') return;
+      delete S.execution.tasksById[String(task.id)];
+      changed=true;
+    });
+    if(stageTaskIds.length||stage.taskIds.length){
+      stage.taskIds=[];
+      changed=true;
+    }
+    stage.status='locked';
+    stage.progress=0;
+    stage.tasksGenerated=false;
+    stage.tasksGeneratedAt='';
+    stage.tasksPromptSignature='';
+    if(stageId){
+      S.execution.tasksByStage[stageId]=[];
+      S.execution.taskGenerationByStage[stageId]='not_generated';
+      delete S.execution.taskGenerationErrorsByStage[stageId];
+    }
+  });
+  Object.values(activeStoreTasks).forEach((task)=>{
+    const taskStageIndex=Number(task?.linkedStageIndex);
+    if(!Number.isFinite(taskStageIndex)) return;
+    if(taskStageIndex>safeActiveIndex){
+      delete S.execution.tasksById[String(task.id)];
+      changed=true;
+    }
+  });
+  return changed;
 }
 function logStageTaskSnapshot(action,stageIndex,extra={}){
   const stage=getExecutionStage(stageIndex);
@@ -1705,7 +2540,8 @@ function getTasksForStage(stageIndex,opts={}){
       done:Boolean(task.done)||task.status==='done',
       linkedStage:(Number(task.linkedStageIndex)||0)+1,
       text:getTaskTitle(task)
-    }));
+    }))
+    .map((task)=>decorateTaskWithMilestoneMeta(task));
   return out;
 }
 function areStageTasksCompleted(stageIndex){
@@ -1716,14 +2552,14 @@ function areStageTasksCompleted(stageIndex){
 function refreshExecutionProgress(){
   const stages=getExecutionStages();
   if(!stages.length){
-    S.progress.tasksDone=(S.tasks||[]).filter((task)=>task.done).length;
+    S.progress.tasksDone=getVisibleActiveTasks().filter((task)=>task.done||task.status==='done').length;
     return;
   }
   stages.forEach((stage,idx)=>{
     const tasks=getTasksForStage(idx,{includeArchived:false});
     if(stage.status==='completed') stage.progress=100;
     else if(!tasks.length) stage.progress=0;
-    else stage.progress=Math.round((tasks.filter((task)=>task.status==='done'||task.done).length/tasks.length)*100);
+    else stage.progress=Math.round(calculateTaskProgressValue(tasks));
   });
   const completedStages=stages.filter((stage)=>stage.status==='completed').length;
   const allTasks=getAllExecutionTasks().filter((task)=>task.status!=='archived');
@@ -1731,9 +2567,22 @@ function refreshExecutionProgress(){
   S.progress.milestones=completedStages;
   S.progress.tasksDone=doneTasks;
 }
+function calculateTaskProgressValue(tasks=[]){
+  const items=Array.isArray(tasks)?tasks:[];
+  if(!items.length) return 0;
+  const weighted=items.reduce((sum,task)=>sum+getTaskProgressWeight(task),0);
+  return Math.max(0,Math.min(100,(weighted/items.length)*100));
+}
+function getTaskProgressWeight(task){
+  if(!task||typeof task!=='object') return 0;
+  if(task.status==='done'||task.done) return 1;
+  if(task.status==='blocked') return clampPercentage(task.progressPct||0)/100;
+  const pct=Number(task.progressPct||task.completionPct||0);
+  if(!Number.isFinite(pct) || pct<=0) return 0;
+  return Math.max(0,Math.min(1,pct/100));
+}
 function syncActiveTasksFromExecution(){
   const stages=getExecutionStages();
-  if(!stages.length) return;
   const activeIndex=getExecutionActiveStageIndex();
   logInfo({
     area:'frontend',
@@ -1741,8 +2590,28 @@ function syncActiveTasksFromExecution(){
     function:'syncActiveTasksFromExecution',
     action:'tasks_sync_started',
     activeStageIndex:activeIndex,
-    stageCount:stages.length
+    stageCount:stages.length,
+    activeTaskIds:stages[activeIndex]
+      ? getTasksForStage(activeIndex,{includeArchived:false}).map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id))
+      : []
   });
+  if(!stages.length){
+    S.progress.tasksDone=getVisibleActiveTasks().filter((task)=>task.done).length;
+    return;
+  }
+  if(S.execution?.status==='completed'){
+    S.execution.currentStageIndex=Math.max(0,stages.length-1);
+    S.tasks=[];
+    logInfo({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'syncActiveTasksFromExecution',
+      action:'tasks_sync_completed',
+      activeStageIndex:S.execution.currentStageIndex,
+      taskCount:0
+    });
+    return;
+  }
   S.execution.currentStageIndex=activeIndex;
   const activeTasks=getTasksForStage(activeIndex,{includeArchived:false});
   S.tasks=activeTasks.map((task)=>({
@@ -1752,14 +2621,15 @@ function syncActiveTasksFromExecution(){
     done:Boolean(task.done)||task.status==='done',
     text:getTaskTitle(task),
     linkedStage:Math.max(1,(Number(task.linkedStageIndex)||0)+1)
-  }));
+  })).map((task)=>decorateTaskWithMilestoneMeta(task));
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
     function:'syncActiveTasksFromExecution',
     action:'tasks_sync_completed',
     activeStageIndex:activeIndex,
-    taskCount:S.tasks.length
+    taskCount:activeTasks.length,
+    taskIds:activeTasks.map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id))
   });
 }
 function normalizeExecutionStatuses(){
@@ -1811,6 +2681,22 @@ function initializeExecutionFromRoadmap(options={}){
     applyMvpStageDetailsDefaults(stage);
     setStageTaskStatus(idx,'not_generated');
   });
+  S.execution.session=normalizeExecutionSession(S.execution.session,{
+    stageId:S.execution.stages[0]?.id||'',
+    goal:S.user.goal||''
+  });
+  S.execution.session.status='planned';
+  S.execution.session.startedAt='';
+  S.execution.session.endedAt='';
+  S.execution.session.review=normalizeExecutionSessionReview();
+  S.execution.session.progressDelta=normalizeSessionProgressDelta();
+  S.execution.session.reviewOpenedAt='';
+  S.execution.session.reviewAppliedAt='';
+  S.execution.session.baseline=buildSessionBaseline(0);
+  S.execution.session.taskIds=Array.isArray(S.execution.session.taskIds)&&S.execution.session.taskIds.length
+    ? S.execution.session.taskIds.slice(0,3)
+    : recommendSessionTaskIds(0);
+  S.execution.session.goal=String(S.execution.session.goal||S.user.goal||S.execution.stages[0]?.objective||'');
   if(options.resetVisibleTasks!==false) S.tasks=[];
   refreshExecutionProgress();
   syncActiveTasksFromExecution();
@@ -1865,6 +2751,7 @@ function migrateLegacyTasksIntoExecution(legacyTasks){
 function ensureExecutionState(options={}){
   if(!Array.isArray(S.roadmap)||!S.roadmap.length){
     S.execution=null;
+    S.activeSession=null;
     return false;
   }
   let changed=false;
@@ -1888,12 +2775,31 @@ function ensureExecutionState(options={}){
     S.execution.taskGenerationErrorsByStage={};
     changed=true;
   }
+  if(!Array.isArray(S.execution.sessionHistory)){
+    S.execution.sessionHistory=[];
+    changed=true;
+  }
+  if(!S.execution.session||typeof S.execution.session!=='object'){
+    S.execution.session=createExecutionSessionTemplate({
+      stageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+      goal:S.user.goal||''
+    });
+    changed=true;
+  }
+  const sessionBefore=JSON.stringify(S.execution.session);
+  const normalizedSession=normalizeExecutionSession(S.execution.session,{
+    stageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
+    goal:S.user.goal||S.execution.session?.goal||''
+  });
+  if(normalizedSession.stageId!==S.execution.session.stageId||normalizedSession.goal!==S.execution.session.goal||normalizedSession.status!==S.execution.session.status||JSON.stringify(normalizedSession.taskIds)!==JSON.stringify(S.execution.session.taskIds)){
+    changed=true;
+  }
+  S.execution.session=normalizedSession;
   if(!String(S.execution.tasksStatus||'')){
     S.execution.tasksStatus='not_generated';
     changed=true;
   }
   const stages=getExecutionStages();
-  const globalTaskRefs=new Set();
   stages.forEach((stage,idx)=>{
     if(!stage.id){
       stage.id=createClientRequestId(`stage${idx+1}`);
@@ -1918,28 +2824,6 @@ function ensureExecutionState(options={}){
     stage.completionCriteria=normalizeCompletionCriteria(stage.completionCriteria||stage.completion_criteria||[],stage.objective||'');
     stage.executionFocus=clipText(stage.executionFocus||stage.execution_focus||'',160);
     applyMvpStageDetailsDefaults(stage);
-    stage.taskIds=stage.taskIds.filter((id)=>{
-      const key=String(id);
-      const task=S.execution.tasksById[key];
-      if(!task) return false;
-      if(globalTaskRefs.has(key)){
-        changed=true;
-        return false;
-      }
-      globalTaskRefs.add(key);
-      task.linkedStageId=stage.id;
-      task.linkedStageIndex=stage.index-1;
-      task.roadmapId=S.execution.id;
-      return true;
-    });
-    const taskCount=getTasksForStage(idx,{includeArchived:false}).length;
-    if(taskCount>0&&stage.tasksGenerated){
-      S.execution.taskGenerationByStage[stage.id]='ready';
-      S.execution.tasksByStage[stage.id]=Array.isArray(stage.taskIds)?[...stage.taskIds]:[];
-    }else if(!S.execution.taskGenerationByStage[stage.id]){
-      S.execution.taskGenerationByStage[stage.id]='not_generated';
-      S.execution.tasksByStage[stage.id]=Array.isArray(stage.taskIds)?[...stage.taskIds]:[];
-    }
   });
   const hasStoredTasks=Object.keys(S.execution.tasksById).length>0;
   const canMigrateLegacy=Array.isArray(S.tasks)&&S.tasks.length>0;
@@ -1947,24 +2831,37 @@ function ensureExecutionState(options={}){
     if(migrateLegacyTasksIntoExecution(S.tasks)) changed=true;
   }
   normalizeExecutionStatuses();
+  const activeIndex=getExecutionActiveStageIndex();
+  if(pruneFutureStageTasks(activeIndex)) changed=true;
+  if(reconcileExecutionTaskStores(activeIndex)) changed=true;
+  normalizeExecutionStatuses();
   refreshExecutionProgress();
   syncActiveTasksFromExecution();
+  syncActiveSessionRuntime();
+  if(isSessionRunning()) startSessionTimer();
+  else clearSessionTimer();
   return changed;
 }
 function hasExecutionStateReady(){
   return isExecutionStateObject(S.execution)&&getExecutionStages().length>0;
 }
-function setStageTasks(stageIndex,tasks,opts={}){ 
+function setStageTasks(stageIndex,tasks,opts={}){
   const stage=getExecutionStage(stageIndex);
   if(!stage||!Array.isArray(tasks)) return [];
   const replace=opts.replace!==false;
-  const oldIds=Array.isArray(stage.taskIds)?[...stage.taskIds]:[];
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'setStageTasks',
+    action:'stage_tasks_persistence_started',
+    stageIndex,
+    taskCount:tasks.length,
+    taskIds:tasks.map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id)),
+    priorities:tasks.map((task)=>String(task.priority||task.prio||'')),
+    replace
+  });
   if(replace){
-    oldIds.forEach((id)=>{
-      const existing=getExecutionTaskById(id);
-      if(existing) existing.status='archived';
-    });
-    stage.taskIds=[];
+    archiveStageTasksToHistory(stageIndex,{includeActive:true,keepStageTaskIds:false});
   }
   const persisted=tasks.map((task)=>{
     const normalized=normalizeExecutionTask({
@@ -1992,6 +2889,15 @@ function setStageTasks(stageIndex,tasks,opts={}){
   normalizeExecutionStatuses();
   refreshExecutionProgress();
   syncActiveTasksFromExecution();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'setStageTasks',
+    action:'stage_tasks_persistence_completed',
+    stageIndex,
+    taskCount:persisted.length,
+    taskIds:persisted.map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id))
+  });
   logStageTaskSnapshot('stage_tasks_saved',stageIndex,{savedTaskCount:persisted.length});
   return persisted;
 }
@@ -2036,6 +2942,28 @@ async function generateTasksForStage(stageIndex,options={}){
       stageIndex
     });
     return [];
+  }
+  if(S.execution?.status==='completed'){
+    logWarn({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'generateTasksForStage',
+      action:'generate_stage_tasks_skipped_execution_completed',
+      stageIndex
+    });
+    return getTasksForStage(stageIndex,{includeArchived:false});
+  }
+  const activeIndex=getExecutionActiveStageIndex();
+  if(stageIndex!==activeIndex){
+    logWarn({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'generateTasksForStage',
+      action:'generate_stage_tasks_skipped_non_active_stage',
+      stageIndex,
+      activeIndex
+    });
+    return getTasksForStage(stageIndex,{includeArchived:false});
   }
   const stage=getExecutionStage(stageIndex);
   if(!stage){
@@ -2090,6 +3018,12 @@ async function generateTasksForStage(stageIndex,options={}){
   const targetTaskCount=getTargetTaskCountForStage(stageIndex,stageCount,S.user.deadline);
   const stageStartDate=toIsoDateOnly(stage?.startDate||phase?.startDate||'')||toDateInputValue(new Date());
   const stageTargetDate=toIsoDateOnly(stage?.targetDate||phase?.target_date||S.user.deadline||'')||S.user.deadline||'';
+  const deadlinePlan=buildTaskDeadlinePlan({
+    stageStartDate,
+    stageTargetDate,
+    deadline:stageTargetDate||S.user.deadline||'',
+    taskCount:targetTaskCount
+  });
   const tasksPromptSignature=buildStageTaskGenerationSignature(normalizedStage,{
     ...onboardingContext,
     stageStartDate,
@@ -2160,6 +3094,17 @@ async function generateTasksForStage(stageIndex,options={}){
       promptChars:tasksPrompt.length,
       requestedMaxTokens:TASK_SKELETON_DEFAULT_MAX_TOKENS
     });
+    logInfo({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'generateTasksForStage',
+      action:'tasks_skeleton_request_prepared',
+      stageIndex,
+      activeStageId:stage.id,
+      activeStageTitle:clipText(stage?.title||normalizedStage.title||'',80),
+      stageTargetDate,
+      deadlinePlanCount:Array.isArray(deadlinePlan)?deadlinePlan.length:0
+    });
     try{
       const skeletonResult=await geminiJSON(
         tasksPrompt,
@@ -2175,14 +3120,23 @@ async function generateTasksForStage(stageIndex,options={}){
           stageStartDate,
           stageTargetDate,
           deadline:stageTargetDate||S.user.deadline||'',
+          taskDeadline:stageTargetDate||S.user.deadline||'',
           targetCount:targetTaskCount,
           returnMeta:true,
           contextFields:contextMapping.present,
           missingContextFields:contextMapping.missing
-        },
+      },
         'tasks_skeleton'
       );
       const skeletonTasks=Array.isArray(skeletonResult?.data)?skeletonResult.data.slice(0,targetTaskCount):[];
+      logRoadmapPipelineEvent('active_stage_tasks_skeleton_parsed',{
+        requestId:skeletonResult?.meta?.requestId||skeletonRequestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        taskCount:skeletonTasks.length,
+        targetCount:targetTaskCount
+      });
       while(skeletonTasks.length<targetTaskCount){
         const fallbackTitle=fallbackFounderTaskBlueprints({
           goal:onboardingContext.primary_goal||S.user.goal||'',
@@ -2192,6 +3146,13 @@ async function generateTasksForStage(stageIndex,options={}){
         })[skeletonTasks.length % 10]?.title||`Task ${skeletonTasks.length+1}`;
         skeletonTasks.push({title:fallbackTitle,linkedStage:stageIndex+1});
       }
+      logRoadmapPipelineEvent('active_stage_task_detail_generation_started',{
+        requestId:skeletonResult?.meta?.requestId||skeletonRequestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        taskCount:skeletonTasks.length
+      });
       const enrichedTasks=[];
       const detailFailures=[];
       for(let taskIdx=0;taskIdx<skeletonTasks.length;taskIdx+=1){
@@ -2203,7 +3164,8 @@ async function generateTasksForStage(stageIndex,options={}){
           taskCount:targetTaskCount,
           taskIndex:taskIdx+1,
           stageStartDate,
-          stageTargetDate
+          stageTargetDate,
+          taskDeadline:deadlinePlan[taskIdx]||stageTargetDate||S.user.deadline||''
         });
         try{
           const detailResult=await geminiJSON(
@@ -2250,6 +3212,7 @@ async function generateTasksForStage(stageIndex,options={}){
             stageStartDate,
             stageTargetDate,
             deadline:stageTargetDate||S.user.deadline||'',
+            taskDeadline:deadlinePlan[taskIdx]||stageTargetDate||S.user.deadline||'',
             taskIndex:taskIdx+1,
             taskTitle:skeletonTask?.title||`Task ${taskIdx+1}`
           });
@@ -2266,6 +3229,14 @@ async function generateTasksForStage(stageIndex,options={}){
           });
         }
       }
+      logRoadmapPipelineEvent('active_stage_task_detail_generation_completed',{
+        requestId:skeletonResult?.meta?.requestId||skeletonRequestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        taskCount:enrichedTasks.length,
+        detailFailures:detailFailures.length
+      });
       const normalized=normalizeFounderTasks(enrichedTasks,{
         stageObjective:phase?.objective||stage.objective||'',
         stageTitle:phase?.title||stage.title||`Stage ${stageIndex+1}`,
@@ -2274,11 +3245,19 @@ async function generateTasksForStage(stageIndex,options={}){
         stageStartDate,
         stageTargetDate,
         targetCount:targetTaskCount,
+        deadlinePlan,
         allowBlueprintFallback:true
       }).slice(0,targetTaskCount);
       if(!normalized.length){
         throw new Error('Task enrichment failed for all generated skeleton tasks.');
       }
+      logRoadmapPipelineEvent('active_stage_task_persistence_started',{
+        requestId:skeletonResult?.meta?.requestId||skeletonRequestId,
+        stageCount:getExecutionStages().length,
+        activeStageId:stage.id,
+        activeStageIndex:stageIndex,
+        taskCount:normalized.length
+      });
       const persisted=setStageTasks(stageIndex,normalized,{replace:true});
       stage.tasksGenerated=persisted.length>=targetTaskCount;
       stage.tasksPromptSignature=tasksPromptSignature;
@@ -2331,6 +3310,16 @@ async function generateTasksForStage(stageIndex,options={}){
       return persisted;
     }catch(error){
       const errorMessage=String(error?.message||'');
+      logError({
+        area:'frontend',
+        module:'frontend/script.js',
+        function:'generateTasksForStage',
+        action:'tasks_generation_failed_error',
+        stageIndex,
+        errorMessage,
+        existingTaskCount:existing.length,
+        activeTaskIds:getActiveStageTasks().map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id))
+      });
       logInfo({
         area:'frontend',
         module:'frontend/script.js',
@@ -2395,6 +3384,15 @@ async function initializeTasksForActiveStage(options={}){
       module:'frontend/script.js',
       function:'initializeTasksForActiveStage',
       action:'stage_task_generation_deferred_execution_uninitialized'
+    });
+    return [];
+  }
+  if(S.execution?.status==='completed'){
+    logInfo({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'initializeTasksForActiveStage',
+      action:'stage_task_generation_skipped_execution_completed'
     });
     return [];
   }
@@ -2718,13 +3716,11 @@ async function enrichActiveStageBestEffort(stageIndex,options={}){
 function prepareRoadmapSkeletonRequest(options={}){
   const context=options.context||buildRoadmapOnboardingContext();
   const contextMapping=options.contextMapping||roadmapContextPresence(context);
-  const weeksCount=Math.max(1,Number(options.weeksCount)||2);
   const strategyDesc=String(options.strategyDesc||'').trim();
-  const prompt=buildRoadmapSkeletonPrompt({weeksCount,strategyDesc,context});
+  const prompt=buildRoadmapSkeletonPrompt({strategyDesc,context});
   return {
     context,
     contextMapping,
-    weeksCount,
     strategyDesc,
     prompt,
     requestedMaxTokens:ROADMAP_SKELETON_MAX_TOKENS,
@@ -2733,14 +3729,14 @@ function prepareRoadmapSkeletonRequest(options={}){
 }
 async function generateStageTasksAfterRoadmap(activeIndex,activeStage,reason){
   const stages=getExecutionStages();
-  setStageTaskStatus(activeIndex,'not_generated');
-  logRoadmapPipelineEvent('post_roadmap_task_generation_deferred',{
+  setStageTaskStatus(activeIndex,'loading');
+  logRoadmapPipelineEvent('post_roadmap_task_generation_started',{
     stageCount:stages.length,
     activeStageId:activeStage?.id||'',
     activeStageIndex:activeIndex,
     errorMessage:String(reason||'')
   });
-  return {generated:[],taskCount:0};
+  return initializeTasksForActiveStage({force:true,silentFallback:false,reason:String(reason||'roadmap_created')});
 }
 async function generateRoadmapSkeleton(options={}){
   const prepared=prepareRoadmapSkeletonRequest(options);
@@ -2749,8 +3745,7 @@ async function generateRoadmapSkeleton(options={}){
     contextMapping,
     prompt,
     requestedMaxTokens,
-    clientRequestId,
-    weeksCount
+    clientRequestId
   }=prepared;
   const pipelineId=String(options.pipelineId||'');
   logInfo({
@@ -2780,7 +3775,6 @@ async function generateRoadmapSkeleton(options={}){
       {
         temperature:0.2,
         clientRequestId,
-        milestoneCount:weeksCount,
         roadmapMode:'skeleton',
         returnMeta:true,
         signal:options.signal,
@@ -2860,8 +3854,8 @@ async function bootstrapExecutionAfterRoadmap(reason='roadmap_created'){
     activeStageId:activeStage?.id||'',
     activeStageIndex:activeIndex
   });
-  setStageTaskStatus(activeIndex,'not_generated');
-  logRoadmapPipelineEvent('tasks_generation_deferred',{
+  logRoadmapPipelineEvent('post_roadmap_tasks_generation_deferred',{
+    roadmapId:S.execution?.id||'',
     stageCount:stages.length,
     activeStageId:activeStage?.id||'',
     activeStageIndex:activeIndex,
@@ -2873,7 +3867,6 @@ async function bootstrapExecutionAfterRoadmap(reason='roadmap_created'){
 async function runRoadmapPipeline(options={}){
   const pipelineId=String(options.pipelineId||'');
   const signal=options.signal;
-  const weeksCount=Math.max(1,Number(options.weeksCount)||2);
   const strategyDesc=String(options.strategyDesc||'').trim();
   const reason=String(options.reason||'roadmap_pipeline');
   const context=options.context||buildRoadmapOnboardingContext();
@@ -2891,7 +3884,6 @@ async function runRoadmapPipeline(options={}){
     contextFields:contextMapping.present
   });
   const nextRoadmap=await generateRoadmapSkeleton({
-    weeksCount,
     strategyDesc,
     context,
     contextMapping,
@@ -3012,6 +4004,7 @@ async function advanceRoadmapStage(options={}){
   if(!options.force&&!areStageTasksCompleted(currentIndex)) return false;
   stageAdvanceInFlight=true;
   try{
+    archiveStageTasksToHistory(currentIndex,{includeActive:true,keepStageTaskIds:true});
     currentStage.status='completed';
     currentStage.progress=100;
     const nextIndex=currentIndex+1;
@@ -3042,11 +4035,11 @@ async function advanceRoadmapStage(options={}){
     });
     refreshExecutionProgress();
     syncActiveTasksFromExecution();
-    saveTasks();
-    saveAll();
     const nextStage=stages[nextIndex];
     toast2('Milestone completed',`Next milestone unlocked: ${nextStage?.title||`Stage ${nextIndex+1}`}`);
-    await generateTasksForStage(nextIndex,{force:false,silentFallback:false});
+    await initializeTasksForActiveStage({force:true,silentFallback:false,reason:String(options.reason||'milestone_completed')});
+    saveTasks();
+    saveAll();
     return true;
   }finally{
     stageAdvanceInFlight=false;
@@ -3088,7 +4081,10 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
     stageObjective:clipText(opts?.stageObjective||'',150),
     stageTitle:clipText(opts?.stageTitle||'',40),
     stageIndex:Number.isFinite(Number(opts?.stageIndex))?Number(opts.stageIndex):0,
-    deadline:opts?.deadline||S?.user?.deadline||''
+    deadline:opts?.deadline||S?.user?.deadline||'',
+    stageStartDate:opts?.stageStartDate||'',
+    stageTargetDate:opts?.stageTargetDate||opts?.deadline||S?.user?.deadline||'',
+    taskDeadline:opts?.taskDeadline||''
   };
   try{
     if(action==='roadmap'){
@@ -3099,18 +4095,53 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
         action:'roadmap_raw_received',
         requestId:response.requestId||'',
         finishReason:response.finishReason||'',
+        responseShape:Array.isArray(response.stages)?`structured:${response.stages.length}`:typeof response.text,
+        responseText:clipText(response.text||'',200),
+        responseStages:Array.isArray(response.stages)
+          ? response.stages.slice(0,6).map((stage,index)=>({
+              index,
+              title:typeof stage==='string'?stage:clipText(stage?.title||'',80),
+              objective:typeof stage==='string'?'':clipText(stage?.objective||'',120),
+              outcome:typeof stage==='string'?'':clipText(stage?.outcome||'',120),
+            }))
+          : [],
+        responseStageCount:Number(response.stageCount||0),
         rawPreview:clipText(response.text||'',200)
       });
-      const parsedStages=parseStages(response.text);
-      logExecutionFlowEvent('roadmap_parsed',0,{
+      const structuredStages=Array.isArray(response.stages)&&response.stages.length?response.stages:null;
+      if(structuredStages){
+        logExecutionFlowEvent('roadmap_parsed',0,{
+          requestId:response.requestId||'',
+          stages:summarizeRoadmapStagesForLog(structuredStages.map((item,index)=>({
+            title:item?.title||`Stage ${index+1}`,
+            objective:item?.objective||'',
+            outcome:item?.outcome||'',
+            status:index===0?'active':''
+          })))
+        });
+      }
+      const parsedStages=structuredStages||parseStages(response.text);
+      logInfo({
+        area:'frontend',
+        module:'frontend/script.js',
+        function:'geminiJSON',
+        action:'roadmap_parse_inputs',
         requestId:response.requestId||'',
-        stages:summarizeRoadmapStagesForLog(parsedStages.map((item,index)=>({
-          title:typeof item==='string'?item:(item?.title||''),
-          objective:typeof item==='string'?'':(item?.objective||''),
-          outcome:typeof item==='string'?'':(item?.outcome||''),
-          status:index===0?'active':''
-        })))
+        responseStageCount:Number(response.stageCount||0),
+        parsedStageCount:Array.isArray(parsedStages)?parsedStages.length:0,
+        structuredStageCount:structuredStages?structuredStages.length:0
       });
+      if(!structuredStages){
+        logExecutionFlowEvent('roadmap_parsed',0,{
+          requestId:response.requestId||'',
+          stages:summarizeRoadmapStagesForLog(parsedStages.map((item,index)=>({
+            title:typeof item==='string'?item:(item?.title||''),
+            objective:typeof item==='string'?'':(item?.objective||''),
+            outcome:typeof item==='string'?'':(item?.outcome||''),
+            status:index===0?'active':''
+          })))
+        });
+      }
       const normalized=normalizeRoadmapSkeleton(parsedStages);
       logExecutionFlowEvent('roadmap_normalized',0,{
         requestId:response.requestId||'',
@@ -3135,7 +4166,10 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
       if(!parsedDetail){
         throw new Error('Task detail response does not match the plain-text contract.');
       }
-      const normalizedTasks=normalizeBetaTasks([parsedDetail],taskNormalizationContext);
+      const normalizedTasks=normalizeBetaTasks([parsedDetail],{
+        ...taskNormalizationContext,
+        deadlinePlan:[taskNormalizationContext.taskDeadline||taskNormalizationContext.stageTargetDate||taskNormalizationContext.deadline||'']
+      });
       if(!normalizedTasks.length){
         throw new Error('Task detail response contained no usable AI task.');
       }
@@ -3147,8 +4181,28 @@ async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx=''
     return parsed;
   }catch(parseErr){
     if(action==='roadmap'){
-      logWarn({area:'frontend',module:'frontend/script.js',function:'geminiJSON',action:'roadmap_partial_fallback',errorMessage:String(parseErr?.message||''),finishReason:response.finishReason||'',requestId:response.requestId||''});
-      const fallback=fallbackRoadmapForMvp();
+      const salvageStages=Array.isArray(response.stages)&&response.stages.length?response.stages:null;
+      logWarn({
+        area:'frontend',
+        module:'frontend/script.js',
+        function:'geminiJSON',
+        action:salvageStages?'roadmap_salvage_used':'roadmap_partial_fallback',
+        errorMessage:String(parseErr?.message||''),
+        finishReason:response.finishReason||'',
+        requestId:response.requestId||'',
+        responseShape:salvageStages?`structured:${salvageStages.length}`:typeof response.text,
+        responseText:clipText(response.text||'',200),
+        responseStages:Array.isArray(response.stages)
+          ? response.stages.slice(0,6).map((stage,index)=>({
+              index,
+              title:typeof stage==='string'?stage:clipText(stage?.title||'',80),
+              objective:typeof stage==='string'?'':clipText(stage?.objective||'',120),
+              outcome:typeof stage==='string'?'':clipText(stage?.outcome||'',120),
+            }))
+          : [],
+        responseStageCount:Number(response.stageCount||0)
+      });
+      const fallback=salvageStages||fallbackRoadmapForMvp();
       logExecutionFlowEvent('fallback_used',0,{requestId:response.requestId||'',stages:summarizeRoadmapStagesForLog(fallback)});
       if(opts?.returnMeta) return {data:fallback,meta};
       return fallback;
@@ -3181,8 +4235,9 @@ const S = {
   contextSummary:'',
   roadmap:null, chatHistory:[], loading:false,
   execution:null,
-  progress:{sessions:0,streak:0,hours:0,milestones:0,tasksDone:0,activityLog:[],sessionLog:[]},
-  tasks:[], goals:[], notes:[],
+  progress:{sessions:0,completedSessions:0,interruptedSessions:0,blockedSessions:0,sessionCompletionRate:0,streak:0,hours:0,milestones:0,tasksDone:0,activityLog:[],sessionLog:[]},
+  tasks:[], // derived mirror of the active execution stage for legacy UI compatibility
+  goals:[], notes:[],
   activeSession:null, paypalLoaded:false
 };
 const INITIAL_STATE_SNAPSHOT = JSON.parse(JSON.stringify(S));
@@ -3612,7 +4667,7 @@ function buildContextSummaryFromState(){
   const projectValue=ctx.project_name||ctx.startup_idea||'MVP стартап';
   const goalValue=ctx.primary_goal||'запуск продукта';
   const stageValue=ctx.current_stage||'ранняя стадия';
-  const topTasks=(S.tasks||[]).filter(t=>!t.done).slice(0,7).map((t)=>clipText(getTaskTitle(t),60)).join('; ');
+  const topTasks=getVisibleActiveTasks().filter(t=>!t.done).slice(0,7).map((t)=>clipText(getTaskTitle(t),60)).join('; ');
   const topGoals=(S.goals||[]).slice(0,2).map(g=>clipText(g.title,60)).join('; ');
   const topBlockers=ctx.blocker||'нет явных';
   return [
@@ -3670,6 +4725,7 @@ function loadAll(){
     if(summary)S.contextSummary=String(summary);
     const u=localStorage.getItem('sa_user');if(u)Object.assign(S.user,JSON.parse(u));
     const p=localStorage.getItem('sa_progress');if(p)Object.assign(S.progress,JSON.parse(p));
+    ensureSessionProgressCounters();
     const b=localStorage.getItem('sa_billing');if(b)Object.assign(S.billing,JSON.parse(b));
     const r=localStorage.getItem('sa_roadmap');if(r)S.roadmap=JSON.parse(r);
     const ex=localStorage.getItem(SA_EXECUTION_KEY);if(ex)S.execution=JSON.parse(ex);
@@ -3687,9 +4743,48 @@ function loadAll(){
   }
   if(!S.contextSummary)refreshContextSummary();
 }
+function ensureSessionProgressCounters(){
+  const sessionLog=Array.isArray(S.progress.sessionLog)?S.progress.sessionLog:[];
+  if(!Number.isFinite(Number(S.progress.completedSessions))){
+    S.progress.completedSessions=0;
+  }
+  if(!Number.isFinite(Number(S.progress.interruptedSessions))){
+    S.progress.interruptedSessions=0;
+  }
+  if(!Number.isFinite(Number(S.progress.blockedSessions))){
+    S.progress.blockedSessions=0;
+  }
+  if(Number(S.progress.completedSessions||0)===0 && sessionLog.length){
+    S.progress.completedSessions=sessionLog.filter((entry)=>String(entry.status||'')==='completed').length;
+    S.progress.interruptedSessions=sessionLog.filter((entry)=>String(entry.status||'')==='interrupted').length;
+    S.progress.blockedSessions=sessionLog.filter((entry)=>String(entry.status||'')==='blocked').length;
+  }
+  S.progress.sessionCompletionRate=Number(S.progress.sessions||0)>0
+    ? Math.round(((Number(S.progress.completedSessions||0))/Number(S.progress.sessions||1))*100)
+    : 0;
+}
 
 /* ══ HELPERS ══ */
-function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function escHtml(s){
+  if(s!==null&&s!==undefined&&typeof s!=='string'){
+    logDebug({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'escHtml',
+      action:'non_string_input_coerced',
+      valueType:typeof s,
+      isArray:Array.isArray(s),
+      isNull:s===null,
+      isObject:typeof s==='object'&&s!==null,
+      sampleKeys:typeof s==='object'&&s!==null&&!Array.isArray(s)?Object.keys(s).slice(0,5):[]
+    });
+  }
+  return String(s??'')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
 function toast2(title,body=''){document.getElementById('tt').textContent=title;document.getElementById('tb2').textContent=body;const t=document.getElementById('toast');t.classList.add('on');clearTimeout(t._tm);t._tm=setTimeout(()=>t.classList.remove('on'),3200);}
 function togglePill(el){el.classList.toggle('on');}
 function getSelectedPills(id){return Array.from(document.querySelectorAll('#'+id+' .pill.on')).map(p=>p.textContent.trim());}
@@ -3718,9 +4813,8 @@ function normalizeRoadmapVariant(v){
   const safe=String(v||'').trim().toLowerCase();
   return ['safe','balanced','aggressive'].includes(safe)?safe:'balanced';
 }
-function roadmapMaxTokens(weeksCount,variant='balanced'){
+function roadmapMaxTokens(variant='balanced'){
   const _safeVariant=normalizeRoadmapVariant(variant);
-  const _weeks=Number(weeksCount)||2;
   return ROADMAP_DEFAULT_MAX_TOKENS;
 }
 function roadmapResponseJsonSchema(){
@@ -3731,8 +4825,6 @@ function roadmapResponseJsonSchema(){
     properties:{
       stages:{
         type:'array',
-        minItems:ROADMAP_MIN_STAGES,
-        maxItems:ROADMAP_MAX_STAGES,
         items:{
           type:'object',
           additionalProperties:false,
@@ -3763,8 +4855,6 @@ function roadmapSkeletonResponseJsonSchema(){
     properties:{
       stages:{
         type:'array',
-        minItems:ROADMAP_MIN_STAGES,
-        maxItems:ROADMAP_MAX_STAGES,
         items:{
           type:'object',
           additionalProperties:false,
@@ -3818,7 +4908,7 @@ function taskAuditResponseJsonSchema(){
     }
   };
 }
-function buildRoadmapPrompt(weeksCount,strategyDesc=''){
+function buildRoadmapPrompt(strategyDesc=''){
   const ctx=buildRoadmapOnboardingContext();
   const summary=clipText(getContextSummary(),320);
   const deadline=ctx.deadline||'';
@@ -3842,7 +4932,7 @@ function buildRoadmapPrompt(weeksCount,strategyDesc=''){
       missingFields:mapping.missing
     });
   }
-  return `Собери milestone roadmap на ${weeksCount} milestones.
+  return `Собери milestone roadmap.
 
 Контекст:
 - Project: ${ctx.project_name||'не указано'}
@@ -3851,10 +4941,7 @@ function buildRoadmapPrompt(weeksCount,strategyDesc=''){
 - Built: ${ctx.built_status||'не указано'}
 - Niche: ${ctx.niche||'не указано'}
 - Audience: ${ctx.target_audience||'не указано'}
-<<<<<<< Updated upstream
-=======
 - Execution style: ${ctx.execution_style||'не указано'}
->>>>>>> Stashed changes
 - Resources: ${ctx.resources||'не указано'}
 - Blocker: ${ctx.blocker||'нет явных'}
 - Hours/day: ${ctx.daily_hours||'не указано'}
@@ -3866,20 +4953,21 @@ ${strategyDesc?`- Pace: ${strategyDesc}`:''}
 ${summary}
 
 Верни только JSON-объект вида { "stages": [...] }.
-Нужно ровно ${weeksCount} stages, без лишнего текста и без полного task dump.
+Определи число milestones/stages самостоятельно по реальному масштабу, срокам и сложности проекта.
+Итоговый roadmap должен содержать минимум 3 milestones.
+Не используй фиксированное число.
 Каждый stage содержит: title, objective, outcome, reasoning, completion_criteria, target_date.
 Later milestones must stay concrete and execution-heavy.
 Пиши компактно: короткие поля, без повторов, без пояснений вне JSON.`;
 }
 function buildRoadmapSkeletonPrompt(context={}){
-  const weeksCount=Math.max(1,Number(context.weeksCount)||2);
   const strategyDesc=String(context.strategyDesc||'').trim();
   const ctx=context.context||buildRoadmapOnboardingContext();
   const summary=clipText(getContextSummary(),280);
   const deadline=ctx.deadline||S.user.deadline||'';
   const windowDays=getRoadmapPromptWindowDays(deadline);
   const horizonLabel=deadline?`Дедлайн: ${deadline}`:'Дедлайн: в пределах 14 дней';
-  return `Собери roadmap skeleton на ${weeksCount} milestones.
+  return `Собери roadmap skeleton.
 
 Контекст:
 - Project: ${ctx.project_name||'не указано'}
@@ -3903,14 +4991,16 @@ ${summary}
 1. Stage name || objective || outcome || reasoning
 2. Stage name || objective || outcome || reasoning
 ...
-${weeksCount}. Stage name || objective || outcome || reasoning
+N. Stage name || objective || outcome || reasoning
 
 Правила:
-- верни ровно ${weeksCount} стадии
 - каждая строка начинается с порядкового номера
 - objective, outcome и reasoning короткие, но конкретные
 - later milestones must not be hollow
 - каждая стадия должна вести к реальному execution
+- выбери количество стадий самостоятельно по scope и timeline
+- не ограничивайся фиксированным количеством
+- итоговый roadmap должен содержать минимум 3 стадии
 - без лишнего текста`;
 }
 function buildActiveStageEnrichmentPrompt(stage,context={}){
@@ -3943,10 +5033,11 @@ function normalizeRoadmapSkeleton(raw){
   const source=Array.isArray(raw?.stages)
     ? raw.stages
     : (Array.isArray(raw)?raw:[]);
-  const count=getDesiredRoadmapStageCount(S?.user?.deadline,source.length||0);
-  const fallback=fallbackRoadmapForMvp(count);
-  const targetDates=spreadDatesBetween(new Date(),S?.user?.deadline||addDaysToDateInput(toDateInputValue(new Date()),count*4),count);
-  return Array.from({length:count},(_,index)=>{
+  const fallbackCount=Math.max(3,source.length||estimateFallbackRoadmapStageCount({context:buildRoadmapOnboardingContext()}));
+  const fallback=fallbackRoadmapForMvp(fallbackCount);
+  const targetCount=Math.max(3,source.length||fallback.length);
+  const targetDates=spreadDatesBetween(new Date(),S?.user?.deadline||addDaysToDateInput(toDateInputValue(new Date()),targetCount*4),targetCount);
+  return Array.from({length:targetCount},(_,index)=>{
     const candidate=source[index]||{};
     const fallbackStage=fallback[index]||fallback[fallback.length-1]||{};
     const candidateTitle=typeof candidate==='string'
@@ -3969,7 +5060,11 @@ function normalizeRoadmapSkeleton(raw){
       target_date:toIsoDateOnly(candidate?.target_date||fallbackStage?.target_date||targetDates[index]||''),
       completion_criteria:completionCriteria,
       reasoning:clipText(candidate?.reasoning||fallbackStage?.reasoning||'',220),
-      days:tasksToDays(completionCriteria,count<=3?5:Math.max(3,Math.round(getRoadmapDeadlineDays(S?.user?.deadline)/count)),'2-4ч')
+      days:tasksToDays(
+        completionCriteria,
+        Math.max(3,Math.round(getRoadmapDeadlineDays(S?.user?.deadline)/Math.max(1,targetCount))),
+        '2-4ч'
+      )
     };
   });
 }
@@ -4005,6 +5100,7 @@ Rules:
 - exactly ${taskCount} lines
 - short action titles (max 6-8 words)
 - each task must be concrete and stage-specific
+- keep the sequence chronological inside the milestone window
 - prefer execution work, not placeholders
 - no extra text
 
@@ -4015,6 +5111,7 @@ function buildMilestoneTaskDetailPrompt(taskSkeleton,stage,intensityDesc='',opti
   const context=options.context||buildRoadmapOnboardingContext();
   const taskCount=Math.max(1,Number(options.taskCount)||5);
   const taskIndex=Math.max(1,Number(options.taskIndex)||1);
+  const taskDeadline=clipText(options.taskDeadline||'',20);
   const outputLanguage=detectTaskOutputLanguage(
     taskSkeleton?.title||'',
     normalizedStage.title||'',
@@ -4040,6 +5137,7 @@ Objective: ${stageObjective}
 Task: ${clipText(taskSkeleton?.title||'',96)}
 Deadline: ${deadline}
 Window: ${stageStart} -> ${stageTarget}
+Suggested due date: ${taskDeadline||stageTarget}
 Slot: ${taskIndex}/${taskCount}
 
 Return only:
@@ -4103,12 +5201,14 @@ function normalizeAiTasks(tasks,options={}){
       created:t?.created||existing?.created
     };
     const stageIdxRaw=Number(merged?.linkedStage??merged?.linked_stage);
-    const stageIndex=Number.isFinite(stageIdxRaw)?Math.max(0,Math.min(ROADMAP_MAX_STAGES-1,stageIdxRaw-1)):0;
+    const stageCount=resolveRoadmapStageCountHint(options,Number.isFinite(stageIdxRaw)?stageIdxRaw:1);
+    const stageIndex=Number.isFinite(stageIdxRaw)?Math.max(0,Math.min(stageCount-1,stageIdxRaw-1)):0;
     const normalized=normalizeFounderTask(merged,{
       stageIndex,
       stageTitle:options.stageTitle||'Stage 1',
       stageObjective:options.stageObjective||existing?.stageObjective||'',
-      deadline:options.deadline||S.user.deadline||''
+      deadline:options.deadline||S.user.deadline||'',
+      stageCount
     });
     return {
       ...normalized,
@@ -4116,7 +5216,7 @@ function normalizeAiTasks(tasks,options={}){
       text:getTaskTitle(normalized),
       done:Boolean(merged.done),
       created:String(merged.created||normalized.created||new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short'})).trim(),
-      linkedStage:Math.max(1,Math.min(ROADMAP_MAX_STAGES,Number(normalized.linkedStage)||1))
+      linkedStage:Math.max(1,Math.min(stageCount,Number(normalized.linkedStage)||1))
     };
   });
 }
@@ -4172,6 +5272,8 @@ let roadmapRequestInFlight=false;
 let taskRequestInFlight=false;
 let roadmapRebuildCount=0;
 let roadmapRebuildClickInFlight=false;
+let taskPreviewPending=false;
+let taskPreviewStageIndex=null;
 function obSelectMode(m){obMode=m;document.getElementById('tab-b2c').classList.toggle('on',m==='b2c');}
 function loadRoadmapRebuildCount(){
   if(!canPersistUserData()){
@@ -4294,21 +5396,93 @@ function hideFlowOverlay(){
   flowOverlayIndex=0;
   const overlay=document.getElementById('flow-overlay');
   const actionsEl=document.getElementById('flow-actions');
+  const previewEl=document.getElementById('flow-preview');
   if(overlay) overlay.classList.remove('on');
   if(actionsEl) actionsEl.innerHTML='';
+  if(previewEl) previewEl.innerHTML='';
 }
 function showRoadmapReadyPrompt(){
   setFlowOverlayMode('prompt',{
     kicker:'Roadmap ready',
-    title:'Create tasks for the first milestone',
-    copy:'The roadmap is generated. Continue to build the execution list for the first milestone, then you will enter Tasks & Goals.',
+    title:'Your roadmap is ready',
+    copy:'Review the roadmap preview below, then continue to task generation or regenerate from the same onboarding context.',
     messages:[
       'Milestones mapped.',
-      'Execution window ready.',
-      'Preparing first-stage tasks.'
+      'Execution path ready.',
+      'Previewing the generated roadmap.'
     ],
-    actionsHtml:'<button class="btn btn-primary btn-sm" onclick="runFirstMilestoneTaskFlow()">Create tasks for the first milestone</button>'
+    actionsHtml:[
+      '<button class="btn btn-primary btn-sm" onclick="continueRoadmapToTasks()">Continue to Tasks</button>',
+      '<button class="btn btn-ghost btn-sm" onclick="regenerateRoadmapFromPreview()">Regenerate</button>'
+    ].join('')
   });
+  renderRoadmapPreview();
+}
+function showTaskPreviewPrompt({stageIndex=0,regenerated=false}={}){
+  ensureExecutionState();
+  const stage=getExecutionStage(stageIndex)||getExecutionSessionStage()||getExecutionStage(getExecutionActiveStageIndex());
+  const tasks=getTasksForStage(stageIndex,{includeArchived:false});
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'showTaskPreviewPrompt',
+    action:'task_preview_input_shape',
+    stageIndex,
+    regenerated:Boolean(regenerated),
+    taskCount:tasks.length,
+    firstTaskShape:tasks[0]?{
+      titleType:typeof tasks[0].title,
+      textType:typeof tasks[0].text,
+      deadlineType:typeof tasks[0].deadline,
+      priorityType:typeof tasks[0].priority,
+      milestoneTitleType:typeof tasks[0].milestoneTitle
+    }:null
+  });
+  const previewTasks=tasks.slice(0,3);
+  const taskCards=previewTasks.map((task)=>{
+    const prio=normalizeTaskPriority(task.priority||task.prio);
+    const title=getTaskTitle(task);
+    return `<div class="flow-task-preview-item">
+      <div class="flow-task-preview-head">
+        <div class="flow-task-preview-title">${escHtml(title)}</div>
+        <div class="flow-task-preview-prio prio-${prio}">${escHtml(taskPrioLabel(prio))}</div>
+      </div>
+      <div class="flow-task-preview-meta">
+        <span>${escHtml(task.deadline||'No deadline')}</span>
+        <span>${escHtml(task.estimateHours||2)}h</span>
+      </div>
+      <div class="flow-task-preview-copy">${escHtml(task.milestoneTitle||stage?.title||'')}</div>
+    </div>`;
+  }).join('');
+  setFlowOverlayMode('prompt',{
+    kicker:regenerated?'Tasks regenerated':'Tasks ready',
+    title:stage?.title||'Active milestone tasks',
+    copy:'Are these the right tasks for this milestone? Review the set, regenerate if needed, or continue into execution.',
+    messages:[
+      'Previewing the generated task set.',
+      'Choose whether to keep this batch.',
+      'Continue when the set looks right.'
+    ],
+    actionsHtml:[
+      '<button class="btn btn-primary btn-sm" onclick="continueTaskPreviewToWork()">Continue</button>',
+      '<button class="btn btn-ghost btn-sm" onclick="regenerateTasksFromPreview()">Regenerate Tasks</button>'
+    ].join('')
+  });
+  const previewEl=document.getElementById('flow-preview');
+  if(previewEl){
+    previewEl.innerHTML=`<div class="flow-task-preview-shell">
+      <div class="flow-task-preview-headline">
+        <div class="flow-task-preview-kicker">Milestone preview</div>
+        <div class="flow-task-preview-title-main">${escHtml(stage?.title||'Active milestone')}</div>
+        <div class="flow-task-preview-sub">${escHtml(stage?.objective||S.user.goal||'')}</div>
+      </div>
+      <div class="flow-task-preview-grid">
+        ${taskCards || '<div class="flow-task-preview-empty">No generated tasks are available yet.</div>'}
+      </div>
+    </div>`;
+  }
+  taskPreviewPending=true;
+  taskPreviewStageIndex=stageIndex;
 }
 function showFlowLoading(title,copy,messages){
   setFlowOverlayMode('loading',{
@@ -4502,9 +5676,6 @@ function obNext(from){
   }
   obGo(from+1);
 }
-function calcWeeksFromDeadline(deadline){
-  return getDesiredRoadmapStageCount(deadline);
-}
 async function obGenerateRoadmap(){
   const {pipelineId,signal}=startRoadmapPipelineSession();
   roadmapRequestInFlight=true;
@@ -4527,10 +5698,8 @@ async function obGenerateRoadmap(){
     S.user.roadmapStyle=roadmapVariant;
     syncRoadmapVariantUI();
     const variantDesc={safe:'Conservative pace: 2-4 focused hours per day, lower risk and tighter scope',balanced:'Balanced pace: 4-6 focused hours per day, steady shipping rhythm',aggressive:'Aggressive pace: 8-10 intense hours per day, maximum output'}[roadmapVariant];
-    const weeksCount=calcWeeksFromDeadline(S.user.deadline);
     const roadmapCtx=buildRoadmapOnboardingContext();
     const pipelineResult=await runRoadmapPipeline({
-      weeksCount,
       strategyDesc:variantDesc,
       context:roadmapCtx,
       reason:'post_roadmap_onboarding',
@@ -4605,6 +5774,152 @@ async function obGenerateRoadmap(){
     if(!roadmapReady) hideFlowOverlay();
   }
 }
+function renderRoadmapPreview(){
+  const host=document.getElementById('flow-preview');
+  if(!host||!S.roadmap||!S.roadmap.length) return;
+  host.innerHTML=buildRoadmapSurfaceMarkup({
+    showFocus:true,
+    showDetail:true,
+    showFooter:false,
+    interactiveNodes:true,
+    surfaceClass:'rm-roadmap-shell--preview',
+    canvasKicker:'Roadmap preview',
+    canvasTitle:'Milestones flow along a single execution path'
+  });
+}
+async function continueRoadmapToTasks(){
+  if(taskRequestInFlight){
+    logWarn({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'continueRoadmapToTasks',
+      action:'continue_to_tasks_skipped_request_in_flight'
+    });
+    return;
+  }
+  ensureExecutionState();
+  const activeIndex=getExecutionActiveStageIndex();
+  const activeStage=getExecutionStage(activeIndex);
+  const existingCount=getActiveStageTasks().length;
+  logRoadmapPipelineEvent('continue_to_tasks_clicked',{
+    roadmapId:S.execution?.id||'',
+    stageCount:getExecutionStages().length,
+    activeStageId:activeStage?.id||'',
+    activeStageIndex:activeIndex,
+    taskCount:existingCount
+  });
+  hideFlowOverlay();
+  showFlowLoading(
+    'Preparing tasks',
+    'Generating the first milestone tasks from the same roadmap context.',
+    ['Loading milestone scope.', 'Building the first execution list.', 'Preparing Tasks & Goals.']
+  );
+  try{
+    let tasks=getActiveStageTasks();
+    if(!tasks.length){
+      logRoadmapPipelineEvent('continue_to_tasks_generation_started',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length,
+        activeStageId:activeStage?.id||'',
+        activeStageIndex:activeIndex
+      });
+      tasks=await handleGenerateTasksClick({skipPreview:true});
+    }else{
+      logRoadmapPipelineEvent('continue_to_tasks_existing_tasks_used',{
+        roadmapId:S.execution?.id||'',
+        stageCount:getExecutionStages().length,
+        activeStageId:activeStage?.id||'',
+        activeStageIndex:activeIndex,
+        taskCount:tasks.length
+      });
+      syncActiveTasksFromExecution();
+      saveAll();
+      renderTasks();
+    }
+    const finalCount=Array.isArray(tasks)?tasks.length:getActiveStageTasks().length;
+    if(!finalCount){
+      throw new Error('No tasks were created for the active milestone');
+    }
+    logRoadmapPipelineEvent('continue_to_tasks_generation_completed',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length,
+      activeStageId:activeStage?.id||'',
+      activeStageIndex:activeIndex,
+      taskCount:finalCount
+    });
+    logRoadmapPipelineEvent('continue_to_tasks_route_transition',{
+      roadmapId:S.execution?.id||'',
+      stageCount:getExecutionStages().length,
+      activeStageId:activeStage?.id||'',
+      activeStageIndex:activeIndex,
+      taskCount:finalCount
+    });
+    hideFlowOverlay();
+    if(!taskPreviewPending){
+      showTaskPreviewPrompt({stageIndex:activeIndex,regenerated:false});
+    }
+  }catch(error){
+    logWarn({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'continueRoadmapToTasks',
+      action:'continue_to_tasks_failed',
+      activeStageIndex:activeIndex,
+      activeStageId:activeStage?.id||'',
+      taskCount:getActiveStageTasks().length,
+      errorMessage:String(error?.message||'')
+    });
+    hideFlowOverlay();
+    toast2('Task generation failed',mapGeminiErrorMessage(error,'tasks'));
+  }
+}
+async function regenerateRoadmapFromPreview(){
+  hideFlowOverlay();
+  await obGenerateRoadmap();
+}
+async function continueTaskPreviewToWork(){
+  ensureExecutionState();
+  if(taskPreviewPending&&Number.isFinite(taskPreviewStageIndex)){
+    const stageIndex=taskPreviewStageIndex;
+    const session=prepareExecutionSession({forceRetarget:true});
+    if(session){
+      session.taskIds=getTasksForStage(stageIndex,{includeArchived:false}).map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id)).slice(0,3);
+      session.status='planned';
+      session.review=normalizeExecutionSessionReview();
+      session.reviewOpenedAt='';
+      session.reviewAppliedAt='';
+      session.baseline=buildSessionBaseline(stageIndex);
+      updateSessionRuntimeSession(session);
+    }
+    taskPreviewPending=false;
+    taskPreviewStageIndex=null;
+  }
+  hideFlowOverlay();
+  obLaunch({page:'work',workTab:'tasks'});
+}
+async function regenerateTasksFromPreview(){
+  ensureExecutionState();
+  const stageIndex=Number.isFinite(taskPreviewStageIndex)?taskPreviewStageIndex:getExecutionActiveStageIndex();
+  const stage=getExecutionStage(stageIndex);
+  if(!stage){
+    toast2('No active milestone','Generate a roadmap first.');
+    return;
+  }
+  showFlowLoading(
+    'Regenerating tasks',
+    'Refreshing the task set for the same milestone.',
+    ['Building a fresh milestone task set.', 'Replacing the preview with new tasks.', 'Keeping execution state canonical.']
+  );
+  try{
+    const tasks=await handleGenerateTasksClick({regenerated:true});
+    const finalTasks=Array.isArray(tasks)&&tasks.length?tasks:getActiveStageTasks();
+    if(!finalTasks.length) throw new Error('No tasks generated for preview');
+    hideFlowOverlay();
+  }catch(error){
+    hideFlowOverlay();
+    toast2('Task generation failed',mapGeminiErrorMessage(error,'tasks'));
+  }
+}
 function obShowGoals(){
   if(!S.roadmap)return;
   ensureExecutionState();
@@ -4664,7 +5979,7 @@ function obPrepLaunch(){
   if(tk)tk.textContent=String((getActiveStageTasks().length||0));
 }
 function obContinueToLaunch(){obPrepLaunch();obLaunch({startTour:true});}
-async function handleGenerateTasksClick(){
+async function handleGenerateTasksClick(options={}){
   if(!S.roadmap||taskRequestInFlight)return;
   taskRequestInFlight=true;
   try{
@@ -4712,6 +6027,27 @@ async function handleGenerateTasksClick(){
     });
     const activeStageIndex=recoveredActiveStageIndex;
     const activeStage=recoveredActiveStage;
+    logInfo({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'handleGenerateTasksClick',
+      action:'continue_to_tasks_stage_resolved',
+      source:'execution_recovery',
+      activeStageId:activeStage?.id||'',
+      activeStageTitle:clipText(activeStage?.title||'',80),
+      activeStageIndex
+    });
+    logInfo({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'handleGenerateTasksClick',
+      action:'task_generation_entry_shape',
+      activeStageIndex,
+      activeStageId:activeStage?.id||'',
+      hasRoadmap:Array.isArray(S.roadmap),
+      hasExecution:isExecutionStateObject(S.execution),
+      hasExistingTasks:getActiveStageTasks().length>0
+    });
     logRoadmapPipelineEvent('tasks_generation_manual_started',{
       roadmapId:S.execution?.id||'',
       stageCount:getExecutionStages().length,
@@ -4730,15 +6066,28 @@ async function handleGenerateTasksClick(){
       throw new Error('Active stage tasks are still missing');
     }
     syncActiveTasksFromExecution();
+    const previewSession=prepareExecutionSession({forceRetarget:true});
+    if(previewSession){
+      previewSession.taskIds=recommendSessionTaskIds(activeStageIndex).slice(0,3);
+      previewSession.status='planned';
+      previewSession.review=normalizeExecutionSessionReview();
+      previewSession.reviewOpenedAt='';
+      previewSession.reviewAppliedAt='';
+      previewSession.baseline=buildSessionBaseline(activeStageIndex);
+      updateSessionRuntimeSession(previewSession);
+    }
+    if(options.skipPreview!==true){
+      showTaskPreviewPrompt({stageIndex:activeStageIndex,regenerated:Boolean(options.regenerated)});
+    }
     saveAll();
     logRoadmapPipelineEvent('tasks_generation_manual_completed',{
       roadmapId:S.execution?.id||'',
       stageCount:getExecutionStages().length,
       activeStageId:getExecutionStage(getExecutionActiveStageIndex())?.id||'',
       activeStageIndex:getExecutionActiveStageIndex(),
-      taskCount:Array.isArray(tasks)?tasks.length:S.tasks.length
+      taskCount:Array.isArray(tasks)?tasks.length:getActiveStageTasks().length
     });
-    toast2('Задачи сгенерированы',`Подготовлено ${S.tasks.length} задач для первого этапа`);
+    toast2('Задачи сгенерированы',`Подготовлено ${getActiveStageTasks().length} задач для первого этапа`);
     return tasks;
   }catch(e){
     logRoadmapPipelineEvent('execution_recovery_failed',{
@@ -4765,19 +6114,7 @@ async function obGenerateTasks(){
   return handleGenerateTasksClick();
 }
 async function runFirstMilestoneTaskFlow(){
-  if(!S.roadmap||taskRequestInFlight)return;
-  showFlowLoading(
-    'Creating tasks for the first milestone',
-    'The execution list is being built from the active milestone before opening Tasks & Goals.',
-    ['Translating milestone intent into tasks.', 'Checking scope against the first execution window.', 'Preparing the task board.']
-  );
-  try{
-    await handleGenerateTasksClick();
-    hideFlowOverlay();
-    obLaunch({startTour:false,page:'work',workTab:'tasks'});
-  }catch(e){
-    hideFlowOverlay();
-  }
+  return continueRoadmapToTasks();
 }
 function obFinish(){
   const btn=document.getElementById('ob-launch-btn');
@@ -4849,6 +6186,8 @@ function gp(id){
   if(id==='analytics'){renderAnalytics();}
   if(id==='roadmap'){updRoadmapProgress();if(S.roadmap)renderRM();}
   if(id==='billing'){renderBillingBtns();}
+  renderDashboardSessionControls();
+  renderSessionOverlay();
   trackEvent('page_'+id);
 }
 
@@ -4996,42 +6335,23 @@ function startSession(){
   toast2('Session started!',focus);
 }
 function markDone(){
-  if(!S.activeSession){toast2('Start a session first','Set focus and click Start Session');return;}
-  clearInterval(S.activeSession.timerInterval);
-  const duration=(Date.now()-S.activeSession.startTime)/60000;
-  const focus=S.activeSession.focus;
-  const prevDone=S.progress.tasksDone;
-  const newDone=(S.tasks||[]).filter(t=>t.done||t.status==='done').length;
-  const hasTask=newDone>prevDone;
-  S.progress.sessions++;
-  S.progress.hours+=duration/60;
-  refreshExecutionProgress();
-  if(hasTask){logActivityInternal(focus,Math.round(duration));feedLine(`Session done: ${Math.round(duration)}m · "${focus}" · streak +1`);toast2('Session complete! 🚀','Streak updated');}
-  else{feedLine(`Session done: ${Math.round(duration)}m · no tasks — streak NOT counted`);toast2('Session saved','Complete a task to count streak');}
-  if(!S.progress.sessionLog)S.progress.sessionLog=[];
-  const today=new Date().toDateString();
-  const log=S.progress.sessionLog.find(e=>e.date===today);
-  if(log){log.sessions++;log.tasks=Math.max(0,newDone-prevDone);log.focus=focus;log.duration=Math.round(duration);}
-  else S.progress.sessionLog.push({date:today,sessions:1,tasks:Math.max(0,newDone-prevDone),focus,duration:Math.round(duration)});
-  S.activeSession=null;
-  document.getElementById('focus-input-row').style.display='flex';
-  document.getElementById('default-actions').style.display='flex';
-  document.getElementById('session-active-row').style.display='none';
-  document.getElementById('focus-input').value='';
-  document.getElementById('session-timer-display').textContent='00:00';
-  updProgress();updDashboard();if(S.roadmap)renderRM();saveAll();
-  document.getElementById('dstat-sess').textContent=S.progress.sessions;
-  document.getElementById('dstat-streak').textContent=S.progress.streak+'🔥';
-  document.getElementById('dstat-pct').textContent=totalPct()+'%';
-  updMilestoneBar();updRoadmapProgress();
-  trackEvent('session_done');initHM();initHM2();
+  if(isSessionRunning()){
+    endSession('completed');
+    return;
+  }
+  if(isSessionReviewOpen()){
+    applySessionReviewResults().catch((error)=>console.error('Session review apply failed',error));
+    return;
+  }
+  toast2('Start a session first','Select tasks and start the session from Tasks & Goals.');
 }
 function logActivityInternal(focus,durationMin){const today=new Date().toDateString();if(!S.progress.activityLog.includes(today)){S.progress.activityLog.push(today);S.lastActivity=Date.now();updStreak();}}
 function updStreak(){let s=0;const today=new Date();for(let i=0;i<60;i++){const d=new Date(today);d.setDate(d.getDate()-i);if(S.progress.activityLog.includes(d.toDateString()))s++;else break;}S.progress.streak=s;}
 
 /* ══ MILESTONE BAR ══ */
 function updMilestoneBar(){
-  const total=(S.tasks||[]).length;const done=(S.tasks||[]).filter(t=>t.done).length;
+  const activeTasks=getVisibleActiveTasks();
+  const total=activeTasks.length;const done=activeTasks.filter((task)=>task.done||task.status==='done').length;
   const pct=total>0?Math.round((done/total)*100):0;
   const ms=S.progress.milestones+1;
   const msEl=document.getElementById('ms-num');if(msEl)msEl.textContent=ms;
@@ -5046,14 +6366,15 @@ function updRoadmapProgress(){
   const el=id=>document.getElementById(id);
   const set=(id,v)=>{const e=el(id);if(e)e.textContent=v;};
   set('rm-pct',pct+'%');
-  set('rm-sess',S.progress.sessions);
+  set('rm-sess',S.progress.completedSessions||0);
   set('rm-streak',S.progress.streak+'🔥');
   set('rm-hrs',Math.round(S.progress.hours)+'h invested');
-  const currentMilestone=S.roadmap&&S.roadmap.length?Math.min(getRoadmapActiveIndex()+1,S.roadmap.length):0;
+  const roadmapStages=getRoadmapViewStages();
+  const currentMilestone=roadmapStages.length?Math.min(getRoadmapActiveIndex()+1,roadmapStages.length):0;
   set('rm-ms',currentMilestone);
   set('rm-tasks',S.progress.tasksDone||0);
   set('rm-prog-label',pct===0?'Start your first milestone':pct<50?'Building milestone momentum':'On track!');
-  const totalWks = S.roadmap ? S.roadmap.length : '?';
+  const totalWks = roadmapStages.length || '?';
   set('rm-total-weeks','of '+totalWks+' weeks');
 }
 
@@ -5092,20 +6413,20 @@ function totalPct(){
   const tot=S.roadmap
     ? Math.max(1,S.roadmap.reduce((sum,phase)=>sum+Math.max(1,(phase?.days||[]).length),0))
     : 56;
-  return Math.min(100,Math.round((S.progress.sessions/tot)*100));
+  return Math.min(100,Math.round((Number(S.progress.completedSessions||0)/tot)*100));
 }
 function updProgress(){
   const pct=totalPct();
   const s=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
-  s('pr-pct',pct+'%');s('pr-sess',S.progress.sessions);s('pr-streak',S.progress.streak);
+  s('pr-pct',pct+'%');s('pr-sess',S.progress.completedSessions||0);s('pr-streak',S.progress.streak);
   s('pr-hrs',Math.round(S.progress.hours)+'h');s('pr-ms',S.progress.milestones);
-  s('pr-label',pct===0?'Start your first session':pct<50?'Building momentum':'On track!');
-  s('pr-analysis',S.progress.sessions===0?'No data yet.\nComplete your first session.':`${pct}% complete · ${S.progress.streak} day streak\n${S.progress.sessions} sessions logged`);
+  s('pr-label',pct===0?'Start your first completed session':pct<50?'Building momentum':'On track!');
+  s('pr-analysis',(S.progress.completedSessions||0)===0?'No data yet.\nComplete your first session.':`${pct}% complete · ${S.progress.streak} day streak\n${S.progress.completedSessions||0} completed sessions`);
   updDashboard();
 }
 function updDashboard(){
   refreshExecutionProgress();
-  const s=S.progress.sessions,t=S.progress.tasksDone;
+  const s=S.progress.completedSessions||0,t=S.progress.tasksDone;
   const spd=(s/Math.max(1,S.progress.activityLog.length));
   const s2=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
   s2('m-speed',spd.toFixed(1));const msb=document.getElementById('m-speed-bar');if(msb)msb.style.width=Math.min(100,spd*10)+'%';
@@ -5121,6 +6442,8 @@ function updDashboard(){
     if(day){s2('mc-title',day.task||wk.title||'');s2('mc-detail',wk.objective||'');s2('mc-tag1','Week '+wk.week);s2('mc-tag2','Est: '+day.duration);}
   }
   updMilestoneBar();
+  renderDashboardSessionControls();
+  renderSessionOverlay();
 }
 
 /* ══ FEED ══ */
@@ -5131,7 +6454,7 @@ function feedLine(txt){feedLines.unshift(txt);if(feedLines.length>6)feedLines=fe
 let focusedRoadmapStageIndex=null, openRoadmapMilestoneIndex=null, openRoadmapTimelineKey='';
 
 function getRoadmapActiveIndex(){
-  if(getExecutionStages().length) return getExecutionActiveStageIndex();
+  if(getExecutionStages().length) return getCanonicalExecutionActiveStageIndex();
   return S.roadmap&&S.roadmap.length?Math.min(S.progress.milestones,S.roadmap.length-1):0;
 }
 function getRoadmapDayProgress(){
@@ -5160,7 +6483,7 @@ function getRoadmapStagePct(index){
   const status=getRoadmapStageStatus(index);
   if(status==='done') return 100;
   if(status==='pending') return 0;
-  const tasks=S.tasks||[];
+  const tasks=getTasksForStage(index,{includeArchived:false});
   if(tasks.length){
     return Math.round((tasks.filter(t=>t.done).length/tasks.length)*100);
   }
@@ -5169,6 +6492,11 @@ function getRoadmapStagePct(index){
   return Math.round(((Math.min(phaseSize-1,getRoadmapDayProgress())+1)/phaseSize)*100);
 }
 function getRoadmapTargetDate(index,total){
+  const stage=getExecutionStage(index)||S.roadmap?.[index];
+  const explicit=toIsoDateOnly(stage?.targetDate||stage?.target_date||'');
+  if(explicit){
+    return new Date(`${explicit}T00:00:00`).toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+  }
   const start=new Date();
   start.setHours(0,0,0,0);
   let target=new Date(start);
@@ -5236,6 +6564,15 @@ function focusRoadmapStage(index){
 function toggleRoadmapMilestone(index){
   focusedRoadmapStageIndex=index;
   openRoadmapMilestoneIndex=openRoadmapMilestoneIndex===index?null:index;
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'toggleRoadmapMilestone',
+    action:'roadmap_preview_milestone_clicked',
+    selectedMilestoneIndex:index,
+    selectedMilestoneId:getExecutionStage(index)?.id||S.roadmap?.[index]?.id||'',
+    selectedMilestoneTitle:clipText(getExecutionStage(index)?.title||S.roadmap?.[index]?.title||'',80)
+  });
   renderRM();
 }
 function toggleRoadmapTimelineItem(index,dayIndex){
@@ -5257,36 +6594,43 @@ function getRoadmapStageCriteria(index){
 }
 function getRoadmapCanvasLayout(total){
   const safeTotal=Math.max(1,Number(total)||0);
-  const leftPad=10;
-  const rightPad=10;
-  const span=100-leftPad-rightPad;
+  const leftPad=safeTotal===1?50:8;
+  const rightPad=safeTotal===1?50:8;
+  const span=Math.max(0,100-leftPad-rightPad);
+  const mid=50;
+  const amplitude=safeTotal===1?0:safeTotal===2?18:safeTotal<=4?21:Math.max(15,22-Math.min(8,safeTotal-4)*.9);
   return Array.from({length:safeTotal},(_,index)=>{
     const t=safeTotal===1?0.5:index/(safeTotal-1);
-    const base=index%2===0?32:68;
-    const micro=index%4===0?-6:index%4===1?3:index%4===2?6:-3;
-    const drift=index%2===0?-2:2;
+    const x=safeTotal===1?50:leftPad+(span*t);
+    const wave=amplitude*Math.cos(index*Math.PI);
     return {
-      x:Math.max(6,Math.min(94,leftPad+(span*t))),
-      y:Math.max(14,Math.min(86,base+micro+drift))
+      x:Math.max(6,Math.min(94,x)),
+      y:Math.max(18,Math.min(82,mid+wave))
     };
   });
 }
-function buildRoadmapPath(points=[],width=1000,height=420){
+function buildRoadmapPath(points=[]){
   if(!points.length) return '';
-  const scaleX=(value)=>Math.round((value/100)*width);
-  const scaleY=(value)=>Math.round((value/100)*height);
-  let d=`M ${scaleX(points[0].x)} ${scaleY(points[0].y)}`;
-  for(let i=1;i<points.length;i++){
-    const prev=points[i-1];
-    const curr=points[i];
-    const prevX=scaleX(prev.x);
-    const prevY=scaleY(prev.y);
-    const currX=scaleX(curr.x);
-    const currY=scaleY(curr.y);
-    const deltaY=currY-prevY;
-    const ctrlOffset=Math.max(64,Math.min(180,Math.abs(currX-prevX)*0.42));
-    const bend=deltaY<0?-100:100;
-    d+=` C ${prevX+ctrlOffset} ${prevY+bend}, ${currX-ctrlOffset} ${currY-bend}, ${currX} ${currY}`;
+  const safePoints=points.map((point)=>({
+    x:Number(point?.x)||0,
+    y:Number(point?.y)||0
+  }));
+  if(safePoints.length===1){
+    const only=safePoints[0];
+    return `M ${only.x} ${only.y}`;
+  }
+  const samplesPerSegment=16;
+  let d=`M ${safePoints[0].x.toFixed(2)} ${safePoints[0].y.toFixed(2)}`;
+  for(let i=0;i<safePoints.length-1;i+=1){
+    const start=safePoints[i];
+    const end=safePoints[i+1];
+    for(let step=1;step<=samplesPerSegment;step+=1){
+      const t=step/samplesPerSegment;
+      const eased=(1-Math.cos(Math.PI*t))/2;
+      const x=start.x+((end.x-start.x)*t);
+      const y=start.y+((end.y-start.y)*eased);
+      d+=` L ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }
   }
   return d;
 }
@@ -5298,6 +6642,21 @@ function buildRoadmapDetailPanel(index){
   const stageObjective=getStageObjectiveText(stage||wk)||'';
   const stageOutcome=getStageOutcomeText(stage||wk)||'';
   const stageReasoning=getStageReasoningText(stage||wk)||'';
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'buildRoadmapDetailPanel',
+    action:'roadmap_detail_input_shape',
+    milestoneIndex:index,
+    stageTitleType:typeof stageTitle,
+    objectiveType:typeof stageObjective,
+    outcomeType:typeof stageOutcome,
+    reasoningType:typeof stageReasoning,
+    stageTitleIsArray:Array.isArray(stageTitle),
+    objectiveIsArray:Array.isArray(stageObjective),
+    outcomeIsArray:Array.isArray(stageOutcome),
+    reasoningIsArray:Array.isArray(stageReasoning)
+  });
   const pct=getRoadmapStagePct(index);
   const taskCount=getTasksForStage(index,{includeArchived:false}).length;
   const stageCriteria=getRoadmapStageCriteria(index);
@@ -5348,6 +6707,128 @@ function buildRoadmapDetailPanel(index){
     <button class="btn btn-primary btn-sm" onclick="openExecutionTasks()">Go to Tasks &amp; Goals</button>
   </div>`;
 }
+function buildRoadmapSurfaceMarkup(opts={}){
+  const roadmapStages=getRoadmapViewStages();
+  if(!roadmapStages.length) return '';
+  ensureExecutionState();
+  const activeIndex=getRoadmapActiveIndex();
+  const lastIndex=roadmapStages.length-1;
+  const focusedIndex=Math.max(0,Math.min(lastIndex,Number.isFinite(Number(opts.focusedIndex))?Number(opts.focusedIndex):(focusedRoadmapStageIndex===null||focusedRoadmapStageIndex===undefined?activeIndex:focusedRoadmapStageIndex)));
+  const showFocus=opts.showFocus!==false;
+  const showDetail=opts.showDetail!==false;
+  const showFooter=opts.showFooter!==false;
+  const surfaceClass=String(opts.surfaceClass||'').trim();
+  focusedRoadmapStageIndex=focusedIndex;
+  if(openRoadmapMilestoneIndex===null||openRoadmapMilestoneIndex===undefined){
+    openRoadmapMilestoneIndex=Math.max(0,Math.min(lastIndex,activeIndex>=0?activeIndex:0));
+  }
+  if(openRoadmapMilestoneIndex<0||openRoadmapMilestoneIndex>lastIndex){
+    openRoadmapMilestoneIndex=Math.max(0,Math.min(lastIndex,openRoadmapMilestoneIndex));
+  }
+  const focusedMilestone=roadmapStages[focusedIndex]||{};
+  const focusedStage=getExecutionStage(focusedIndex);
+  const focusedPct=getRoadmapStagePct(focusedIndex);
+  const focusedStatus=getRoadmapStageStatus(focusedIndex);
+  const focusTasks=getTasksForStage(focusedIndex,{includeArchived:false});
+  const completedStages=getExecutionStages().length
+    ? getExecutionStages().filter((stage)=>stage.status==='completed').length
+    : Math.min(activeIndex,roadmapStages.length);
+  const focusStatusLabel=focusedStatus==='done'?'Completed':focusedStatus==='active'?'Active':'Upcoming';
+  const focusTitle=(focusedStage?.title||focusedMilestone.title||`Stage ${focusedIndex+1}`);
+  const focusObjective=getStageObjectiveText(focusedStage||focusedMilestone)||'Execution objective not specified yet.';
+  const focusOutcome=getStageOutcomeText(focusedStage||focusedMilestone);
+  const focusReasoning=getStageReasoningText(focusedStage||focusedMilestone);
+  const layout=getRoadmapCanvasLayout(S.roadmap.length);
+  const pathD=buildRoadmapPath(layout);
+  const focusSummary=clipText([focusObjective,focusOutcome].filter(Boolean).join(' · ')||'Execution objective not specified yet.',180);
+  const focusStageLabel=`Stage ${focusedIndex+1} of ${roadmapStages.length}`;
+  const focusTaskCount=focusTasks.length;
+  const timelineMeta=`${roadmapStages.length} stages · ${completedStages} completed · Active stage ${Math.min(activeIndex+1,roadmapStages.length)}`;
+  const canvasTitle=String(opts.canvasTitle||'Milestones flow along a single execution path');
+  const canvasKicker=String(opts.canvasKicker||'Roadmap canvas');
+  const footerChipTarget=String(opts.footerTarget||`Target ${escHtml(getRoadmapTargetDate(activeIndex,roadmapStages.length)).toUpperCase()}`);
+  const detailHtml=showDetail
+    ? (openRoadmapMilestoneIndex!==null
+      ? `<section class="rm-detail-panel" id="rm-detail-panel" style="display:block">${buildRoadmapDetailPanel(openRoadmapMilestoneIndex)}</section>`
+      : `<section class="rm-detail-panel" id="rm-detail-panel" style="display:none"></section>`)
+    : '';
+  const focusHtml=showFocus?`<aside class="rm-roadmap-focus" id="rm-focus-panel">
+        <div class="rm-focus-kicker">${focusedStatus==='active'?'Current milestone':'Selected milestone'}</div>
+        <div class="rm-focus-head">
+          <div>
+            <div class="rm-focus-title">${escHtml(focusTitle)}</div>
+            <div class="rm-focus-sub">${escHtml(focusStageLabel)} · ${escHtml(focusStatusLabel)} · ${focusTaskCount} tasks</div>
+          </div>
+          <div class="rm-focus-score">${focusedPct}%</div>
+        </div>
+        <p class="rm-focus-copy">${escHtml(focusSummary)}</p>
+        ${focusReasoning?`<div class="rm-focus-note"><span>Why it matters</span><p>${escHtml(focusReasoning)}</p></div>`:''}
+        <div class="rm-focus-mini-grid">
+          <div class="rm-focus-mini"><span>Progress</span><strong>${focusedPct}%</strong></div>
+          <div class="rm-focus-mini"><span>Tasks</span><strong>${focusTaskCount}</strong></div>
+          <div class="rm-focus-mini"><span>Target</span><strong>${escHtml(getRoadmapTargetDate(focusedIndex,S.roadmap.length))}</strong></div>
+        </div>
+        <div class="rm-focus-actions">
+          <button class="btn btn-primary btn-sm" onclick="openExecutionTasks()">Go to Tasks &amp; Goals</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${focusedIndex})">${openRoadmapMilestoneIndex===focusedIndex?'Hide detail':'Open detail'}</button>
+        </div>
+      </aside>`:'';
+  const footerHtml=showFooter?`<div class="rm-roadmap-footer">
+      <span class="rm-roadmap-footer-chip">Path-driven roadmap</span>
+      <span class="rm-roadmap-footer-chip">${timelineMeta}</span>
+      <span class="rm-roadmap-footer-chip">${footerChipTarget}</span>
+    </div>`:'';
+  const detailAnchors=roadmapStages.map((_,i)=>`<div id="rm-stage-${i}" class="rm-stage-anchor" aria-hidden="true"></div>`).join('');
+  return `<div class="rm-roadmap-shell ${showFocus?'':'rm-roadmap-shell--preview'} ${surfaceClass}">
+      <section class="rm-roadmap-canvas">
+        <div class="rm-roadmap-canvas-head">
+          <div>
+            <div class="rm-canvas-kicker">${escHtml(canvasKicker)}</div>
+            <div class="rm-canvas-title">${escHtml(canvasTitle)}</div>
+          </div>
+          <div class="rm-canvas-meta">${timelineMeta}</div>
+        </div>
+        <div class="rm-roadmap-canvas-inner">
+          <svg class="rm-roadmap-path" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="rm-roadmap-line-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="rgba(143,188,255,0.16)"/>
+                <stop offset="50%" stop-color="rgba(143,188,255,0.92)"/>
+                <stop offset="100%" stop-color="rgba(143,188,255,0.20)"/>
+              </linearGradient>
+              <filter id="rm-roadmap-glow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="5" result="blur"/>
+                <feMerge>
+                  <feMergeNode in="blur"/>
+                  <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+              </filter>
+            </defs>
+            <path class="rm-roadmap-path-shadow" d="${pathD}"></path>
+            <path class="rm-roadmap-path-line" d="${pathD}"></path>
+          </svg>
+          <div class="rm-roadmap-nodes">
+            ${roadmapStages.map((wk,i)=>{
+              const status=getRoadmapStageStatus(i);
+              const isSelected=focusedIndex===i;
+              const pos=layout[i]||{x:50,y:50};
+              const stageNumber=String(i+1).padStart(2,'0');
+              const stageTitle=wk.title||`Stage ${i+1}`;
+              const milestoneMeta=getMilestoneVisualMeta(i,roadmapStages.length||1);
+              const nodeClick=opts.interactiveNodes===false?'':`toggleRoadmapMilestone(${i});`;
+              return `<button class="rm-roadmap-node ${status} ${isSelected?'selected':''}" style="left:${pos.x}%;top:${pos.y}%;--milestone-accent:${milestoneMeta.accent};--milestone-tint:${milestoneMeta.tint};--milestone-border:${milestoneMeta.border};--milestone-glow:${milestoneMeta.glow};" onclick="${nodeClick}" aria-label="Focus stage ${i+1} - ${escHtml(stageTitle)}">
+                <span class="rm-roadmap-node-badge">${stageNumber}</span>
+              </button>`;
+            }).join('')}
+          </div>
+        </div>
+      </section>
+      ${focusHtml}
+    </div>
+    ${footerHtml}
+    ${detailHtml}
+    ${detailAnchors}`;
+}
 
 async function genVariants(){
   if(!S.user.goal){toast2('Set goal first','Complete onboarding goal first.');return;}
@@ -5364,12 +6845,10 @@ async function genVariants(){
   setRoadmapButtonsBusy(true);
   rb.innerHTML='<div class="rm-loading"><div style="width:18px;height:18px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 10px;"></div><div style="font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center;text-transform:uppercase">Генерирую roadmap через Gemini… обычно 1-2 минуты.</div></div>';
   try{
-    const weeksCount=calcWeeksFromDeadline(S.user.deadline);
     const roadmapVariant=BETA_ALLOWED_ROADMAP_VARIANT;
     const variantDesc={safe:'Консервативный темп: 2-4 часа в день, упор на устойчивость и низкий риск',balanced:'Сбалансированный темп: 4-6 часов в день, сочетание скорости и качества',aggressive:'Агрессивный темп: 8-10 часов в день, высокий фокус на быстрый результат'}[roadmapVariant];
     const roadmapCtx=buildRoadmapOnboardingContext();
     const pipelineResult=await runRoadmapPipeline({
-      weeksCount,
       strategyDesc:variantDesc,
       context:roadmapCtx,
       reason:'post_roadmap_rebuild',
@@ -5401,7 +6880,8 @@ async function genVariants(){
       });
       toast2('Roadmap готов','Roadmap показан в degraded mode.');
     }else{
-      toast2('Roadmap готов',`Построен план на ${weeksCount} нед.`);
+      const roadmapCount=Array.isArray(S.roadmap)?S.roadmap.length:getExecutionStages().length;
+      toast2('Roadmap готов',`Построен план на ${Math.max(1,roadmapCount)} milestone${Math.max(1,roadmapCount)===1?'':'s'}.`);
     }
   }catch(e){
     if(isAbortError(e)||!isRoadmapPipelineActive(pipelineId)) return;
@@ -5449,132 +6929,34 @@ async function genVariants(){
   }
 }
 function renderRM(){
-  if(!S.roadmap||!S.roadmap.length)return;
+  const roadmapStages=getRoadmapViewStages();
+  if(!roadmapStages.length)return;
   ensureExecutionState();
   const rb=document.getElementById('rb');
-  const detail=document.getElementById('rm-detail-panel');
   const activeIndex=getRoadmapActiveIndex();
-  const lastIndex=S.roadmap.length-1;
   if(focusedRoadmapStageIndex===null||focusedRoadmapStageIndex===undefined) focusedRoadmapStageIndex=activeIndex;
-  focusedRoadmapStageIndex=Math.max(0,Math.min(lastIndex,focusedRoadmapStageIndex));
+  if(openRoadmapMilestoneIndex===null||openRoadmapMilestoneIndex===undefined) openRoadmapMilestoneIndex=activeIndex;
   if(openRoadmapMilestoneIndex!==null&&openRoadmapMilestoneIndex!==undefined){
-    openRoadmapMilestoneIndex=Math.max(0,Math.min(lastIndex,openRoadmapMilestoneIndex));
+    openRoadmapMilestoneIndex=Math.max(0,Math.min(roadmapStages.length-1,openRoadmapMilestoneIndex));
   }
-  const focusedMilestone=S.roadmap[focusedRoadmapStageIndex]||{};
-  const focusedStage=getExecutionStage(focusedRoadmapStageIndex);
-  const focusedPct=getRoadmapStagePct(focusedRoadmapStageIndex);
-  const focusedStatus=getRoadmapStageStatus(focusedRoadmapStageIndex);
-  const focusTasks=getTasksForStage(focusedRoadmapStageIndex,{includeArchived:false});
-  const completedStages=getExecutionStages().length
-    ? getExecutionStages().filter((stage)=>stage.status==='completed').length
-    : Math.min(activeIndex,S.roadmap.length);
-  const focusStatusLabel=focusedStatus==='done'?'Completed':focusedStatus==='active'?'Active':'Upcoming';
-  const focusTitle=(focusedStage?.title||focusedMilestone.title||`Stage ${focusedRoadmapStageIndex+1}`);
-  const focusObjective=getStageObjectiveText(focusedStage||focusedMilestone)||'Execution objective not specified yet.';
-  const focusOutcome=getStageOutcomeText(focusedStage||focusedMilestone);
-  const focusReasoning=getStageReasoningText(focusedStage||focusedMilestone);
-  const layout=getRoadmapCanvasLayout(S.roadmap.length);
-  const canvasWidth=Math.max(1000,Math.round(S.roadmap.length*180));
-  const canvasHeight=420;
-  const pathD=buildRoadmapPath(layout,canvasWidth,canvasHeight);
-  const focusSummary=clipText([focusObjective,focusOutcome].filter(Boolean).join(' · ')||'Execution objective not specified yet.',180);
-  const focusStageLabel=`Stage ${focusedRoadmapStageIndex+1} of ${S.roadmap.length}`;
-  const focusTaskCount=focusTasks.length;
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
     function:'renderRM',
     action:'roadmap_render_payload',
     activeStageIndex:activeIndex,
-    stageCount:S.roadmap.length,
-    stages:summarizeRoadmapStagesForLog(getExecutionStages().length?getExecutionStages():S.roadmap)
+    stageCount:roadmapStages.length,
+    stages:summarizeRoadmapStagesForLog(roadmapStages)
   });
-  const timelineMeta=`${S.roadmap.length} stages · ${completedStages} completed · Active stage ${activeIndex+1}`;
-  const html=`<div class="rm-roadmap-shell">
-      <section class="rm-roadmap-canvas">
-        <div class="rm-roadmap-canvas-head">
-          <div>
-            <div class="rm-canvas-kicker">Roadmap canvas</div>
-            <div class="rm-canvas-title">Milestones flow along a single execution path</div>
-          </div>
-          <div class="rm-canvas-meta">${timelineMeta}</div>
-        </div>
-        <div class="rm-roadmap-canvas-scroll">
-        <div class="rm-roadmap-canvas-inner" style="min-width:${canvasWidth}px;">
-          <svg class="rm-roadmap-path" viewBox="0 0 ${canvasWidth} ${canvasHeight}" preserveAspectRatio="none" aria-hidden="true">
-            <defs>
-              <linearGradient id="rm-roadmap-line-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stop-color="rgba(143,188,255,0.18)"/>
-                <stop offset="40%" stop-color="rgba(143,188,255,0.86)"/>
-                <stop offset="100%" stop-color="rgba(143,188,255,0.28)"/>
-              </linearGradient>
-              <filter id="rm-roadmap-glow" x="-20%" y="-20%" width="140%" height="140%">
-                <feGaussianBlur stdDeviation="6" result="blur"/>
-                <feMerge>
-                  <feMergeNode in="blur"/>
-                  <feMergeNode in="SourceGraphic"/>
-                </feMerge>
-              </filter>
-            </defs>
-            <path class="rm-roadmap-path-shadow" d="${pathD}"></path>
-            <path class="rm-roadmap-path-line" d="${pathD}"></path>
-          </svg>
-          <div class="rm-roadmap-nodes">
-            ${S.roadmap.map((wk,i)=>{
-              const status=getRoadmapStageStatus(i);
-              const isSelected=focusedRoadmapStageIndex===i;
-              const pos=layout[i]||{x:50,y:50};
-              const stageNumber=String(i+1).padStart(2,'0');
-              const stageTitle=wk.title||`Stage ${i+1}`;
-              return `<button class="rm-roadmap-node ${status} ${isSelected?'selected':''}" style="left:${pos.x}%;top:${pos.y}%;" onclick="focusRoadmapStage(${i})" aria-label="Focus stage ${i+1} - ${escHtml(stageTitle)}">
-                <span class="rm-roadmap-node-badge">${stageNumber}</span>
-              </button>`;
-            }).join('')}
-          </div>
-        </div>
-        </div>
-      </section>
-      <aside class="rm-roadmap-focus" id="rm-focus-panel">
-        <div class="rm-focus-kicker">${focusedStatus==='active'?'Current milestone':'Selected milestone'}</div>
-        <div class="rm-focus-head">
-          <div>
-            <div class="rm-focus-title">${escHtml(focusTitle)}</div>
-            <div class="rm-focus-sub">${escHtml(focusStageLabel)} · ${escHtml(focusStatusLabel)} · ${focusTaskCount} tasks</div>
-          </div>
-          <div class="rm-focus-score">${focusedPct}%</div>
-        </div>
-        <p class="rm-focus-copy">${escHtml(focusSummary)}</p>
-        ${focusReasoning?`<div class="rm-focus-note"><span>Why it matters</span><p>${escHtml(focusReasoning)}</p></div>`:''}
-        <div class="rm-focus-mini-grid">
-          <div class="rm-focus-mini"><span>Progress</span><strong>${focusedPct}%</strong></div>
-          <div class="rm-focus-mini"><span>Tasks</span><strong>${focusTaskCount}</strong></div>
-          <div class="rm-focus-mini"><span>Target</span><strong>${escHtml(getRoadmapTargetDate(focusedRoadmapStageIndex,S.roadmap.length))}</strong></div>
-        </div>
-        <div class="rm-focus-actions">
-          <button class="btn btn-primary btn-sm" onclick="openExecutionTasks()">Go to Tasks &amp; Goals</button>
-          <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${focusedRoadmapStageIndex})">${openRoadmapMilestoneIndex===focusedRoadmapStageIndex?'Hide detail':'Open detail'}</button>
-        </div>
-      </aside>
-    </div>
-    <div class="rm-roadmap-footer">
-      <span class="rm-roadmap-footer-chip">Path-driven roadmap</span>
-      <span class="rm-roadmap-footer-chip">${timelineMeta}</span>
-      <span class="rm-roadmap-footer-chip">Target ${escHtml(getRoadmapTargetDate(activeIndex,S.roadmap.length)).toUpperCase()}</span>
-    </div>
-    <section class="rm-detail-panel" id="rm-detail-panel" style="display:${openRoadmapMilestoneIndex===null?'none':'block'}"></section>
-    ${S.roadmap.map((_,i)=>`<div id="rm-stage-${i}" class="rm-stage-anchor" aria-hidden="true"></div>`).join('')}`;
-  rb.innerHTML=html;
-  const detailEl=document.getElementById('rm-detail-panel');
-  if(detailEl){
-    if(openRoadmapMilestoneIndex===null){
-      detailEl.style.display='none';
-      detailEl.innerHTML='';
-    }else{
-      detailEl.style.display='';
-      detailEl.innerHTML=buildRoadmapDetailPanel(openRoadmapMilestoneIndex);
-    }
-  }
-  document.getElementById('rm-span').textContent=`Plan for ${S.roadmap.length} stages · Active stage ${Math.min(activeIndex+1,S.roadmap.length)}`;
+  rb.innerHTML=buildRoadmapSurfaceMarkup({
+    showFocus:true,
+    showDetail:true,
+    showFooter:true,
+    surfaceClass:'',
+    canvasKicker:'Roadmap canvas',
+    canvasTitle:'Milestones flow along a single execution path'
+  });
+  document.getElementById('rm-span').textContent=`Plan for ${roadmapStages.length} stages · Active stage ${Math.min(activeIndex+1,roadmapStages.length)}`;
 }
 
 /* ══ AI CHAT — paywall for free users ══ */
@@ -5636,21 +7018,23 @@ async function sendChatMsg(msg){
 
 /* ══ TASKS ══ */
 let taskFilter='all',aiTasksDraft=null,activeTaskDetailId=null,taskDetailEscBound=false;
+let taskCalendarMonthAnchor=null,taskCalendarSelectedDate='';
 function getTaskById(id){
   const canonical=getExecutionTaskById(id);
   if(canonical){
-    return {
+    return decorateTaskWithMilestoneMeta({
       ...canonical,
       done:Boolean(canonical.done)||canonical.status==='done',
       linkedStage:Math.max(1,(Number(canonical.linkedStageIndex)||0)+1),
       text:getTaskTitle(canonical)
-    };
+    });
   }
-  return (S.tasks||[]).find(t=>Number(t.id)===Number(id));
+  const legacy=(S.tasks||[]).find(t=>Number(t.id)===Number(id));
+  return legacy?decorateTaskWithMilestoneMeta(legacy):legacy;
 }
 function getActiveStageTasks(){
   ensureExecutionState();
-  if(!hasExecutionStateReady()) return [];
+  if(!hasExecutionStateReady()||S.execution?.status==='completed') return [];
   return getTasksForStage(getExecutionActiveStageIndex(),{includeArchived:false});
 }
 function getTasksForStageById(stageId){
@@ -5676,6 +7060,11 @@ function renderActiveMilestoneHeader(){
     metaEl.textContent='Generate a roadmap to start milestone execution.';
     return;
   }
+  if(S.execution?.status==='completed'){
+    titleEl.textContent='Roadmap completed';
+    metaEl.textContent='All milestones are completed.';
+    return;
+  }
   const activeIndex=getExecutionActiveStageIndex();
   const stage=getExecutionStage(activeIndex);
   if(!stage){
@@ -5691,11 +7080,1333 @@ function renderActiveMilestoneHeader(){
   titleEl.textContent=`Active milestone: ${stage.title||`Stage ${activeIndex+1}`}`;
   metaEl.textContent=`${stageStatusLabel(stage.status)} · ${doneCount}/${totalCount} tasks done · ${clipText(objectiveText||outcomeText||'',120)||'Objective pending'}`;
 }
+function renderDashboardSessionControls(){
+  const session=getExecutionSession();
+  const running=Boolean(session&&session.status==='running');
+  const reviewOpen=isSessionReviewOpen();
+  const focusInputRow=document.getElementById('focus-input-row');
+  const defaultActions=document.getElementById('default-actions');
+  const activeRow=document.getElementById('session-active-row');
+  const focusDisplay=document.getElementById('focus-display-text');
+  const timerDisplay=document.getElementById('session-timer-display');
+  const focusInput=document.getElementById('focus-input');
+  const focusText=session?.goal||getExecutionSessionStage()?.objective||S.user.goal||'';
+  if(focusInput&&document.activeElement!==focusInput&&focusText) focusInput.value=focusText;
+  if(focusInputRow) focusInputRow.style.display=running||reviewOpen?'none':'flex';
+  if(defaultActions) defaultActions.style.display=running||reviewOpen?'none':'flex';
+  if(activeRow) activeRow.style.display=running||reviewOpen?'block':'none';
+  if(focusDisplay) focusDisplay.textContent=focusText?`🎯 Focus: ${focusText}`:'🎯 Focus: execution';
+  if(timerDisplay) timerDisplay.textContent=getSessionTimerLabel(session);
+}
+function renderSessionWorkspace(){
+  const host=document.getElementById('session-workspace');
+  if(!host) return;
+  ensureExecutionState();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'renderSessionWorkspace',
+    action:'session_workspace_render_started',
+    executionReady:hasExecutionStateReady(),
+    activeStageIndex:getExecutionActiveStageIndex(),
+    sessionTaskIds:getExecutionSessionTaskIds()
+  });
+  if(!hasExecutionStateReady()){
+    host.innerHTML=`<div class="tasks-session-hero">
+      <div class="tasks-session-hero-main">
+        <div class="tasks-session-kicker">Session first</div>
+        <div class="tasks-session-title">Generate a roadmap to unlock session prep.</div>
+        <div class="tasks-session-copy">Your active milestone, selected tasks, and session review context will appear here once execution is available.</div>
+      </div>
+    </div>`;
+    return;
+  }
+  const session=prepareExecutionSession();
+  const stage=getExecutionSessionStage()||getExecutionStage(getExecutionActiveStageIndex());
+  const stageIndex=stage?getExecutionStages().findIndex((item)=>String(item.id)===String(stage.id)):getExecutionActiveStageIndex();
+  const stageTasks=getTasksForStage(stageIndex,{includeArchived:false});
+  const selectedIds=new Set((session?.taskIds||[]).map((taskId)=>Number(taskId)).filter((taskId)=>Number.isFinite(taskId)));
+  const recommendedIds=new Set(recommendSessionTaskIds(stageIndex));
+  const selectedTasks=(session?.taskIds||[])
+    .map((taskId)=>getExecutionTaskById(taskId))
+    .filter(Boolean);
+  const canEditSelection=String(session?.status||'planned')==='planned';
+  const sessionTasks=[...selectedTasks];
+  stageTasks.forEach((task)=>{
+    if(sessionTasks.length>=3) return;
+    if(!sessionTasks.some((item)=>Number(item.id)===Number(task.id))) sessionTasks.push(task);
+  });
+  const taskCards=sessionTasks.slice(0,3).map((task)=>{
+    const taskId=Number(task.id);
+    const checked=selectedIds.has(taskId);
+    const isRecommended=recommendedIds.has(taskId);
+    const status=String(task.status||'active');
+    return `<label class="tasks-session-task ${checked?'on':''} ${status==='done'?'done':''}">
+      <input type="checkbox" ${checked?'checked':''} ${canEditSelection?'':'disabled'} onchange="toggleSessionTaskSelection(${taskId}, this.checked)"/>
+      <div class="tasks-session-task-copy">
+        <div class="tasks-session-task-top">
+          <span class="tasks-session-task-title">${escHtml(getTaskTitle(task))}</span>
+          <span class="tasks-session-task-pill ${status}">${status==='blocked'?'Blocked':status==='done'?'Done':isRecommended?'Recommended':'Task'}</span>
+        </div>
+        <div class="tasks-session-task-meta">${escHtml(task.priority||task.prio||'med')} · ${task.estimateHours||2}h</div>
+      </div>
+    </label>`;
+  }).join('');
+  const timerLabel=getSessionTimerLabel(session);
+  const statusLabel=String(session?.status||'planned');
+  const milestoneDoneCount=stageTasks.filter((task)=>task.status==='done'||task.done).length;
+  const nextBestAction=String(
+    session?.review?.interpretation?.nextBestAction?.title
+    || S.execution?.lastReviewResult?.review?.interpretation?.nextBestAction?.title
+    || session?.outcomeSummary
+    || ''
+  ).trim();
+  const reviewCompact=buildSessionReviewCompactMarkup(S.execution?.lastReviewResult||session);
+  const primaryLabel=statusLabel==='running'?'Open Session':'Start Session';
+  const primaryDisabled=statusLabel!=='running'&&!selectedIds.size;
+  const primaryAction=statusLabel==='running'?'openSessionOverlay()':'startSession()';
+  host.innerHTML=`<div class="tasks-session-hero">
+    <div class="tasks-session-hero-main">
+      <div class="tasks-session-kicker">${escHtml(statusLabel==='running'?'Session in progress':'Current milestone')}</div>
+      <div class="tasks-session-title">${escHtml(stage?.title||'No active milestone')}</div>
+      <div class="tasks-session-copy">${escHtml(stage?.objective||S.user.goal||'Generate a roadmap to define the next milestone objective.')}</div>
+      <div class="tasks-session-meta">
+        <span>${escHtml(stage?.status||'active')} milestone</span>
+        <span>${selectedTasks.length ? `${selectedTasks.length} task${selectedTasks.length===1?'':'s'} selected` : 'Choose up to 3 tasks'}</span>
+        <span>${timerLabel}</span>
+      </div>
+    </div>
+    <div class="tasks-session-hero-side">
+      <div class="tasks-session-side-head">
+        <div class="tasks-session-side-label">Recommended tasks</div>
+        <div class="tasks-session-side-sub">${canEditSelection?'Pick 1-3 tasks for the next session.':'Selection is locked while the session is running.'}</div>
+      </div>
+      <div class="tasks-session-task-list">
+        ${taskCards || '<div class="session-empty-copy">No recommended tasks available yet.</div>'}
+      </div>
+      <div class="tasks-session-actions">
+        <button class="btn btn-primary btn-sm" onclick="${primaryAction}" ${primaryDisabled?'disabled':''}>${primaryLabel}</button>
+        <button class="btn btn-ghost btn-sm" onclick="openSessionOverlay()">Open Focus Mode</button>
+      </div>
+    </div>
+  </div>
+  <div class="tasks-session-context">
+    <div class="tasks-session-context-item">
+      <span>Milestone progress</span>
+      <strong>${milestoneDoneCount}/${stageTasks.length||0} done</strong>
+    </div>
+    <div class="tasks-session-context-item">
+      <span>Selection</span>
+      <strong>${selectedTasks.length ? `${selectedTasks.length}/3 ready` : 'Select one clear task'}</strong>
+    </div>
+    <div class="tasks-session-context-item">
+      <span>Next best action</span>
+      <strong>${escHtml(nextBestAction||'Choose the clearest task and start.')}</strong>
+    </div>
+  </div>
+  ${reviewCompact?`<div class="tasks-session-review-row">${reviewCompact}</div>`:''}`;
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'renderSessionWorkspace',
+    action:'session_workspace_render_completed',
+    taskCount:stageTasks.length,
+    selectedTaskIds:selectedTasks.map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id)),
+    hasReviewResult:Boolean(S.execution?.lastReviewResult)
+  });
+  if(statusLabel==='running'||isSessionReviewOpen()) renderSessionOverlay();
+  else hideSessionOverlay();
+}
+function buildSessionReviewCompactMarkup(session){
+  const review=normalizeExecutionSessionReview(session?.review||{});
+  const interpretation=review.interpretation||{};
+  if(!review.appliedAt) return '';
+  const stageDelta=Number(session?.progressDelta?.stageProgressDelta||interpretation.milestoneUpdate?.progressDelta||0);
+  const overallDelta=Number(session?.progressDelta?.overallProgressDelta||interpretation.overallUpdate?.pctDelta||0);
+  const nextActionTitle=String(interpretation.nextBestAction?.title||review.nextSteps||'').trim();
+  const nextActionReason=String(interpretation.nextBestAction?.reason||'').trim();
+  const summary=String(review.summary||interpretation.summary||session?.outcomeSummary||'').trim();
+  const statusLabel=String(session?.status||'completed');
+  return `<details class="tasks-review-compact">
+    <summary>
+      <span class="tasks-review-compact-kicker">Review</span>
+      <span class="tasks-review-compact-summary">${escHtml(summary||'Execution state updated')}</span>
+      <span class="tasks-review-compact-chip">${statusLabel==='completed'?'Applied':'Updated'}</span>
+    </summary>
+    <div class="tasks-review-compact-body">
+      <div class="tasks-review-compact-row">
+        <span>Milestone ${stageDelta>=0?'+':''}${stageDelta}%</span>
+        <span>Overall ${overallDelta>=0?'+':''}${overallDelta}%</span>
+      </div>
+      ${nextActionTitle?`<div class="tasks-review-compact-next">
+        <div class="tasks-review-compact-next-label">Next best action</div>
+        <div class="tasks-review-compact-next-title">${escHtml(nextActionTitle)}</div>
+        ${nextActionReason?`<div class="tasks-review-compact-next-copy">${escHtml(nextActionReason)}</div>`:''}
+      </div>`:''}
+    </div>
+  </details>`;
+}
+function buildSessionReviewImpactMarkup(session){
+  const review=normalizeExecutionSessionReview(session?.review||{});
+  const interpretation=review.interpretation||{};
+  if(!review.appliedAt) return '';
+  const appliedChanges=review.appliedChanges||{};
+  const taskUpdates=Array.isArray(interpretation.taskUpdates)?interpretation.taskUpdates:[];
+  const completedTitles=(appliedChanges.taskIdsCompleted||[]).map((taskId)=>getExecutionTaskById(taskId)?.title).filter(Boolean);
+  const blockedTitles=(appliedChanges.taskIdsBlocked||[]).map((taskId)=>getExecutionTaskById(taskId)?.title).filter(Boolean);
+  const partialTitles=(appliedChanges.taskIdsPartiallyUpdated||[]).map((taskId)=>getExecutionTaskById(taskId)?.title).filter(Boolean);
+  const nextActionTitle=String(interpretation.nextBestAction?.title||review.nextSteps||'').trim();
+  const stageDelta=Number(session?.progressDelta?.stageProgressDelta||interpretation.milestoneUpdate?.progressDelta||0);
+  const overallDelta=Number(session?.progressDelta?.overallProgressDelta||interpretation.overallUpdate?.pctDelta||0);
+  const summary=String(review.summary||interpretation.summary||session?.outcomeSummary||'').trim();
+  const changeLine=[
+    completedTitles.length?`Completed: ${completedTitles.slice(0,3).join(' · ')}`:'',
+    blockedTitles.length?`Blocked: ${blockedTitles.slice(0,3).join(' · ')}`:'',
+    partialTitles.length?`Adjusted: ${partialTitles.slice(0,3).join(' · ')}`:''
+  ].filter(Boolean).join(' | ');
+  const taskUpdateCount=taskUpdates.length;
+  return `<div class="session-review-impact-head">
+    <div>
+      <div class="session-list-title">Review result</div>
+      <div class="session-review-impact-title">${escHtml(summary||'Execution state updated')}</div>
+    </div>
+    <div class="session-status-chip completed">Applied</div>
+  </div>
+  <div class="session-review-impact-grid">
+    <div class="session-metric"><strong>${stageDelta>=0?'+':''}${stageDelta}%</strong><span>Milestone delta</span></div>
+    <div class="session-metric"><strong>${overallDelta>=0?'+':''}${overallDelta}%</strong><span>Goal delta</span></div>
+    <div class="session-metric"><strong>${taskUpdateCount}</strong><span>Task updates</span></div>
+  </div>
+  <div class="session-review-impact-copy">${escHtml(changeLine||'No direct task change was needed.')}</div>
+  ${nextActionTitle?`<div class="session-review-next">
+    <div class="session-review-next-label">Next best action</div>
+    <div class="session-review-next-title">${escHtml(nextActionTitle)}</div>
+    ${interpretation.nextBestAction?.reason?`<div class="session-review-next-copy">${escHtml(interpretation.nextBestAction.reason)}</div>`:''}
+  </div>`:''}`;
+}
+function renderSessionOverlay(){
+  const host=document.getElementById('session-overlay');
+  if(!host) return;
+  ensureExecutionState();
+  const session=getExecutionSession();
+  const visible=Boolean(session&&((session.status==='running')||isSessionReviewOpen()));
+  host.classList.toggle('on',visible);
+  if(!visible){
+    host.innerHTML='';
+    clearSessionTimer();
+    return;
+  }
+  if(session.status==='running'&&!S.activeSession?.timerInterval) startSessionTimer();
+  const stage=getExecutionSessionStage()||getExecutionStage(getExecutionActiveStageIndex());
+  const taskIds=(session?.taskIds||[]).slice(0,3);
+  const sessionTasks=taskIds
+    .map((taskId)=>getExecutionTaskById(taskId))
+    .filter(Boolean);
+  const statusLabel=String(session.status||'planned');
+  const reviewOpen=isSessionReviewOpen();
+  const reviewAnswers=session?.review?.answers||normalizeSessionReviewAnswers(session?.review||{});
+  const reviewSummary=buildSessionReviewImpactMarkup(session);
+  const taskRows=sessionTasks.map((task)=>{
+    const taskStatus=String(task.status||'active');
+    return `<div class="session-run-task ${taskStatus}">
+      <div class="session-run-task-copy">
+        <div class="session-run-task-title">${escHtml(getTaskTitle(task))}</div>
+        <div class="session-run-task-meta">${escHtml(task.priority||task.prio||'med')} · ${task.estimateHours||2}h · ${taskStatus}</div>
+      </div>
+      <div class="session-run-task-actions">
+        <button class="btn btn-primary btn-sm" onclick="completeSessionTask(${Number(task.id)})" ${taskStatus==='done'?'disabled':''}>Complete Task</button>
+        <button class="btn btn-ghost btn-sm" onclick="blockSessionTask(${Number(task.id)})" ${taskStatus==='blocked'?'disabled':''}>Mark Blocked</button>
+      </div>
+    </div>`;
+  }).join('');
+  const showReviewFields=reviewOpen||statusLabel!=='running';
+  host.innerHTML=`<div class="session-modal">
+    <div class="session-modal-head">
+      <div>
+        <div class="session-kicker">Focused Execution</div>
+        <div class="session-modal-title">${escHtml(stage?.title||'Active milestone')}</div>
+        <div class="session-modal-sub">${escHtml(stage?.objective||session.goal||S.user.goal||'')}</div>
+      </div>
+      <div class="session-status-chip ${statusLabel}">${statusLabel}</div>
+    </div>
+    <div class="session-modal-metrics">
+      <div class="session-metric"><strong>${getSessionTimerLabel(session)}</strong><span>Elapsed</span></div>
+      <div class="session-metric"><strong>${escHtml(session.goal||stage?.objective||S.user.goal||'')}</strong><span>Session goal</span></div>
+      <div class="session-metric"><strong>${taskIds.length}</strong><span>Selected tasks</span></div>
+    </div>
+    <div class="session-modal-body">
+      <div class="session-modal-list">
+        <div class="session-list-head">
+          <div class="session-list-title">Selected tasks</div>
+          <div class="session-list-sub">Complete or block tasks directly from the session surface.</div>
+        </div>
+        ${taskRows || '<div class="session-empty-copy">No session tasks selected.</div>'}
+      </div>
+      <div class="session-modal-side">
+      <div class="session-review-card ${reviewOpen?'on':''}">
+        <div class="session-list-title">${reviewOpen?'Review session':'Session controls'}</div>
+        <div class="session-review-copy">${reviewOpen?'Answer 3 short questions. The system will interpret them and update tasks, milestone progress, and the next session direction.':'Use the controls below to pause or end the session.'}</div>
+          <div class="session-review-field" style="display:${showReviewFields?'flex':'none'}">
+            <label>What did you actually complete?</label>
+            <textarea id="session-review-summary" class="inp session-review-text" placeholder="Completed task, shipped result, or concrete outcome.">${escHtml(reviewAnswers.completed||session.review?.summary||session.outcomeSummary||'')}</textarea>
+          </div>
+          <div class="session-review-field" style="display:${showReviewFields?'flex':'none'}">
+            <label>What stayed blocked or unfinished?</label>
+            <textarea id="session-review-blockers" class="inp session-review-text" placeholder="Blocked tasks, unfinished work, or unresolved issues.">${escHtml(reviewAnswers.blocked||session.review?.blockers||'')}</textarea>
+          </div>
+          <div class="session-review-field" style="display:${showReviewFields?'flex':'none'}">
+            <label>What slowed you down or changed?</label>
+            <textarea id="session-review-notes" class="inp session-review-text" placeholder="Scope changes, blockers, or the next direction.">${escHtml(reviewAnswers.changed||session.review?.notes||session.notes||'')}</textarea>
+          </div>
+          <div class="session-review-actions">
+            ${statusLabel==='running'
+              ? "<button class=\"btn btn-ghost btn-sm\" onclick=\"pauseSession()\">Pause</button><button class=\"btn btn-danger btn-sm\" onclick=\"endSession('completed')\">End Session</button>"
+              : ''}
+            <button class="btn btn-primary btn-sm" onclick="openSessionReview()">Review</button>
+            ${reviewOpen?'<button class="btn btn-primary btn-sm" onclick="applySessionReviewResults()">Apply Review</button>':''}
+          </div>
+          ${reviewSummary?`<div class="session-review-summary-wrap">${reviewSummary}</div>`:''}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+function hideSessionOverlay(){
+  const host=document.getElementById('session-overlay');
+  if(!host) return;
+  host.classList.remove('on');
+  host.innerHTML='';
+}
+function onSessionOverlayClick(event){
+  if(event&&event.target!==event.currentTarget) return;
+}
+function toggleSessionTaskSelection(taskId,checked){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return;
+  const session=prepareExecutionSession();
+  if(!session||session.status!=='planned'){
+    toast2('Session locked','Change task selection before starting the session.');
+    return;
+  }
+  const numericId=Number(taskId);
+  const nextIds=new Set((session.taskIds||[]).map((id)=>Number(id)).filter((id)=>Number.isFinite(id)));
+  if(checked){
+    if(nextIds.size>=3&&!nextIds.has(numericId)){
+      toast2('Select up to 3 tasks','Remove one task before adding another.');
+      renderSessionWorkspace();
+      return;
+    }
+    nextIds.add(numericId);
+  }else{
+    nextIds.delete(numericId);
+  }
+  updateSessionRuntimeSession({
+    ...session,
+    taskIds:Array.from(nextIds).slice(0,3),
+    status:'planned'
+  });
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_task_selection_changed',
+    sessionId:getExecutionSession()?.id||session.id,
+    stageId:getExecutionSession()?.stageId||session.stageId,
+    taskIds:Array.from(nextIds).slice(0,3)
+  });
+  saveAll();
+  renderSessionWorkspace();
+}
+function openSessionOverlay(){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return;
+  const session=getExecutionSession();
+  if(!session){
+    prepareExecutionSession();
+  }
+  if((getExecutionSession()?.status||session?.status)==='planned'){
+    startSession();
+    return;
+  }
+  renderSessionOverlay();
+  if(!S.activeSession?.timerInterval&&isSessionRunning()) startSessionTimer();
+}
+function startSession(){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return;
+  const prepared=prepareExecutionSession();
+  if(!prepared){
+    toast2('No active milestone','Generate a roadmap first.');
+    return;
+  }
+  const taskIds=(prepared.taskIds||[]).slice(0,3);
+  if(!taskIds.length){
+    toast2('Select tasks first','Choose 1-3 tasks for the session.');
+    renderSessionWorkspace();
+    return;
+  }
+  const focusInput=String(document.getElementById('focus-input')?.value||'').trim();
+  const startedAt=nowIso();
+  const nextSession=normalizeExecutionSession({
+    ...prepared,
+    startedAt,
+    endedAt:'',
+    status:'running',
+    goal:String(focusInput||prepared.goal||getExecutionSessionStage()?.objective||S.user.goal||''),
+    review:{...prepared.review,openedAt:'',appliedAt:''},
+    reviewOpenedAt:'',
+    reviewAppliedAt:'',
+    progressDelta:normalizeSessionProgressDelta(),
+    outcomeSummary:String(prepared.outcomeSummary||''),
+    notes:String(prepared.notes||document.getElementById('session-review-notes')?.value||'')
+  },{stageId:prepared.stageId,goal:prepared.goal});
+  S.execution.session=nextSession;
+  S.execution.updatedAt=nowIso();
+  syncActiveSessionRuntime();
+  startSessionTimer();
+  renderDashboardSessionControls();
+  renderSessionWorkspace();
+  renderSessionOverlay();
+  saveAll();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_started',
+    sessionId:nextSession.id,
+    stageId:nextSession.stageId,
+    taskIds:nextSession.taskIds,
+    goal:nextSession.goal,
+    startedAt:nextSession.startedAt
+  });
+  feedLine(`Session started: "${nextSession.goal || getExecutionSessionStage()?.objective || 'execution focus'}"`);
+  toast2('Session started!',nextSession.goal||'Focused execution mode active');
+  trackEvent('session_started');
+}
+function openSessionReview(){
+  ensureExecutionState();
+  const session=getExecutionSession();
+  if(!session){
+    toast2('No session to review','Start and end a session first.');
+    return;
+  }
+  const nextReview=normalizeExecutionSessionReview({
+    ...session.review,
+    openedAt:session.review?.openedAt||nowIso()
+  });
+  updateSessionRuntimeSession({
+    ...session,
+    review:nextReview,
+    reviewOpenedAt:nextReview.openedAt
+  });
+  renderDashboardSessionControls();
+  renderSessionOverlay();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_review_opened',
+    sessionId:session.id,
+    stageId:session.stageId,
+    status:session.status
+  });
+  trackEvent('session_review_started');
+}
+function endSession(outcome='completed'){
+  ensureExecutionState();
+  const session=getExecutionSession();
+  if(!session||session.status!=='running'){
+    toast2('No active session','Start a session before ending it.');
+    return;
+  }
+  const status=String(outcome||'completed');
+  const nextStatus=status==='blocked'
+    ? 'blocked'
+    : (status==='interrupted' ? 'interrupted' : 'completed');
+  const endedAt=nowIso();
+  const reviewOpenedAt=session.review?.openedAt||endedAt;
+  const nextSession=normalizeExecutionSession({
+    ...session,
+    status:nextStatus,
+    endedAt,
+    review:{
+      ...session.review,
+      openedAt:reviewOpenedAt
+    },
+    reviewOpenedAt,
+    reviewAppliedAt:'',
+    progressDelta:getSessionProgressDelta(session),
+    outcomeSummary:String(session.outcomeSummary||document.getElementById('session-review-summary')?.value||'')
+  },{stageId:session.stageId,goal:session.goal});
+  S.execution.session=nextSession;
+  S.execution.updatedAt=nowIso();
+  clearSessionTimer();
+  syncActiveSessionRuntime();
+  renderDashboardSessionControls();
+  renderSessionWorkspace();
+  renderSessionOverlay();
+  saveAll();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_ended',
+    sessionId:nextSession.id,
+    stageId:nextSession.stageId,
+    status:nextSession.status,
+    endedAt:nextSession.endedAt,
+    progressDelta:nextSession.progressDelta
+  });
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_review_opened',
+    sessionId:nextSession.id,
+    stageId:nextSession.stageId,
+    status:nextSession.status
+  });
+  trackEvent('session_review_started');
+  feedLine(`Session ended: ${nextSession.status}`);
+  toast2('Session ended',nextSession.status);
+}
+function pauseSession(){
+  endSession('interrupted');
+}
+function completeSessionTask(taskId){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return;
+  const canonical=getExecutionTaskById(taskId);
+  if(!canonical) return;
+  canonical.status='done';
+  canonical.done=true;
+  canonical.progressPct=100;
+  canonical.completedAt=nowIso();
+  delete canonical.blockedAt;
+  delete canonical.blockReason;
+  S.execution.updatedAt=nowIso();
+  refreshExecutionProgress();
+  syncActiveTasksFromExecution();
+  saveTasks();
+  saveAll();
+  renderDashboardSessionControls();
+  renderTasks();
+  renderSessionWorkspace();
+  renderSessionOverlay();
+  updTaskBadge();
+  updMilestoneBar();
+  updRoadmapProgress();
+  if(S.roadmap) renderRM();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_task_completed',
+    taskId:Number(taskId),
+    sessionId:getExecutionSession()?.id||''
+  });
+}
+function blockSessionTask(taskId){
+  ensureExecutionState();
+  if(!hasExecutionStateReady()) return;
+  const canonical=getExecutionTaskById(taskId);
+  if(!canonical) return;
+  canonical.status='blocked';
+  canonical.done=false;
+  canonical.progressPct=0;
+  canonical.blockedAt=nowIso();
+  canonical.blockReason=String(document.getElementById('session-review-blockers')?.value||'').trim();
+  S.execution.updatedAt=nowIso();
+  refreshExecutionProgress();
+  syncActiveTasksFromExecution();
+  saveTasks();
+  saveAll();
+  renderDashboardSessionControls();
+  renderTasks();
+  renderSessionWorkspace();
+  renderSessionOverlay();
+  updTaskBadge();
+  updMilestoneBar();
+  updRoadmapProgress();
+  if(S.roadmap) renderRM();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_task_blocked',
+    taskId:Number(taskId),
+    sessionId:getExecutionSession()?.id||''
+  });
+}
+function buildSessionReviewAnswersFromUI(session){
+  return {
+    completed:String(document.getElementById('session-review-summary')?.value||session.review?.answers?.completed||session.review?.summary||session.outcomeSummary||'').trim(),
+    blocked:String(document.getElementById('session-review-blockers')?.value||session.review?.answers?.blocked||session.review?.blockers||'').trim(),
+    changed:String(document.getElementById('session-review-notes')?.value||session.review?.answers?.changed||session.review?.notes||session.notes||'').trim()
+  };
+}
+function sessionReviewResponseJsonSchema(){
+  return {
+    type:'object',
+    additionalProperties:false,
+    required:['summary','taskUpdates','milestoneUpdate','overallUpdate','nextBestAction','signals'],
+    properties:{
+      summary:{type:'string',maxLength:180},
+      taskUpdates:{
+        type:'array',
+        maxItems:6,
+        items:{
+          type:'object',
+          additionalProperties:false,
+          required:['taskId','status','completionPct','note'],
+          properties:{
+            taskId:{type:'number'},
+            status:{type:'string',enum:['done','blocked','partial','todo']},
+            completionPct:{type:'number'},
+            note:{type:'string',maxLength:180},
+            blockReason:{type:'string',maxLength:180}
+          }
+        }
+      },
+      milestoneUpdate:{
+        type:'object',
+        additionalProperties:false,
+        required:['stageId','progressPct','progressDelta','status','note'],
+        properties:{
+          stageId:{type:'string'},
+          progressPct:{type:'number'},
+          progressDelta:{type:'number'},
+          status:{type:'string',enum:['active','completed','blocked','pending']},
+          note:{type:'string',maxLength:180}
+        }
+      },
+      overallUpdate:{
+        type:'object',
+        additionalProperties:false,
+        required:['doneDelta','pctDelta','note'],
+        properties:{
+          doneDelta:{type:'number'},
+          pctDelta:{type:'number'},
+          note:{type:'string',maxLength:180}
+        }
+      },
+      nextBestAction:{
+        type:'object',
+        additionalProperties:false,
+        required:['taskId','stageId','title','reason'],
+        properties:{
+          taskId:{type:'number'},
+          stageId:{type:'string'},
+          title:{type:'string',maxLength:140},
+          reason:{type:'string',maxLength:180}
+        }
+      },
+      signals:{
+        type:'object',
+        additionalProperties:false,
+        required:['completed','interrupted','blocked'],
+        properties:{
+          completed:{type:'boolean'},
+          interrupted:{type:'boolean'},
+          blocked:{type:'boolean'}
+        }
+      }
+    }
+  };
+}
+function buildSessionReviewPrompt({session,stage,tasks,selectedTasks,answers,baseline,progressDelta}){
+  const taskLines=(tasks||[]).map((task)=>`- ${task.id}: ${getTaskTitle(task)} [${String(task.status||'todo')}] (${task.estimateHours||2}h)`).join('\n');
+  const selectedLineList=(selectedTasks||[]).map((task)=>`- ${task.id}: ${getTaskTitle(task)} [${String(task.status||'todo')}]`).join('\n');
+  return `Review this finished execution session and convert it into canonical execution updates.
+
+Current stage:
+- stageId: ${stage?.id||''}
+- stageTitle: ${stage?.title||''}
+- stageObjective: ${stage?.objective||''}
+
+Session context:
+- sessionId: ${session?.id||''}
+- sessionStatus: ${session?.status||''}
+- startedAt: ${session?.startedAt||''}
+- endedAt: ${session?.endedAt||''}
+- baselineStageDone: ${baseline.stageDone}
+- baselineStageTotal: ${baseline.stageTotal}
+- baselineOverallDone: ${baseline.overallDone}
+- baselineOverallTotal: ${baseline.overallTotal}
+- baselineStageProgress: ${baseline.stageProgress}
+- baselineOverallProgress: ${baseline.overallProgress}
+- currentStageDelta: ${progressDelta.stageProgressDelta}
+- currentOverallDelta: ${progressDelta.overallProgressDelta}
+
+Selected tasks:
+${selectedLineList || '- none'}
+
+Current milestone task inventory:
+${taskLines || '- none'}
+
+User answers:
+1. What did you actually complete?
+${answers.completed || '-'}
+2. What stayed blocked or unfinished?
+${answers.blocked || '-'}
+3. What slowed you down or changed?
+${answers.changed || '-'}
+
+Rules:
+- Use only the supplied session and answers.
+- Keep the output concise and execution-focused.
+- If a task was completed, mark it done.
+- If a task is partially done, give a completionPct between 1 and 99.
+- If a task is blocked, mark it blocked and include a blockReason.
+- milestoneUpdate.progressPct should reflect the resulting milestone progress after applying the task updates.
+- overallUpdate should describe the resulting goal progress change.
+- nextBestAction must point to one concrete next task or the next session direction.
+- Return JSON only.`;
+}
+function buildFallbackSessionReviewInterpretation({session,stage,answers,taskIds,progressDelta}){
+  const firstTaskId=Number(taskIds?.[0]||0);
+  const blockedTaskId=Number(taskIds?.find((taskId)=>getExecutionTaskById(taskId)?.status!=='done')||firstTaskId||0);
+  const summary=answers.completed
+    ? clipText(`Completed: ${answers.completed}`,140)
+    : 'Execution state updated from the session review.';
+  const taskUpdates=[];
+  if(firstTaskId&&(answers.completed||session?.status==='completed')){
+    taskUpdates.push({
+      taskId:firstTaskId,
+      status:'done',
+      completionPct:100,
+      note:clipText(answers.completed||'Marked complete from session review.',160),
+      blockReason:''
+    });
+  }
+  if(answers.blocked && blockedTaskId){
+    taskUpdates.push({
+      taskId:blockedTaskId,
+      status:'blocked',
+      completionPct:0,
+      note:clipText(answers.blocked,160),
+      blockReason:clipText(answers.blocked,160)
+    });
+  }
+  return normalizeSessionReviewInterpretation({
+    summary,
+    taskUpdates,
+    milestoneUpdate:{
+      stageId:String(stage?.id||session?.stageId||''),
+      progressPct:clampPercentage(50+Number(progressDelta.stageProgressDelta||0)),
+      progressDelta:Number(progressDelta.stageProgressDelta||0),
+      status:Number(progressDelta.stageProgressDelta||0)>=0?'active':'blocked',
+      note:clipText(answers.changed||summary,160)
+    },
+    overallUpdate:{
+      doneDelta:Number(progressDelta.overallDoneDelta||0),
+      pctDelta:Number(progressDelta.overallProgressDelta||0),
+      note:clipText(answers.changed||summary,160)
+    },
+    nextBestAction:{
+      taskId:Number(taskIds?.find((taskId)=>Number(taskId)!==firstTaskId)||0),
+      stageId:String(stage?.id||session?.stageId||''),
+      title:clipText(answers.changed||`Continue the current milestone with one concrete step.`,140),
+      reason:clipText('Fallback interpretation used because AI output was unavailable.',180)
+    },
+    signals:{
+      completed:session?.status==='completed',
+      interrupted:session?.status==='interrupted',
+      blocked:session?.status==='blocked'||Boolean(answers.blocked)
+    }
+  });
+}
+async function interpretSessionReviewWithAi(context){
+  try{
+    const response=await geminiJSON(
+      buildSessionReviewPrompt(context),
+      sessionReviewSystemCtx(),
+      900,
+      '',
+      {temperature:0.15},
+      'session_review'
+    );
+    return normalizeSessionReviewInterpretation(response||{});
+  }catch(error){
+    logWarn({
+      area:'frontend',
+      module:'frontend/script.js',
+      function:'session_flow',
+      action:'session_review_ai_fallback',
+      sessionId:context.session?.id||'',
+      errorMessage:String(error?.message||'AI review failed')
+    });
+    return buildFallbackSessionReviewInterpretation(context);
+  }
+}
+function sessionReviewSystemCtx(){
+  return `You are an execution analyst. Return concise English JSON only. Do not add motivational text. Focus on concrete work completed, blocked work, milestone impact, overall progress impact, and the next best action.`;
+}
+function applySessionReviewTaskUpdate(task, update, session){
+  if(!task||!update) return null;
+  const nextTask=task;
+  const status=String(update.status||'partial');
+  const pct=clampPercentage(update.completionPct);
+  if(status==='done'||pct>=100){
+    nextTask.status='done';
+    nextTask.done=true;
+    nextTask.progressPct=100;
+    nextTask.completedAt=nextTask.completedAt||nowIso();
+    delete nextTask.blockedAt;
+    delete nextTask.blockReason;
+  }else if(status==='blocked'){
+    nextTask.status='blocked';
+    nextTask.done=false;
+    nextTask.progressPct=0;
+    nextTask.blockedAt=nowIso();
+    nextTask.blockReason=String(update.blockReason||update.note||'');
+  }else{
+    nextTask.status=nextTask.status==='done'?'done':'todo';
+    nextTask.done=Boolean(nextTask.done);
+    nextTask.progressPct=Math.max(0,Math.min(99,pct||Number(nextTask.progressPct||0)));
+    if(update.note) nextTask.reviewNote=String(update.note);
+  }
+  nextTask.reviewSource='session_review';
+  nextTask.reviewSessionId=String(session?.id||'');
+  nextTask.reviewUpdatedAt=nowIso();
+  return nextTask;
+}
+async function applySessionReviewResults(){
+  ensureExecutionState();
+  const session=getExecutionSession();
+  if(!session){
+    toast2('No session to apply','Start and end a session first.');
+    return;
+  }
+  const stage=getExecutionSessionStage()||getExecutionStage(getExecutionActiveStageIndex());
+  const answers=buildSessionReviewAnswersFromUI(session);
+  const selectedTaskIds=Array.from(new Set((session.taskIds||[]).map((taskId)=>Number(taskId)).filter((taskId)=>Number.isFinite(taskId))));
+  const selectedTasks=selectedTaskIds.map((taskId)=>getExecutionTaskById(taskId)).filter(Boolean);
+  const stageIndexForReview=getExecutionStages().findIndex((item)=>String(item.id)===String(stage?.id||session.stageId));
+  const stageTasksForReview=stageIndexForReview>=0
+    ? getTasksForStage(stageIndexForReview,{includeArchived:false})
+    : selectedTasks;
+  const baseline=session.baseline||buildSessionBaseline(getExecutionActiveStageIndex());
+  const appliedAt=nowIso();
+  const progressBefore=getSessionProgressDelta(session);
+  const interpretation=await interpretSessionReviewWithAi({
+    session,
+    stage,
+    tasks:stageTasksForReview,
+    selectedTasks,
+    answers,
+    baseline,
+    progressDelta:progressBefore
+  });
+  const normalizedInterpretation=normalizeSessionReviewInterpretation(interpretation);
+  const appliedChanges={
+    taskIdsCompleted:[],
+    taskIdsBlocked:[],
+    taskIdsPartiallyUpdated:[]
+  };
+  const applyTargetTaskIds=(normalizedInterpretation.taskUpdates||[]).length
+    ? normalizedInterpretation.taskUpdates
+    : [];
+  if(!applyTargetTaskIds.length&&selectedTaskIds.length){
+    const fallbackTaskId=selectedTaskIds[0];
+    if(answers.completed){
+      applyTargetTaskIds.push(normalizeSessionReviewTaskUpdate({
+        taskId:fallbackTaskId,
+        status:'done',
+        completionPct:100,
+        note:answers.completed
+      }));
+    }else if(answers.blocked){
+      applyTargetTaskIds.push(normalizeSessionReviewTaskUpdate({
+        taskId:fallbackTaskId,
+        status:'blocked',
+        completionPct:0,
+        note:answers.blocked,
+        blockReason:answers.blocked
+      }));
+    }else if(answers.changed){
+      applyTargetTaskIds.push(normalizeSessionReviewTaskUpdate({
+        taskId:fallbackTaskId,
+        status:'partial',
+        completionPct:50,
+        note:answers.changed
+      }));
+    }
+  }
+  applyTargetTaskIds.forEach((update)=>{
+    const target=getExecutionTaskById(update.taskId);
+    if(!target) return;
+    applySessionReviewTaskUpdate(target, update, session);
+    if(update.status==='done'){
+      appliedChanges.taskIdsCompleted.push(Number(update.taskId));
+    }else if(update.status==='blocked'){
+      appliedChanges.taskIdsBlocked.push(Number(update.taskId));
+    }else{
+      appliedChanges.taskIdsPartiallyUpdated.push(Number(update.taskId));
+    }
+  });
+  const stageRecord=getExecutionStages()[stageIndexForReview]||getExecutionStages().find((item)=>String(item.id)===String(stage?.id||session.stageId));
+  const stageTasks=stageRecord?getTasksForStage(stageIndexForReview>=0?stageIndexForReview:getExecutionStages().findIndex((item)=>String(item.id)===String(stageRecord.id)),{includeArchived:false}):selectedTasks;
+  if(stageRecord){
+    const milestoneUpdate=normalizedInterpretation.milestoneUpdate||{};
+    const weightedProgress=calculateTaskProgressValue(stageTasks);
+    stageRecord.progress=clampPercentage(
+      Number.isFinite(Number(milestoneUpdate.progressPct))
+        ? milestoneUpdate.progressPct
+        : weightedProgress
+    );
+    if(milestoneUpdate.status==='completed'||stageRecord.progress>=100){
+      stageRecord.status='completed';
+    }else if(milestoneUpdate.status==='blocked'){
+      stageRecord.status='active';
+    }else if(stageRecord.status!=='completed'){
+      stageRecord.status='active';
+    }
+  }
+  refreshExecutionProgress();
+  syncActiveTasksFromExecution();
+  const progressDelta=getSessionProgressDelta(session);
+  const appliedReview=normalizeExecutionSessionReview({
+    ...session.review,
+    openedAt:session.review?.openedAt||session.reviewOpenedAt||appliedAt,
+    appliedAt,
+    summary:String(normalizedInterpretation.summary||answers.completed||session.review?.summary||'').trim(),
+    blockers:answers.blocked,
+    notes:answers.changed,
+    outcome:session.status,
+    nextSteps:String(normalizedInterpretation.nextBestAction?.title||answers.changed||'').trim(),
+    answers,
+    interpretation:{
+      ...normalizedInterpretation,
+      taskUpdates:applyTargetTaskIds.map((update)=>normalizeSessionReviewTaskUpdate(update)),
+      nextBestAction:normalizeSessionReviewNextAction({
+        ...normalizedInterpretation.nextBestAction,
+        taskId:Number(normalizedInterpretation.nextBestAction?.taskId||0)
+      })
+    },
+    appliedChanges
+  });
+  const nextSession=normalizeExecutionSession({
+    ...session,
+    review:appliedReview,
+    reviewOpenedAt:appliedReview.openedAt,
+    reviewAppliedAt:appliedAt,
+    progressDelta,
+    outcomeSummary:String(appliedReview.summary||answers.completed||'').trim(),
+    notes:answers.changed,
+    status:session.status==='running'?'completed':session.status
+  },{stageId:session.stageId,goal:session.goal});
+  const historyEntry={
+    ...nextSession,
+    review:appliedReview,
+    progressDelta,
+    appliedAt
+  };
+  if(!Array.isArray(S.execution.sessionHistory)) S.execution.sessionHistory=[];
+  S.execution.sessionHistory.unshift(historyEntry);
+  if(S.execution.sessionHistory.length>25) S.execution.sessionHistory.length=25;
+  S.execution.lastReviewResult=historyEntry;
+  S.execution.session=nextSession;
+  const durationMinutes=getSessionDurationMinutes(nextSession);
+  const completedDelta=Math.max(0,Number(progressDelta.overallDoneDelta||0));
+  S.progress.sessions=(Number(S.progress.sessions||0)+1);
+  if(nextSession.status==='completed') S.progress.completedSessions=Number(S.progress.completedSessions||0)+1;
+  else if(nextSession.status==='interrupted') S.progress.interruptedSessions=Number(S.progress.interruptedSessions||0)+1;
+  else if(nextSession.status==='blocked') S.progress.blockedSessions=Number(S.progress.blockedSessions||0)+1;
+  S.progress.hours=Number(S.progress.hours||0)+(durationMinutes/60);
+  if(nextSession.status==='completed'){
+    logActivityInternal(nextSession.goal||'session',durationMinutes);
+  }
+  if(!Array.isArray(S.progress.sessionLog)) S.progress.sessionLog=[];
+  const todayLabel=new Date().toDateString();
+  const existingLog=S.progress.sessionLog.find((entry)=>entry.date===todayLabel);
+  const sessionLogPayload={
+    date:todayLabel,
+    sessions:1,
+    tasks:completedDelta,
+    focus:nextSession.goal||session.goal||'',
+    duration:Math.max(1,durationMinutes),
+    status:nextSession.status,
+    completedSessions:Number(S.progress.completedSessions||0),
+    interruptedSessions:Number(S.progress.interruptedSessions||0),
+    blockedSessions:Number(S.progress.blockedSessions||0),
+    reviewSummary:String(appliedReview.summary||'').trim(),
+    nextAction:String(appliedReview.interpretation?.nextBestAction?.title||'').trim()
+  };
+  if(existingLog){
+    existingLog.sessions=(Number(existingLog.sessions||0)+1);
+    existingLog.tasks=(Number(existingLog.tasks||0)+completedDelta);
+    existingLog.focus=sessionLogPayload.focus;
+    existingLog.duration=Math.max(Number(existingLog.duration||0),sessionLogPayload.duration);
+    existingLog.status=nextSession.status;
+    existingLog.completedSessions=sessionLogPayload.completedSessions;
+    existingLog.interruptedSessions=sessionLogPayload.interruptedSessions;
+    existingLog.blockedSessions=sessionLogPayload.blockedSessions;
+    existingLog.reviewSummary=sessionLogPayload.reviewSummary;
+    existingLog.nextAction=sessionLogPayload.nextAction;
+  }else{
+    S.progress.sessionLog.push(sessionLogPayload);
+  }
+  const completionRate=Number(S.progress.sessions||0)>0
+    ? Math.round(((Number(S.progress.completedSessions||0))/Number(S.progress.sessions||1))*100)
+    : 0;
+  S.progress.sessionCompletionRate=completionRate;
+  if(appliedReview.summary) feedLine(`Session review applied: ${appliedReview.summary}`);
+  updateSessionRuntimeSession({
+    ...nextSession,
+    review:appliedReview,
+    reviewAppliedAt:appliedAt
+  });
+  S.execution.updatedAt=nowIso();
+  refreshExecutionProgress();
+  syncActiveTasksFromExecution();
+  await maybeAutoAdvanceRoadmapStage();
+  const nextStageIndex=getExecutionActiveStageIndex();
+  const nextStage=getExecutionStage(nextStageIndex);
+  const nextActionTaskId=Number(appliedReview.interpretation?.nextBestAction?.taskId||0);
+  const nextStageTaskIds=getTasksForStage(nextStageIndex,{includeArchived:false}).map((task)=>Number(task.id)).filter((taskId)=>Number.isFinite(taskId));
+  const sessionTaskIds=nextActionTaskId&&nextStageTaskIds.includes(nextActionTaskId)
+    ? [nextActionTaskId]
+    : recommendSessionTaskIds(nextStageIndex);
+  const nextPlannedSession=normalizeExecutionSession({
+    id:createClientRequestId('session'),
+    stageId:String(nextStage?.id||''),
+    taskIds:sessionTaskIds,
+    goal:String(appliedReview.interpretation?.nextBestAction?.title||nextStage?.objective||S.user.goal||''),
+    startedAt:'',
+    endedAt:'',
+    status:'planned',
+    review:{
+      openedAt:'',
+      appliedAt:'',
+      summary:'',
+      blockers:'',
+      notes:'',
+      outcome:'',
+      nextSteps:'',
+      answers:normalizeSessionReviewAnswers(),
+      interpretation:normalizeSessionReviewInterpretation(),
+      appliedChanges:normalizeSessionReviewAppliedChanges()
+    },
+    progressDelta:normalizeSessionProgressDelta(),
+    notes:'',
+    outcomeSummary:'',
+    baseline:buildSessionBaseline(nextStageIndex)
+  },{stageId:nextStage?.id||'',goal:nextStage?.objective||S.user.goal||''});
+  S.execution.session=nextPlannedSession;
+  syncActiveSessionRuntime();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_prepared',
+    sessionId:nextPlannedSession.id,
+    stageId:nextPlannedSession.stageId,
+    taskIds:nextPlannedSession.taskIds,
+    goal:nextPlannedSession.goal
+  });
+  clearSessionTimer();
+  saveTasks();
+  saveAll();
+  renderDashboardSessionControls();
+  renderTasks();
+  renderSessionWorkspace();
+  renderSessionOverlay();
+  updTaskBadge();
+  updMilestoneBar();
+  updRoadmapProgress();
+  if(S.roadmap) renderRM();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_review_completed',
+    sessionId:nextSession.id,
+    stageId:nextSession.stageId,
+    status:nextSession.status,
+    progressDelta,
+    durationMinutes,
+    summary:appliedReview.summary,
+    taskUpdates:appliedReview.interpretation?.taskUpdates?.length||0
+  });
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_progress_applied',
+    sessionId:nextSession.id,
+    stageId:nextSession.stageId,
+    progressDelta,
+    completedSessions:Number(S.progress.completedSessions||0),
+    interruptedSessions:Number(S.progress.interruptedSessions||0),
+    blockedSessions:Number(S.progress.blockedSessions||0)
+  });
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'session_flow',
+    action:'session_next_action_generated',
+    sessionId:nextSession.id,
+    stageId:nextSession.stageId,
+    nextAction:nextPlannedSession.goal,
+    nextTaskIds:nextPlannedSession.taskIds
+  });
+  toast2('Session review applied',appliedReview.summary||'Execution state updated.');
+  trackEvent('session_review_completed');
+  trackEvent('session_progress_applied');
+  trackEvent('session_next_action_generated');
+  if(nextSession.status==='completed'){
+    trackEvent('completed_session_count');
+    trackEvent('session_done');
+  }else if(nextSession.status==='interrupted'){
+    trackEvent('interrupted_session_count');
+  }else if(nextSession.status==='blocked'){
+    trackEvent('blocked_session_count');
+  }
+}
+function getTaskCalendarSource(){
+  if(isExecutionStateObject(S.execution)){
+    return getAllExecutionTasks().filter((task)=>task.status!=='archived');
+  }
+  return (S.tasks||[]).filter((task)=>task.status!=='archived');
+}
+function normalizeTaskCalendarDate(value){
+  const text=String(value||'').trim();
+  if(!text) return '';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const date=new Date(text);
+  if(Number.isNaN(date.getTime())) return '';
+  return toDateInputValue(date);
+}
+function getTaskCalendarMonthAnchor(){
+  if(!(taskCalendarMonthAnchor instanceof Date)||Number.isNaN(taskCalendarMonthAnchor.getTime())){
+    taskCalendarMonthAnchor=new Date();
+    taskCalendarMonthAnchor.setDate(1);
+    taskCalendarMonthAnchor.setHours(0,0,0,0);
+  }
+  return taskCalendarMonthAnchor;
+}
+function setTaskCalendarMonthAnchor(date){
+  const source=date instanceof Date&&!Number.isNaN(date.getTime())?date:new Date();
+  taskCalendarMonthAnchor=new Date(source.getFullYear(),source.getMonth(),1);
+}
+function formatTaskCalendarMonth(date){
+  return new Intl.DateTimeFormat('en-US',{month:'long',year:'numeric'}).format(date);
+}
+function compareCalendarTasks(a,b){
+  const stageA=Number.isFinite(Number(a.milestoneIndex))?Number(a.milestoneIndex):Math.max(0,(Number(a.linkedStage)||1)-1);
+  const stageB=Number.isFinite(Number(b.milestoneIndex))?Number(b.milestoneIndex):Math.max(0,(Number(b.linkedStage)||1)-1);
+  if(stageA!==stageB) return stageA-stageB;
+  const doneA=Boolean(a.done)||a.status==='done';
+  const doneB=Boolean(b.done)||b.status==='done';
+  if(doneA!==doneB) return doneA?1:-1;
+  const prioRank={high:0,med:1,low:2};
+  const prioA=prioRank[normalizeTaskPriority(a.priority||a.prio)]??1;
+  const prioB=prioRank[normalizeTaskPriority(b.priority||b.prio)]??1;
+  if(prioA!==prioB) return prioA-prioB;
+  return String(getTaskTitle(a)||'').localeCompare(String(getTaskTitle(b)||''),undefined,{sensitivity:'base'});
+}
+function buildTaskCalendarBuckets(tasks){
+  const buckets=new Map();
+  const unscheduled=[];
+  (tasks||[]).forEach((task)=>{
+    const dateKey=normalizeTaskCalendarDate(task.deadline);
+    const normalized=decorateTaskWithMilestoneMeta({
+      ...task,
+      deadline:dateKey,
+      prio:normalizeTaskPriority(task.priority||task.prio),
+      priority:normalizeTaskPriority(task.priority||task.prio),
+      done:Boolean(task.done)||task.status==='done'
+    });
+    if(!dateKey){
+      unscheduled.push(normalized);
+      return;
+    }
+    if(!buckets.has(dateKey)) buckets.set(dateKey,[]);
+    buckets.get(dateKey).push(normalized);
+  });
+  buckets.forEach((items,key)=>{
+    items.sort(compareCalendarTasks);
+    buckets.set(key,items);
+  });
+  unscheduled.sort(compareCalendarTasks);
+  return {buckets,unscheduled};
+}
+function renderTaskCalendarWeekdays(host){
+  if(!host) return;
+  const labels=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  host.innerHTML=labels.map((label)=>`<div class="calendar-weekday">${label}</div>`).join('');
+}
+function renderTaskCalendar(){
+  const titleEl=document.getElementById('task-calendar-title');
+  const weekdaysEl=document.getElementById('task-calendar-weekdays');
+  const gridEl=document.getElementById('task-calendar-grid');
+  const footerEl=document.getElementById('task-calendar-footer');
+  if(!titleEl||!weekdaysEl||!gridEl||!footerEl) return;
+  const anchor=getTaskCalendarMonthAnchor();
+  const monthStart=new Date(anchor.getFullYear(),anchor.getMonth(),1);
+  const monthEnd=new Date(anchor.getFullYear(),anchor.getMonth()+1,0);
+  const startGrid=new Date(monthStart);
+  const startOffset=(monthStart.getDay()+6)%7;
+  startGrid.setDate(monthStart.getDate()-startOffset);
+  const source=getTaskCalendarSource();
+  const {buckets,unscheduled}=buildTaskCalendarBuckets(source);
+  const todayKey=toDateInputValue(new Date());
+  const stages=getExecutionStages().length?getExecutionStages():(Array.isArray(S.roadmap)?S.roadmap:[]);
+  const legendHostId='task-calendar-legend';
+  let legendEl=document.getElementById(legendHostId);
+  if(!legendEl){
+    legendEl=document.createElement('div');
+    legendEl.id=legendHostId;
+    legendEl.className='calendar-legend';
+    const topRow=titleEl.parentElement?.parentElement;
+    if(topRow){
+      topRow.insertAdjacentElement('afterend',legendEl);
+    }else{
+      titleEl.parentElement.insertAdjacentElement('afterend',legendEl);
+    }
+  }
+  legendEl.innerHTML=stages.map((stage,index)=>{
+    const meta=getMilestoneVisualMeta(index,stages.length||1);
+    return `<div class="calendar-legend-item" style="--milestone-accent:${meta.accent};--milestone-tint:${meta.tint};--milestone-border:${meta.border};--milestone-glow:${meta.glow};">
+      <span class="calendar-legend-swatch">${meta.label}</span>
+      <div class="calendar-legend-copy">
+        <strong>${escHtml(meta.title)}</strong>
+        <span>${escHtml(meta.rangeLabel)}</span>
+      </div>
+    </div>`;
+  }).join('');
+  titleEl.textContent=formatTaskCalendarMonth(monthStart);
+  renderTaskCalendarWeekdays(weekdaysEl);
+  gridEl.innerHTML=Array.from({length:42},(_,index)=>{
+    const cellDate=new Date(startGrid);
+    cellDate.setDate(startGrid.getDate()+index);
+    const cellKey=toDateInputValue(cellDate);
+    const tasks=buckets.get(cellKey)||[];
+    const inMonth=cellDate.getMonth()===monthStart.getMonth();
+    const isToday=cellKey===todayKey;
+    const isSelected=cellKey===taskCalendarSelectedDate;
+    const milestoneMeta=getMilestoneVisualMetaForDate(cellKey);
+    const visibleTasks=tasks.slice(0,3);
+    const moreCount=Math.max(0,tasks.length-visibleTasks.length);
+    const weekdayName=new Intl.DateTimeFormat('en-US',{weekday:'short'}).format(cellDate);
+    const zoneVars=milestoneMeta
+      ? `--milestone-accent:${milestoneMeta.accent};--milestone-tint:${milestoneMeta.tint};--milestone-border:${milestoneMeta.border};--milestone-glow:${milestoneMeta.glow};`
+      : '';
+    return `<div class="calendar-day ${inMonth?'':'out-month'} ${isToday?'today':''} ${isSelected?'selected':''} ${milestoneMeta?'milestone-zone':''}" style="${zoneVars}" onclick="openTaskCalendarDay(${JSON.stringify(cellKey)})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openTaskCalendarDay(${JSON.stringify(cellKey)})}" role="button" tabindex="0" aria-label="${weekdayName} ${cellDate.getDate()} ${formatTaskCalendarMonth(cellDate)}">
+      <div class="calendar-day-head">
+        <div class="calendar-day-number">${cellDate.getDate()}</div>
+        <div class="calendar-day-meta">${tasks.length?`${tasks.length}`:'&nbsp;'}</div>
+      </div>
+      <div class="calendar-day-body">
+        ${visibleTasks.map((task)=>{
+          const prio=normalizeTaskPriority(task.priority||task.prio);
+          const doneClass=task.done||task.status==='done'?'done':'';
+          const taskMeta=decorateTaskWithMilestoneMeta(task);
+          return `<button class="calendar-task-chip milestone-zone prio-${prio} ${doneClass}" style="--milestone-accent:${taskMeta.milestoneColor};--milestone-tint:${taskMeta.milestoneTint};--milestone-border:${taskMeta.milestoneBorder};--milestone-glow:${taskMeta.milestoneGlow};" onclick="event.stopPropagation();openTaskDetail(${Number(task.id)})" title="${escHtml(getTaskTitle(task))}">
+            <span class="calendar-task-dot">${task.done||task.status==='done'?'✓':''}</span>
+            <span class="calendar-task-title">${escHtml(clipText(getTaskTitle(task),48))}</span>
+          </button>`;
+        }).join('')}
+        ${moreCount>0?`<button class="calendar-more-chip" onclick="event.stopPropagation();openTaskCalendarDay(${JSON.stringify(cellKey)})">+${moreCount} more</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+  const scheduledTotal=source.filter((task)=>normalizeTaskCalendarDate(task.deadline)).length;
+  const totalCount=source.length;
+  footerEl.innerHTML=`<button class="calendar-footer-chip" onclick="openTaskCalendarDay('__unscheduled__')" ${unscheduled.length?'':'disabled'}>
+    <span>Unscheduled</span>
+    <strong>${unscheduled.length}</strong>
+  </button>
+  <div class="calendar-footer-stat">
+    <span>Scheduled</span>
+    <strong>${scheduledTotal}</strong>
+  </div>
+  <div class="calendar-footer-stat">
+    <span>Total tasks</span>
+    <strong>${totalCount}</strong>
+  </div>`;
+}
+function openTaskCalendarDay(dateKey){
+  taskCalendarSelectedDate=dateKey;
+  renderTaskCalendar();
+  const overlay=document.getElementById('calendar-day-overlay');
+  const content=document.getElementById('calendar-day-content');
+  if(!overlay||!content) return;
+  const source=getTaskCalendarSource();
+  const {buckets,unscheduled}=buildTaskCalendarBuckets(source);
+  const tasks=dateKey==='__unscheduled__'
+    ? unscheduled
+    : (buckets.get(dateKey)||[]);
+  const milestoneMeta=dateKey==='__unscheduled__'?null:getMilestoneVisualMetaForDate(dateKey);
+  const title=dateKey==='__unscheduled__'
+    ? 'Unscheduled tasks'
+    : new Intl.DateTimeFormat('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(new Date(`${dateKey}T00:00:00`));
+  content.innerHTML=`<div class="calendar-day-headline">
+    <div>
+      <div class="calendar-day-kicker">Calendar Day</div>
+      <div class="calendar-day-title" id="calendar-day-title">${escHtml(title)}</div>
+      ${milestoneMeta?`<div class="calendar-day-zone-pill" style="--milestone-accent:${milestoneMeta.accent};--milestone-tint:${milestoneMeta.tint};--milestone-border:${milestoneMeta.border};"> ${escHtml(milestoneMeta.label)} · ${escHtml(milestoneMeta.title)}</div>`:''}
+      <div class="calendar-day-sub">${tasks.length} task${tasks.length===1?'':'s'}</div>
+    </div>
+    <button class="calendar-day-close" onclick="closeCalendarDay()" aria-label="Close calendar day">✕</button>
+  </div>
+  <div class="calendar-day-list">
+    ${tasks.length?tasks.map((task)=>{
+      const prio=normalizeTaskPriority(task.priority||task.prio);
+      const done=task.done||task.status==='done';
+      const taskMeta=decorateTaskWithMilestoneMeta(task);
+      return `<button class="calendar-day-task milestone-zone ${done?'done':''}" style="--milestone-accent:${taskMeta.milestoneColor};--milestone-tint:${taskMeta.milestoneTint};--milestone-border:${taskMeta.milestoneBorder};--milestone-glow:${taskMeta.milestoneGlow};" onclick="openTaskDetail(${Number(task.id)})">
+        <div class="calendar-day-task-head">
+          <span class="calendar-day-task-title">${escHtml(getTaskTitle(task))}</span>
+          <span class="calendar-day-task-prio prio-${prio}">${escHtml(taskPrioLabel(prio))}</span>
+        </div>
+        <div class="calendar-day-task-meta">
+          <span>${done?'Done':'Active'}</span>
+          <span>${escHtml(task.deadline||'No deadline')}</span>
+        </div>
+      </button>`;
+    }).join(''):'<div class="calendar-day-empty">No tasks scheduled for this day.</div>'}
+  </div>`;
+  overlay.classList.add('on');
+  document.body.classList.add('task-detail-open');
+}
+function closeCalendarDay(silent=false){
+  const overlay=document.getElementById('calendar-day-overlay');
+  if(overlay) overlay.classList.remove('on');
+  if(!silent){
+    const content=document.getElementById('calendar-day-content');
+    if(content) content.innerHTML='';
+  }
+  taskCalendarSelectedDate='';
+  const taskOverlay=document.getElementById('task-detail-overlay');
+  if(!taskOverlay||!taskOverlay.classList.contains('on')){
+    document.body.classList.remove('task-detail-open');
+  }
+}
+function onCalendarDayOverlayClick(event){
+  if(event.target&&event.target.id==='calendar-day-overlay') closeCalendarDay();
+}
+function moveTaskCalendarMonth(delta){
+  const anchor=getTaskCalendarMonthAnchor();
+  setTaskCalendarMonthAnchor(new Date(anchor.getFullYear(),anchor.getMonth()+(Number(delta)||0),1));
+  closeCalendarDay(true);
+  renderTasks();
+}
+function goTaskCalendarToday(){
+  setTaskCalendarMonthAnchor(new Date());
+  closeCalendarDay(true);
+  renderTasks();
+}
 function focusTaskInput(){document.getElementById('task-input').focus();}
 function ensureTaskDetailBindings(){
   if(taskDetailEscBound) return;
   window.addEventListener('keydown',(event)=>{
-    if(event.key==='Escape') closeTaskDetail(true);
+    if(event.key!=='Escape') return;
+    const taskOverlay=document.getElementById('task-detail-overlay');
+    const calendarOverlay=document.getElementById('calendar-day-overlay');
+    if(taskOverlay&&taskOverlay.classList.contains('on')) closeTaskDetail(true);
+    else if(calendarOverlay&&calendarOverlay.classList.contains('on')) closeCalendarDay(true);
   });
   taskDetailEscBound=true;
 }
@@ -5710,7 +8421,10 @@ function closeTaskDetail(silent=false){
   activeTaskDetailId=null;
   const overlay=document.getElementById('task-detail-overlay');
   if(overlay) overlay.classList.remove('on');
-  document.body.classList.remove('task-detail-open');
+  const calendarOverlay=document.getElementById('calendar-day-overlay');
+  if(!calendarOverlay||!calendarOverlay.classList.contains('on')){
+    document.body.classList.remove('task-detail-open');
+  }
   if(!silent){
     const content=document.getElementById('task-detail-content');
     if(content) content.innerHTML='';
@@ -5803,7 +8517,9 @@ function addTask(){
     stageIndex,
     stageTitle:stage?.title||'Stage 1',
     stageObjective:stage?.objective||'',
-    deadline:S.user.deadline||''
+    deadline:stage?.targetDate||S.user.deadline||'',
+    stageStartDate:stage?.startDate||'',
+    stageTargetDate:stage?.targetDate||S.user.deadline||''
   })[0];
   const persisted=normalizeExecutionTask({
     ...normalized,
@@ -5839,51 +8555,30 @@ function addTask(){
 function renderTasks(){
   ensureTaskDetailBindings();
   ensureExecutionState();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'renderTasks',
+    action:'render_tasks_started',
+    executionReady:hasExecutionStateReady(),
+    activeStageIndex:getExecutionActiveStageIndex(),
+    visibleTaskCount:getVisibleActiveTasks().length
+  });
   syncActiveTasksFromExecution();
-  renderActiveMilestoneHeader();
-  const el=document.getElementById('task-list');if(!el)return;
-  let f=S.tasks||[];
-  if(taskFilter==='active')f=f.filter(t=>!t.done);
-  else if(taskFilter==='done')f=f.filter(t=>t.done);
-  else if(taskFilter==='high')f=f.filter(t=>normalizeTaskPrio(t.prio)==='high'&&!t.done);
-  const cnt=getActiveStageTasks().filter((task)=>!task.done&&task.status!=='done').length;
-  const sub=document.getElementById('task-count-sub');if(sub)sub.textContent=cnt>0?`(${cnt} active)`:'';
-  if(!f.length){
-    const activeIndex=getExecutionActiveStageIndex();
-    const status=resolveStageTaskStatus(activeIndex);
-    if(status==='loading'){
-      el.innerHTML='<div class="task-empty"><span class="task-empty-icon">⏳</span>Генерируем задачи для активного этапа…</div>';
-      return;
-    }
-    if(status==='error'){
-      el.innerHTML='<div class="task-empty"><span class="task-empty-icon">⚠</span>Не удалось сгенерировать задачи. <button class="btn btn-ghost btn-sm" onclick="retryActiveStageTaskGeneration()">Повторить</button></div>';
-      return;
-    }
-    el.innerHTML='<div class="task-empty"><span class="task-empty-icon">☑</span>Задач здесь пока нет</div>';
-    return;
-  }
-  el.innerHTML=f.map(t=>{
-    const prio=normalizeTaskPrio(t.prio);
-    const support=clipText(getTaskSupportLine(t)||'Open the task detail for the full execution brief.',96);
-    const stageLabel=`Stage ${Math.max(1,(Number(t.linkedStageIndex)||0)+1)}`;
-    const status=t.done?'Done':'Active';
-    return `<div class="task-item ${t.done?'done-item':''}" onclick="openTaskDetail(${t.id})">
-      <button class="task-cb ${t.done?'checked':''}" onclick="event.stopPropagation();toggleTask(${t.id})" aria-label="${t.done?'Mark as active':'Mark as done'}"></button>
-      <div class="task-body">
-        <div class="task-head-row">
-          <div class="task-text">${escHtml(getTaskTitle(t))}</div>
-          <span class="task-prio ${prio}">${escHtml(taskPrioLabel(prio))}</span>
-        </div>
-        <div class="task-support">${escHtml(support)}</div>
-        <div class="task-meta">
-          <span class="task-date">${t.deadline?`📅 ${escHtml(t.deadline)}`:'📅 No deadline'}</span>
-          <span class="task-date">${escHtml(stageLabel)}</span>
-          <span class="task-date">${status}</span>
-        </div>
-      </div>
-      <button class="task-del" onclick="event.stopPropagation();deleteTask(${t.id})" aria-label="Delete task">✕</button>
-    </div>`;
-  }).join('');
+  renderSessionWorkspace();
+  renderDashboardSessionControls();
+  const source=getTaskCalendarSource();
+  const sub=document.getElementById('task-count-sub');
+  if(sub) sub.textContent=source.length?`(${source.length} tasks)`:''; 
+  renderTaskCalendar();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'renderTasks',
+    action:'render_tasks_completed',
+    visibleTaskCount:source.length,
+    taskIds:source.map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id))
+  });
 }
 async function toggleTask(id){
   ensureExecutionState();
@@ -5948,12 +8643,16 @@ function filterTasks(f,btn){taskFilter=f;document.querySelectorAll('.ftab').forE
 function retryActiveStageTaskGeneration(){
   initializeTasksForActiveStage({force:true,silentFallback:false,reason:'manual_retry'}).catch(()=>{});
 }
-function updTaskBadge(){const c=(S.tasks||[]).filter(t=>!t.done).length;const b=document.getElementById('task-badge');if(b){b.textContent=c;b.style.display=c>0?'':'none';}}
+function updTaskBadge(){
+  const c=getVisibleActiveTasks().filter((task)=>!(task.done||task.status==='done')).length;
+  const b=document.getElementById('task-badge');
+  if(b){b.textContent=c;b.style.display=c>0?'':'none';}
+}
 function saveTasks(){
   if(!canPersistUserData()) return;
   try{
     const snapshot=isExecutionStateObject(S.execution)
-      ? getAllExecutionTasks()
+      ? getExecutionActiveTasks()
         .filter((task)=>task.status!=='archived')
         .map((task)=>({
           ...task,
@@ -5978,7 +8677,9 @@ function loadTasks(){
         stageIndex,
         stageTitle:stage?.title||'Stage 1',
         stageObjective:stage?.objective||'',
-        deadline:S.user.deadline||''
+        deadline:stage?.targetDate||S.user.deadline||'',
+        stageStartDate:stage?.startDate||'',
+        stageTargetDate:stage?.targetDate||S.user.deadline||''
       }).map((task)=>({
         ...task,
         linkedStage:1,
@@ -5988,10 +8689,10 @@ function loadTasks(){
   }catch(e){
     S.tasks=[];
   }
-  S.progress.tasksDone=(S.tasks||[]).filter(task=>task.done).length;
+  S.progress.tasksDone=getVisibleActiveTasks().filter((task)=>task.done||task.status==='done').length;
 }
 async function aiEditTasks(){
-  const tasks=S.tasks||[];
+  const tasks=getVisibleActiveTasks();
   if(!tasks.length){toast2('Нет задач','Сначала добавь задачи');return;}
   const activeIndex=getExecutionActiveStageIndex();
   const activeStage=getExecutionStage(activeIndex)||S.roadmap?.[activeIndex]||S.roadmap?.[0]||{};
@@ -6018,7 +8719,9 @@ async function aiEditTasks(){
       stageIndex:activeIndex,
       stageTitle:activeStage?.title||'Stage 1',
       stageObjective:activeStage?.objective||'',
-      deadline:S.user.deadline||''
+      deadline:activeStage?.targetDate||S.user.deadline||'',
+      stageStartDate:activeStage?.startDate||'',
+      stageTargetDate:activeStage?.targetDate||S.user.deadline||''
     });
     txt.textContent=`Обновлена выборка ${revisedSubset.length} из ${tasks.length} задач. Нажми Apply, чтобы применить.`;
   }catch(e){
@@ -6036,7 +8739,9 @@ function applyAiTasks(){
     stageIndex,
     stageTitle:stage?.title||'Stage 1',
     stageObjective:stage?.objective||'',
-    deadline:S.user.deadline||''
+    deadline:stage?.targetDate||S.user.deadline||'',
+    stageStartDate:stage?.startDate||'',
+    stageTargetDate:stage?.targetDate||S.user.deadline||''
   });
   setStageTasks(stageIndex,normalized,{replace:true});
   saveTasks();
@@ -6093,21 +8798,32 @@ function renderAnalytics(){
   const visits=JSON.parse(localStorage.getItem('sa_analytics_visits')||'{}');
   const events=JSON.parse(localStorage.getItem('sa_events')||'[]');
   const now=new Date();const labels=[],visitArr=[],sessArr=[];
-  for(let i=analyticsRangeDays-1;i>=0;i--){const d=new Date(now);d.setDate(d.getDate()-i);const key=d.toDateString();labels.push(d.toLocaleDateString('en-GB',{day:'numeric',month:'short'}));visitArr.push(visits[key]||0);sessArr.push(events.filter(e=>e.date===key&&e.event==='session_done').length);}
+  for(let i=analyticsRangeDays-1;i>=0;i--){
+    const d=new Date(now);
+    d.setDate(d.getDate()-i);
+    const key=d.toDateString();
+    labels.push(d.toLocaleDateString('en-GB',{day:'numeric',month:'short'}));
+    visitArr.push(visits[key]||0);
+    const completedCount=events.filter((e)=>e.date===key&&(e.event==='completed_session_count'||e.event==='session_done')).length;
+    sessArr.push(completedCount);
+  }
   const totalVisits=visitArr.reduce((a,b)=>a+b,0);const activeDays=visitArr.filter(v=>v>0).length;
-  const spd=S.progress.sessions>0?(S.progress.sessions/analyticsRangeDays).toFixed(1):0;
-  const avgSession=S.progress.sessions>0?Math.round(S.progress.hours*60/S.progress.sessions)+'m':'—';
+  const completedSessions=Number(S.progress.completedSessions||0);
+  const completedSessionDays=events.filter((event)=>event.event==='completed_session_count').map((event)=>event.date).filter(Boolean);
+  const completedDays=new Set(completedSessionDays).size;
+  const spd=completedSessions>0?(completedSessions/analyticsRangeDays).toFixed(1):0;
+  const avgSession=completedSessions>0?Math.round(S.progress.hours*60/Math.max(1,completedSessions))+'m':'—';
   const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
   set('a-visits',totalVisits);set('a-visits-d','total page loads');
-  set('a-users',activeDays);set('a-users-d','days with activity');
-  set('a-spd',spd);set('a-spd-d','sessions/day avg');
+  set('a-users',completedDays);set('a-users-d','days with completed sessions');
+  set('a-spd',spd);set('a-spd-d','completed sessions/day avg');
   set('a-dur',avgSession);set('a-dur-d','avg per session');
   set('live-count','1');
   const lu=document.getElementById('live-updated');if(lu)lu.textContent='Updated: '+new Date().toLocaleTimeString();
   const featureCounts={};events.forEach(e=>{featureCounts[e.event]=(featureCounts[e.event]||0)+1;});
   const hourly=new Array(24).fill(0);events.forEach(e=>hourly[e.hour]=(hourly[e.hour]||0)+1);
   drawLineChart('chart-visits',labels,visitArr,'Visits','#0052FF');
-  drawLineChart('chart-users',labels,sessArr,'Sessions','#10B981');
+  drawLineChart('chart-users',labels,sessArr,'Completed Sessions','#10B981');
   drawDurationChart('chart-duration',labels);
   drawFeatureChart('chart-features',featureCounts);
   drawHourlyChart('chart-hourly',hourly);

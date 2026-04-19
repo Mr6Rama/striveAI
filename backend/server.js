@@ -44,7 +44,7 @@ const GEMINI_ALLOWED_CONFIG_KEYS = new Set([
   'responseSchema',
   'thinkingConfig',
 ]);
-const AI_ACTIONS = new Set(['roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit', 'goals_review', 'note_process', 'chat']);
+const AI_ACTIONS = new Set(['roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit', 'goals_review', 'note_process', 'session_review', 'chat']);
 const ACTION_MAX_OUTPUT_TOKENS = {
   roadmap: 2200,
   tasks: 1200,
@@ -53,6 +53,7 @@ const ACTION_MAX_OUTPUT_TOKENS = {
   task_audit: 700,
   goals_review: 500,
   note_process: 700,
+  session_review: 900,
   chat: 900,
 };
 const ACTION_CONTEXT_LIMITS = {
@@ -63,6 +64,7 @@ const ACTION_CONTEXT_LIMITS = {
   task_audit: { promptChars: 5200, systemChars: 1700, totalChars: 6400 },
   goals_review: { promptChars: 4200, systemChars: 1500, totalChars: 5200 },
   note_process: { promptChars: 5200, systemChars: 1500, totalChars: 6200 },
+  session_review: { promptChars: 5200, systemChars: 1500, totalChars: 6400 },
   chat: { promptChars: 6000, systemChars: 1700, totalChars: 7200 },
 };
 const TASK_GENERATION_ACTIONS = new Set(['tasks', 'tasks_skeleton', 'task_detail']);
@@ -425,9 +427,114 @@ function normalizeRoadmapStageCandidate(candidate, index) {
   return parts.join(' || ');
 }
 
+function normalizeRoadmapStageObject(candidate, index) {
+  const raw = typeof candidate === 'string' ? { title: candidate } : (candidate || {});
+  const title = String(raw.title || raw.name || raw.week || raw.stage || '').trim() || `Stage ${index + 1}`;
+  const objective = String(raw.objective || raw.goal || raw.description || '').trim()
+    || String(raw.outcome || raw.result || raw.expectedOutcome || '').trim()
+    || 'Concrete execution step';
+  const outcome = String(raw.outcome || raw.result || raw.expectedOutcome || '').trim()
+    || objective
+    || 'Measurable output';
+  const reasoning = String(raw.reasoning || raw.why || raw.rationale || raw.note || '').trim()
+    || `Stage ${index + 1} moves the roadmap toward a measurable outcome.`;
+  const completionCriteriaSource = Array.isArray(raw.completion_criteria)
+    ? raw.completion_criteria
+    : Array.isArray(raw.criteria)
+      ? raw.criteria
+      : Array.isArray(raw.days)
+        ? raw.days.map((day) => day?.task || day?.title || '').filter(Boolean)
+        : [];
+  const completionCriteria = completionCriteriaSource
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  while (completionCriteria.length < 3) {
+    completionCriteria.push(
+      completionCriteria.length === 0
+        ? `Complete the core work for ${title}`
+        : `Advance ${title} toward the stage outcome`
+    );
+  }
+  return {
+    week: index + 1,
+    title,
+    objective,
+    outcome,
+    reasoning,
+    completion_criteria: completionCriteria,
+    target_date: String(raw.target_date || raw.targetDate || raw.deadline || '').trim(),
+  };
+}
+
+function buildFallbackRoadmapStages(desiredCount = 3) {
+  const templates = [
+    {
+      title: 'Validate demand',
+      objective: 'Confirm the core problem and the audience signal',
+      outcome: 'A clear problem statement and first user evidence',
+      reasoning: 'The roadmap needs a real signal before it expands into execution.',
+      criteria: [
+        'Run user discovery or customer interviews',
+        'Capture the top pain points and triggers',
+        'Agree on the next product direction',
+      ],
+    },
+    {
+      title: 'Shape MVP scope',
+      objective: 'Reduce the plan to one testable path',
+      outcome: 'A focused MVP scope with the critical steps defined',
+      reasoning: 'Narrow scope keeps the roadmap execution-heavy and realistic.',
+      criteria: [
+        'Define the primary user journey',
+        'List the must-have pieces of the MVP',
+        'Lock the success metrics for this stage',
+      ],
+    },
+    {
+      title: 'Build execution path',
+      objective: 'Turn the scope into a working delivery sequence',
+      outcome: 'A usable product path and the next measurable outcome',
+      reasoning: 'The final stage should keep the roadmap moving toward delivery.',
+      criteria: [
+        'Deliver the core working flow',
+        'Track the critical actions and blockers',
+        'Prepare the next milestone handoff',
+      ],
+    },
+    {
+      title: 'Launch growth loop',
+      objective: 'Establish the first repeatable growth motion',
+      outcome: 'Early traction and a clear iteration loop',
+      reasoning: 'Extra milestones should stay concrete instead of turning abstract.',
+      criteria: [
+        'Pick one acquisition or distribution channel',
+        'Measure the first conversion signal',
+        'Record what to improve next',
+      ],
+    },
+  ];
+  const count = Math.max(3, Number(desiredCount) || 0);
+  return Array.from({ length: count }, (_, index) => {
+    const template = templates[index] || templates[templates.length - 1];
+    const previous = index > 0 ? templates[Math.min(index - 1, templates.length - 1)] : template;
+    return normalizeRoadmapStageObject({
+      title: template.title || `Stage ${index + 1}`,
+      objective: template.objective || previous.objective || 'Concrete execution step',
+      outcome: template.outcome || previous.outcome || 'Measurable output',
+      reasoning: template.reasoning || previous.reasoning || `Stage ${index + 1} supports the roadmap.`,
+      completion_criteria: template.criteria || previous.criteria || [],
+      target_date: '',
+    }, index);
+  });
+}
+
 function salvageRoadmapSkeleton(raw, desiredCount = 0) {
   const text = String(raw || '').replace(/\r/g, '').trim();
-  if (!text) return { usable: false, repairedText: '', stageCount: 0 };
+  if (!text) {
+    const fallbackStages = buildFallbackRoadmapStages(desiredCount || 3);
+    return { usable: true, repairedText: JSON.stringify({ stages: fallbackStages }, null, 2), stageCount: fallbackStages.length, stages: fallbackStages };
+  }
 
   const parsedStages = [];
   const tryPushStage = (candidate) => {
@@ -495,18 +602,16 @@ function salvageRoadmapSkeleton(raw, desiredCount = 0) {
     }
 
   if (!parsedStages.length) {
-    return { usable: false, repairedText: '', stageCount: 0 };
+    const fallbackStages = buildFallbackRoadmapStages(desiredCount || 3);
+    return { usable: true, repairedText: JSON.stringify({ stages: fallbackStages }, null, 2), stageCount: fallbackStages.length, stages: fallbackStages };
   }
 
-  const targetCount = Math.max(
-    3,
-    desiredCount > 0 ? desiredCount : parsedStages.length
-  );
+  const targetCount = Math.max(3, desiredCount > 0 ? Math.max(desiredCount, parsedStages.length) : parsedStages.length);
   const filled = [];
   for (let i = 0; i < targetCount; i += 1) {
     const candidate = parsedStages[i] || parsedStages[parsedStages.length - 1] || {};
     if (i < parsedStages.length) {
-      filled.push(normalizeRoadmapStageCandidate(candidate, i));
+      filled.push(normalizeRoadmapStageObject(candidate, i));
       continue;
     }
     const prev = parsedStages[i - 1] || parsedStages[parsedStages.length - 1] || {};
@@ -523,8 +628,23 @@ function salvageRoadmapSkeleton(raw, desiredCount = 0) {
     filled.push(`${i + 1}. ${fallbackTitle} || ${fallbackObjective} || ${fallbackOutcome}`);
   }
 
-  const repairedText = ['TASKS_SKELETON_START', ...filled, 'TASKS_SKELETON_END'].join('\n');
-  return { usable: true, repairedText, stageCount: Math.min(parsedStages.length, targetCount) };
+  const repairedText = JSON.stringify({
+    stages: filled.map((entry, index) => normalizeRoadmapStageObject(entry, index)),
+  }, null, 2);
+  const stages = filled.map((entry, index) => {
+    if (typeof entry === 'string') {
+      const body = entry.replace(/^\s*\d+\.\s*/, '');
+      const parts = body.split(/\s*\|\|\s*/).map((part) => part.trim()).filter(Boolean);
+      return normalizeRoadmapStageObject({
+        title: parts[0] || `Stage ${index + 1}`,
+        objective: parts[1] || '',
+        outcome: parts[2] || '',
+        reasoning: parts.slice(3).join(' || '),
+      }, index);
+    }
+    return normalizeRoadmapStageObject(entry, index);
+  });
+  return { usable: true, repairedText, stageCount: stages.length, stages };
 }
 
 function classifyFailure({ timedOut, parseFailed, upstreamStatus, upstreamErrorCode, finishReason }) {
@@ -1212,7 +1332,93 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
           break;
         }
         const result = await callGemini({ model: GEMINI_MODEL, fullPrompt, generationConfig });
-        if (result.success && String(result.text || '').trim()) {
+        const roadmapCountHint = safeAction === 'roadmap'
+          ? (requestedRoadmapCount || extractRoadmapTargetCount(trimmedCtx.prompt, 0))
+          : 0;
+        const roadmapRawText = String(result.text || '');
+        const roadmapStructured = safeAction === 'roadmap'
+          ? salvageRoadmapSkeleton(roadmapRawText, roadmapCountHint || 0)
+          : null;
+        if (safeAction === 'roadmap') {
+          logGeminiRequest({
+            ...baseLog,
+            logType: 'roadmap_parse_snapshot',
+            upstreamStatus: result.timedOut ? 'TIMEOUT' : result.upstreamStatus,
+            upstreamErrorCode: result.upstreamErrorCode || '',
+            finishReason: result.finishReason || '',
+            attempt: providerAttempt,
+            chainAttempt: attemptIndex + 1,
+            retryAttempt: retryIndex,
+            latencyMs: Date.now() - attemptStartedAt,
+            rawResponseText: roadmapRawText.slice(0, 1200),
+            parsedRoadmap: roadmapStructured ? {
+              usable: Boolean(roadmapStructured.usable),
+              stageCount: Number(roadmapStructured.stageCount) || 0,
+              stages: Array.isArray(roadmapStructured.stages)
+                ? roadmapStructured.stages.map((stage, index) => ({
+                    week: stage?.week || index + 1,
+                    title: String(stage?.title || ''),
+                    objective: String(stage?.objective || ''),
+                    outcome: String(stage?.outcome || ''),
+                    target_date: String(stage?.target_date || ''),
+                  }))
+                : [],
+            } : null,
+          });
+        }
+        if (safeAction === 'roadmap' && roadmapRawText.trim()) {
+          const fallbackStages = buildFallbackRoadmapStages(roadmapCountHint || 3);
+          const finalizedRoadmap = roadmapStructured && roadmapStructured.usable
+            ? roadmapStructured
+            : {
+                usable: true,
+                repairedText: JSON.stringify({ stages: fallbackStages }, null, 2),
+                stageCount: fallbackStages.length,
+                stages: fallbackStages,
+              };
+          logGeminiRequest({
+            ...baseLog,
+            logType: result.success ? 'success' : 'truncated_response_usable',
+            upstreamStatus: result.timedOut ? 'TIMEOUT' : result.upstreamStatus,
+            upstreamErrorCode: result.upstreamErrorCode || '',
+            finishReason: result.finishReason || '',
+            attempt: providerAttempt,
+            chainAttempt: attemptIndex + 1,
+            retryAttempt: retryIndex,
+            latencyMs: Date.now() - startedAt,
+            finalStageCount: finalizedRoadmap.stageCount,
+            finalStages: Array.isArray(finalizedRoadmap.stages)
+              ? finalizedRoadmap.stages.map((stage, index) => ({
+                  week: stage?.week || index + 1,
+                  title: String(stage?.title || ''),
+                  objective: String(stage?.objective || ''),
+                  outcome: String(stage?.outcome || ''),
+                  target_date: String(stage?.target_date || ''),
+                }))
+              : [],
+          });
+          baseLog.logType = 'success';
+          baseLog.upstreamStatus = result.timedOut ? 'TIMEOUT' : result.upstreamStatus;
+          baseLog.upstreamErrorCode = result.upstreamErrorCode;
+          baseLog.finishReason = result.finishReason;
+          baseLog.latencyMs = Date.now() - startedAt;
+          baseLog.attempt = providerAttempt;
+          baseLog.chainAttempt = attemptIndex + 1;
+          baseLog.retryAttempt = retryIndex;
+          lastRetryAttempt = retryIndex;
+          logGeminiRequest(baseLog);
+          return res.json({
+            text: finalizedRoadmap.repairedText,
+            stages: finalizedRoadmap.stages || [],
+            stageCount: finalizedRoadmap.stageCount || 0,
+            finishReason: result.finishReason || '',
+            requestId,
+            status: result.success ? 'success' : 'degraded_success',
+            degraded: !result.success,
+            truncated: Boolean(result.finishReason === 'MAX_TOKENS'),
+          });
+        }
+        if (result.success && roadmapRawText.trim()) {
           if (result.finishReason === 'MAX_TOKENS') {
             logGeminiRequest({
               ...baseLog,
@@ -1360,8 +1566,9 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
               });
             }
             if (safeAction === 'roadmap') {
-              const roadmapCountHint = requestedRoadmapCount || extractRoadmapTargetCount(trimmedCtx.prompt, 0);
-              const salvagedRoadmap = salvageRoadmapSkeleton(result.text || '', roadmapCountHint || 0);
+              const salvagedRoadmap = roadmapStructured && roadmapStructured.usable
+                ? roadmapStructured
+                : salvageRoadmapSkeleton(result.text || '', roadmapCountHint || 0);
               if (salvagedRoadmap.usable) {
                 logGeminiRequest({
                   ...baseLog,
@@ -1387,6 +1594,8 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
                 logGeminiRequest(baseLog);
                 return res.json({
                   text: salvagedRoadmap.repairedText,
+                  stages: salvagedRoadmap.stages || [],
+                  stageCount: salvagedRoadmap.stageCount || 0,
                   finishReason: result.finishReason || '',
                   requestId,
                   status: 'degraded_success',
@@ -1452,15 +1661,17 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
           baseLog.latencyMs = Date.now() - startedAt;
           baseLog.attempt = providerAttempt;
           baseLog.chainAttempt = attemptIndex + 1;
-          baseLog.retryAttempt = retryIndex;
-          lastRetryAttempt = retryIndex;
-          logGeminiRequest(baseLog);
-          return res.json({
-            text: result.text || '',
-            finishReason: result.finishReason || '',
-            requestId,
-          });
-        }
+        baseLog.retryAttempt = retryIndex;
+        lastRetryAttempt = retryIndex;
+        logGeminiRequest(baseLog);
+        return res.json({
+          text: result.text || '',
+          stages: roadmapStructured?.stages || [],
+          stageCount: roadmapStructured?.stageCount || 0,
+          finishReason: result.finishReason || '',
+          requestId,
+        });
+      }
 
         const failure = classifyFailure(result);
         lastFailure = { ...result, ...failure };

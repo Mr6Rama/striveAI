@@ -268,7 +268,7 @@
                 <div class="milestone-bar-track"><div class="milestone-bar-fill" id="ms-bar" style="width:0%"></div></div>
               </div>
               <div class="dash-stats-row">
-                <div class="dash-stat"><div class="dash-stat-val" id="dstat-sess">0</div><div class="dash-stat-lbl">Sessions</div></div>
+                <div class="dash-stat"><div class="dash-stat-val" id="dstat-sess">0</div><div class="dash-stat-lbl">Completed Sessions</div></div>
                 <div class="dash-stat"><div class="dash-stat-val" id="dstat-streak">0🔥</div><div class="dash-stat-lbl">Day Streak</div></div>
                 <div class="dash-stat"><div class="dash-stat-val" id="dstat-pct">0%</div><div class="dash-stat-lbl">Complete</div></div>
               </div>
@@ -338,7 +338,7 @@
     <!-- TASKS & GOALS — MERGED -->
     <div class="pg" id="pg-work">
       <div class="page-head">
-        <div><div class="page-title">Tasks &amp; Goals</div><div class="page-sub">Execute daily · Track milestones</div></div>
+        <div><div class="page-title">Tasks &amp; Goals</div><div class="page-sub">Prepare the next execution session</div></div>
         <div class="page-actions" id="work-actions">
           <!-- Buttons swap based on sub-tab -->
         </div>
@@ -352,15 +352,6 @@
       <!-- TASKS panel -->
       <div class="tg-panel on" id="wp-tasks">
         <div class="tasks-body">
-          <div class="quick-add">
-            <input class="quick-add-in" id="task-input" placeholder="Add a task and press Enter…" onkeydown="if(event.key==='Enter') addTask()"/>
-            <select class="quick-add-sel" id="task-prio">
-              <option value="high">🔴 High</option>
-              <option value="med" selected>🟡 Med</option>
-              <option value="low">🟢 Low</option>
-            </select>
-            <button class="quick-add-btn" onclick="addTask()">Add</button>
-          </div>
           <div class="ai-bar" id="tasks-ai-bar" style="display:none">
             <div class="ai-bar-icon">⚡</div>
             <div class="ai-bar-txt" id="tasks-ai-txt"></div>
@@ -369,18 +360,33 @@
               <button class="btn btn-ghost btn-sm" onclick="document.getElementById('tasks-ai-bar').style.display='none'">✕</button>
             </div>
           </div>
-          <div class="filter-row">
-            <button class="ftab on" onclick="filterTasks('all',this)">All</button>
-            <button class="ftab" onclick="filterTasks('active',this)">Active</button>
-            <button class="ftab" onclick="filterTasks('high',this)">🔴 High</button>
-            <button class="ftab" onclick="filterTasks('done',this)">Done</button>
+          <div id="session-workspace"></div>
+          <div class="tasks-calendar-shell">
+            <div class="tasks-calendar-top">
+              <div class="quick-add">
+                <input class="quick-add-in" id="task-input" placeholder="Add a task and press Enter…" onkeydown="if(event.key==='Enter') addTask()"/>
+                <select class="quick-add-sel" id="task-prio">
+                  <option value="high">🔴 High</option>
+                  <option value="med" selected>🟡 Med</option>
+                  <option value="low">🟢 Low</option>
+                </select>
+                <button class="quick-add-btn" onclick="addTask()">Add</button>
+              </div>
+              <div class="calendar-nav-shell">
+                <div class="calendar-kicker">Planning context</div>
+                <div class="calendar-title" id="task-calendar-title">April 2026</div>
+                <div class="calendar-actions">
+                  <button class="btn btn-ghost btn-sm" onclick="moveTaskCalendarMonth(-1)">←</button>
+                  <button class="btn btn-ghost btn-sm" onclick="goTaskCalendarToday()">Today</button>
+                  <button class="btn btn-ghost btn-sm" onclick="moveTaskCalendarMonth(1)">→</button>
+                </div>
+              </div>
+            </div>
+            <div class="calendar-weekdays" id="task-calendar-weekdays"></div>
+            <div class="calendar-grid" id="task-calendar-grid"></div>
+            <div class="calendar-footer" id="task-calendar-footer"></div>
+            <div class="task-list" id="task-list" style="display:none"></div>
           </div>
-          <div class="task-stage-banner" id="task-stage-banner">
-            <div class="task-stage-kicker">Active Milestone</div>
-            <div class="task-stage-title" id="task-stage-title">No active milestone</div>
-            <div class="task-stage-meta" id="task-stage-meta">Generate roadmap to start milestone execution.</div>
-          </div>
-          <div class="task-list" id="task-list"></div>
         </div>
       </div>
 
@@ -437,7 +443,7 @@
             <div class="rm-prog-sub" id="rm-prog-label">Start your first session</div>
           </div>
           <div class="rm-prog-stat">
-            <div class="rm-prog-lbl">Sessions · Streak</div>
+            <div class="rm-prog-lbl">Completed Sessions · Streak</div>
             <div class="rm-prog-val"><span id="rm-sess">0</span> <span style="font-size:14px;color:var(--muted)">·</span> <span id="rm-streak" style="color:var(--amber)">0🔥</span></div>
             <div class="rm-prog-sub" id="rm-hrs">0h invested</div>
           </div>
@@ -489,8 +495,8 @@
         </div>
         <div class="analytics-stat-grid">
           <div class="astat"><div class="astat-lbl">Total Visits</div><div class="astat-val" id="a-visits">0</div><div class="astat-delta" id="a-visits-d">—</div></div>
-          <div class="astat"><div class="astat-lbl">Active Days</div><div class="astat-val" id="a-users">0</div><div class="astat-delta" id="a-users-d">—</div></div>
-          <div class="astat"><div class="astat-lbl">Sessions / Day</div><div class="astat-val" id="a-spd">0</div><div class="astat-delta" id="a-spd-d">—</div></div>
+          <div class="astat"><div class="astat-lbl">Completed Days</div><div class="astat-val" id="a-users">0</div><div class="astat-delta" id="a-users-d">—</div></div>
+          <div class="astat"><div class="astat-lbl">Completed Sessions / Day</div><div class="astat-val" id="a-spd">0</div><div class="astat-delta" id="a-spd-d">—</div></div>
           <div class="astat"><div class="astat-lbl">Avg. Session</div><div class="astat-val" id="a-dur">—</div><div class="astat-delta" id="a-dur-d">—</div></div>
         </div>
         <div class="analytics-grid">
@@ -582,6 +588,14 @@
   </div>
 </div>
 
+<div class="calendar-day-overlay" id="calendar-day-overlay" onclick="onCalendarDayOverlayClick(event)">
+  <div class="calendar-day-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-day-title" onclick="event.stopPropagation()">
+    <div id="calendar-day-content"></div>
+  </div>
+</div>
+
+<div class="session-overlay" id="session-overlay" onclick="onSessionOverlayClick(event)"></div>
+
 <div class="flow-overlay" id="flow-overlay" aria-hidden="true">
   <div class="flow-card" id="flow-card">
     <div class="flow-kicker" id="flow-kicker">Loading</div>
@@ -591,6 +605,7 @@
     <div class="flow-title" id="flow-title">Generating roadmap</div>
     <div class="flow-copy" id="flow-copy"></div>
     <div class="flow-rotator" id="flow-rotator"></div>
+    <div class="flow-preview" id="flow-preview"></div>
     <div class="flow-actions" id="flow-actions"></div>
   </div>
 </div>
