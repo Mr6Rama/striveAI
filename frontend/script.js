@@ -934,11 +934,11 @@ function buildTaskDeadlinePlan({stageStartDate='',stageTargetDate='',deadline=''
   const total=Math.max(1,Number(taskCount)||1);
   const today=toDateInputValue(new Date());
   const rawStart=toIsoDateOnly(stageStartDate)||today;
-  const rawEnd=toIsoDateOnly(stageTargetDate)||toIsoDateOnly(deadline)||addDaysToDateInput(rawStart,Math.max(total,3));
-  const effectiveStart=clampIsoDateToWindow(rawStart,today,rawEnd)||today;
+  const rawEnd=toIsoDateOnly(stageTargetDate)||toIsoDateOnly(deadline)||rawStart;
+  const effectiveStart=clampIsoDateToWindow(rawStart,rawStart,rawEnd)||rawStart;
   let effectiveEnd=clampIsoDateToWindow(rawEnd,effectiveStart,rawEnd)||rawEnd||effectiveStart;
-  if(!effectiveEnd||effectiveEnd<=effectiveStart){
-    effectiveEnd=addDaysToDateInput(effectiveStart,Math.max(total,3));
+  if(!effectiveEnd||effectiveEnd<effectiveStart){
+    effectiveEnd=effectiveStart;
   }
   const planned=spreadDatesBetween(effectiveStart,effectiveEnd,total);
   return planned.map((date)=>clampIsoDateToWindow(date,effectiveStart,effectiveEnd)||effectiveEnd);
@@ -1182,6 +1182,18 @@ function normalizeTaskDeadlineValueInWindow(value,options={}){
   if(!parsed) return '';
   return clampIsoDateToWindow(parsed,options.stageStartDate||'',options.stageTargetDate||options.deadline||'');
 }
+function repairTaskDeadline(task,stageIndex,stages=getExecutionStages().length?getExecutionStages():(Array.isArray(S.roadmap)?S.roadmap:[])){
+  const window=getMilestoneWindowForStage(stageIndex,stages);
+  const candidate=normalizeTaskDeadlineValue(task?.deadline)
+    || normalizeTaskDeadlineValue(task?.dueDate)
+    || normalizeTaskDeadlineValue(task?.due_date)
+    || '';
+  const repaired=clampIsoDateToWindow(candidate,window.startDate,window.endDate)
+    || window.endDate
+    || window.startDate
+    || candidate;
+  return repaired;
+}
 function clampTaskDeadlinePlanToWindow(plan,startDate='',endDate=''){
   const source=Array.isArray(plan)?plan:[];
   return source.map((value,index)=>({
@@ -1414,12 +1426,14 @@ function normalizeFounderTask(raw,options={}){
   const title=getTaskTitle(raw);
   const deadlinePlan=Array.isArray(options.deadlinePlan)?options.deadlinePlan:[];
   const taskIndex=Number.isFinite(Number(options.taskIndex))?Number(options.taskIndex):0;
-  const windowStart=options.stageStartDate||'';
-  const windowEnd=options.stageTargetDate||options.deadline||'';
+  const window=getMilestoneWindowForStage(stageIndex,options.stages||undefined);
+  const windowStart=options.stageStartDate||window.startDate||'';
+  const windowEnd=options.stageTargetDate||options.deadline||window.endDate||'';
   const clampedDeadlinePlan=clampTaskDeadlinePlanToWindow(deadlinePlan,windowStart,windowEnd);
   const plannedDeadline=clampedDeadlinePlan[taskIndex]||clampedDeadlinePlan[clampedDeadlinePlan.length-1]||'';
   const rawDeadline=normalizeTaskDeadlineValueInWindow(raw?.deadline,{stageStartDate:windowStart,stageTargetDate:windowEnd});
   const fallbackDeadline=normalizeTaskDeadlineValueInWindow(plannedDeadline,{stageStartDate:windowStart,stageTargetDate:windowEnd});
+  const strictAiContent=Boolean(options.strictAiContent);
   const normalized={
     id:Number(raw?.id)||0,
     title,
@@ -1429,60 +1443,25 @@ function normalizeFounderTask(raw,options={}){
     deliverable:clipText(raw?.deliverable||'',200),
     doneDefinition:clipText(raw?.done_definition||raw?.doneDefinition||'',200),
     prio:normalizeTaskPriority(raw?.priority??raw?.prio),
-    deadline:rawDeadline||fallbackDeadline||clampIsoDateToWindow(windowEnd,windowStart,windowEnd)||'',
+    deadline:rawDeadline||fallbackDeadline||clampIsoDateToWindow(windowEnd,windowStart,windowEnd)||windowEnd||windowStart||'',
     linkedStage:Math.max(1,Math.min(stageCount,stageIndex+1)),
     stageObjective:stageObjective||clipText(raw?.objective||'',150),
     done:Boolean(raw?.done),
     created:String(raw?.created||new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short'})).trim()
   };
-  if(!normalized.description){
+  if(!normalized.description&&!strictAiContent){
     normalized.description=`Выполнить задачу "${normalized.title}" в рамках текущего этапа ${stageLabel}.`;
   }
-  if(!normalized.whyItMatters){
+  if(!normalized.whyItMatters&&!strictAiContent){
     normalized.whyItMatters='Двигает продукт к проверяемому результату в текущем спринте.';
   }
-  if(!normalized.deliverable){
+  if(!normalized.deliverable&&!strictAiContent){
     normalized.deliverable='Подтверждаемый артефакт: ссылка, список выводов или метрика.';
   }
-  if(!normalized.doneDefinition){
+  if(!normalized.doneDefinition&&!strictAiContent){
     normalized.doneDefinition='Есть конкретный результат и короткая фиксация выводов.';
   }
   return normalized;
-}
-function buildLocalTaskDetailFallback(taskSkeleton,stage,options={}){
-  const normalizedStage=normalizeStageForEnrichment(stage||{},Number(options.stageIndex)||0);
-  const taskTitle=getTaskTitle(taskSkeleton)||clipText(options.taskTitle||'',80)||`Task ${Number(options.taskIndex)||1}`;
-  const stageTitle=clipText(normalizedStage.title||options.stageTitle||'Stage 1',60)||'Stage 1';
-  const stageObjective=clipText(normalizedStage.objective||options.stageObjective||'',150)||'validate demand and keep execution moving';
-  const stageOutcome=clipText(normalizedStage.outcome||options.stageOutcome||'',120)||'a measurable stage outcome';
-  const deadlinePlan=buildTaskDeadlinePlan({
-    stageStartDate:options.stageStartDate||'',
-    stageTargetDate:options.stageTargetDate||'',
-    deadline:options.deadline||S.user.deadline||'',
-    taskCount:1
-  });
-  return normalizeFounderTask({
-    title:taskTitle,
-    description:`Выполнить "${taskTitle}" как конкретный шаг этапа ${stageTitle}.`,
-    whyItMatters:`Двигает этап ${stageTitle} к результату: ${stageObjective}.`,
-    deliverable:`Проверяемый результат задачи "${taskTitle}".`,
-    doneDefinition:`Задача завершена, результат зафиксирован, этап ${stageTitle} продвинут.`,
-    priority:'med',
-    deadline:normalizeTaskDeadlineValueInWindow(taskSkeleton?.deadline,{stageStartDate:options.stageStartDate||'',stageTargetDate:options.stageTargetDate||options.deadline||S.user.deadline||''})||deadlinePlan[0]||options.stageTargetDate||options.deadline||S.user.deadline||'',
-    linkedStage:Number(options.stageIndex||0)+1,
-    stageObjective,
-    stageOutcome
-  },{
-    stageObjective,
-    stageTitle,
-    stageIndex:Number(options.stageIndex||0),
-    deadline:options.stageTargetDate||options.deadline||S.user.deadline||'',
-    stageStartDate:options.stageStartDate||'',
-    stageTargetDate:options.stageTargetDate||'',
-    taskIndex:Number(options.taskIndex||0),
-    deadlinePlan,
-    allowBlueprintFallback:false
-  });
 }
 function normalizeFounderTasks(raw,options={}){
   const source=Array.isArray(raw)
@@ -1493,17 +1472,11 @@ function normalizeFounderTasks(raw,options={}){
   const stageObjective=clipText(options.stageObjective||'',150);
   const stageTitle=clipText(options.stageTitle||'',40)||'Stage 1';
   const targetCount=Math.max(1,Number(options.targetCount)||5);
-  const allowBlueprintFallback=options.allowBlueprintFallback!==false;
   const stageWindowStart=options.stageStartDate||'';
   const stageWindowEnd=options.stageTargetDate||options.deadline||S?.user?.deadline||'';
-  const fallback=fallbackFounderTaskBlueprints({
-    goal:S?.user?.goal||'',
-    stageObjective,
-    deadline:stageWindowEnd,
-    stageLabel:stageTitle
-  });
   const seen=new Set();
   const out=[];
+  const strictAiContent=Boolean(options.strictAiContent);
   const deadlinePlan=Array.isArray(options.deadlinePlan)&&options.deadlinePlan.length
     ? clampTaskDeadlinePlanToWindow(options.deadlinePlan,stageWindowStart,stageWindowEnd)
     : buildTaskDeadlinePlan({
@@ -1524,22 +1497,12 @@ function normalizeFounderTasks(raw,options={}){
   });
   source.forEach((item,index)=>{
     if(out.length>=targetCount) return;
-    const normalized=normalizeFounderTask(item,{...options,stageObjective,stageTitle,taskIndex:index,deadlinePlan,stageStartDate:stageWindowStart,stageTargetDate:stageWindowEnd,deadline:stageWindowEnd});
+    const normalized=normalizeFounderTask(item,{...options,stageObjective,stageTitle,taskIndex:index,deadlinePlan,stageStartDate:stageWindowStart,stageTargetDate:stageWindowEnd,deadline:stageWindowEnd,strictAiContent});
     const key=normalized.title.toLowerCase();
     if(seen.has(key)) return;
     seen.add(key);
     out.push(normalized);
   });
-  if(!allowBlueprintFallback) return out.slice(0,targetCount);
-  let fallbackIndex=0;
-  while(out.length<targetCount){
-    const candidate=normalizeFounderTask(fallback[fallbackIndex%fallback.length],{...options,stageObjective,stageTitle,taskIndex:out.length,deadlinePlan,stageStartDate:stageWindowStart,stageTargetDate:stageWindowEnd,deadline:stageWindowEnd});
-    fallbackIndex+=1;
-    const key=candidate.title.toLowerCase();
-    if(seen.has(key)) continue;
-    seen.add(key);
-    out.push(candidate);
-  }
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
@@ -1555,8 +1518,20 @@ function normalizeFounderTasks(raw,options={}){
 function fallbackTasksForMvp(options={}){
   return normalizeFounderTasks([],options);
 }
+function isCompleteGeneratedTask(task){
+  if(!task||typeof task!=='object') return false;
+  const required=[
+    getTaskTitle(task),
+    String(task.description||'').trim(),
+    String(task.whyItMatters||task.why_it_matters||'').trim(),
+    String(task.deliverable||'').trim(),
+    String(task.doneDefinition||task.done_definition||'').trim(),
+    String(task.deadline||'').trim()
+  ];
+  return required.every(Boolean);
+}
 function normalizeBetaTasks(raw,options={}){
-  return normalizeFounderTasks(raw,{...options,allowBlueprintFallback:false});
+  return normalizeFounderTasks(raw,{...options,allowBlueprintFallback:false,strictAiContent:true});
 }
 function normalizeTaskCollection(raw,options={}){
   const source=Array.isArray(raw)?raw:[];
@@ -1566,8 +1541,9 @@ function normalizeTaskCollection(raw,options={}){
     : 0;
   const baseId=Date.now();
   const usedIds=new Set();
-  const stageStartDate=options.stageStartDate||'';
-  const stageTargetDate=options.stageTargetDate||options.deadline||'';
+  const stageWindow=getMilestoneWindowForStage(normalizedStageIndex,options.stages||undefined);
+  const stageStartDate=options.stageStartDate||stageWindow.startDate||'';
+  const stageTargetDate=options.stageTargetDate||options.deadline||stageWindow.endDate||'';
   const deadlinePlan=Array.isArray(options.deadlinePlan)&&options.deadlinePlan.length
     ? options.deadlinePlan
     : buildTaskDeadlinePlan({
@@ -1610,7 +1586,8 @@ function normalizeTaskCollection(raw,options={}){
       text:getTaskTitle(normalized),
       done:Boolean(item?.done),
       created,
-      linkedStage:Math.max(1,Math.min(stageCount,Number(normalized.linkedStage)||stageIndex+1))
+      linkedStage:Math.max(1,Math.min(stageCount,Number(normalized.linkedStage)||stageIndex+1)),
+      deadline:clampIsoDateToWindow(normalized.deadline,stageStartDate,stageTargetDate)||stageTargetDate||stageStartDate||normalized.deadline
     };
   });
 }
@@ -1630,6 +1607,41 @@ function toIsoDateOnly(value){
   const date=new Date(value);
   if(Number.isNaN(date.getTime())) return '';
   return toDateInputValue(date);
+}
+function addDaysIso(value,days){
+  const day=toIsoDateOnly(value);
+  if(!day) return '';
+  const date=new Date(`${day}T00:00:00`);
+  if(Number.isNaN(date.getTime())) return '';
+  date.setDate(date.getDate()+Number(days||0));
+  return toDateInputValue(date);
+}
+function getMilestoneWindowForStage(stageIndex,stages=getExecutionStages().length?getExecutionStages():(Array.isArray(S.roadmap)?S.roadmap:[])){
+  const list=Array.isArray(stages)?stages:[];
+  const idx=Math.max(0,Math.min(list.length-1,Number(stageIndex)||0));
+  const stage=list[idx]||{};
+  const rawStart=toIsoDateOnly(stage?.startDate||stage?.start_date||'');
+  const rawEnd=toIsoDateOnly(stage?.targetDate||stage?.target_date||'');
+  const prevEnd=idx>0?toIsoDateOnly(list[idx-1]?.targetDate||list[idx-1]?.target_date||''):'';
+  const nextStart=idx<list.length-1?toIsoDateOnly(list[idx+1]?.startDate||list[idx+1]?.start_date||''):'';
+  const derivedStart=rawStart
+    || addDaysIso(prevEnd,1)
+    || (idx===0 && rawEnd ? rawEnd : '');
+  let derivedEnd=rawEnd
+    || nextStart
+    || (derivedStart ? derivedStart : toDateInputValue(new Date()));
+  let start=derivedStart||derivedEnd;
+  let end=derivedEnd||start;
+  if(start&&end){
+    const startTime=new Date(`${start}T00:00:00`).getTime();
+    const endTime=new Date(`${end}T00:00:00`).getTime();
+    if(Number.isFinite(startTime)&&Number.isFinite(endTime)&&startTime>endTime){
+      start=end;
+    }
+  }
+  if(!start&&end) start=end;
+  if(!end&&start) end=start;
+  return {startDate:start||'',endDate:end||''};
 }
 function extractOutcomeFromObjective(objective=''){
   const text=String(objective||'').trim();
@@ -1672,7 +1684,8 @@ function normalizeExecutionTask(task,stage){
     stageStartDate:stage?.startDate||'',
     stageTargetDate:stage?.targetDate||S.user.deadline||'',
     deadlinePlan:Array.isArray(task?.deadlinePlan)?task.deadlinePlan:[],
-    taskIndex:Number.isFinite(Number(task?.taskIndex))?Number(task.taskIndex):0
+    taskIndex:Number.isFinite(Number(task?.taskIndex))?Number(task.taskIndex):0,
+    stages:getExecutionStages().length?getExecutionStages():(Array.isArray(S.roadmap)?S.roadmap:[])
   });
   const isDone=Boolean(task?.done)||String(task?.status||'')==='done';
   const rawStatus=String(task?.status||'active');
@@ -1694,10 +1707,14 @@ function normalizeExecutionTask(task,stage){
     done_definition:clipText(task?.doneDefinition||task?.done_definition||safe.doneDefinition||'',200),
     priority:normalizeTaskPriority(task?.priority??task?.prio??safe.prio),
     prio:normalizeTaskPriority(task?.priority??task?.prio??safe.prio),
-    deadline:normalizeTaskDeadlineValueInWindow(task?.deadline||safe.deadline||'',{
-      stageStartDate:stage?.startDate||'',
-      stageTargetDate:stage?.targetDate||S.user.deadline||''
-    }),
+    deadline:clampIsoDateToWindow(
+      normalizeTaskDeadlineValueInWindow(task?.deadline||safe.deadline||'',{
+        stageStartDate:stage?.startDate||'',
+        stageTargetDate:stage?.targetDate||S.user.deadline||''
+      })||safe.deadline||'',
+      stage?.startDate||'',
+      stage?.targetDate||S.user.deadline||''
+    )||stage?.targetDate||S.user.deadline||safe.deadline||'',
     status:status==='archived'
       ? 'archived'
       : (status==='done'?'done':(status==='blocked'?'blocked':'active')),
@@ -2551,7 +2568,8 @@ function getTasksForStage(stageIndex,opts={}){
       priority:normalizeTaskPriority(task.prio||task.priority),
       done:Boolean(task.done)||task.status==='done',
       linkedStage:(Number(task.linkedStageIndex)||0)+1,
-      text:getTaskTitle(task)
+      text:getTaskTitle(task),
+      deadline:repairTaskDeadline(task,stageIndex)
     }))
     .map((task)=>decorateTaskWithMilestoneMeta(task));
   return out;
@@ -2584,6 +2602,21 @@ function calculateTaskProgressValue(tasks=[]){
   if(!items.length) return 0;
   const weighted=items.reduce((sum,task)=>sum+getTaskProgressWeight(task),0);
   return Math.max(0,Math.min(100,(weighted/items.length)*100));
+}
+function getStageTaskProgress(stageOrIndex,stageIndexMaybe){
+  const stageIndex=Number.isFinite(Number(stageIndexMaybe))
+    ? Number(stageIndexMaybe)
+    : (Number.isFinite(Number(stageOrIndex))
+      ? Number(stageOrIndex)
+      : getExecutionStages().findIndex((stage)=>stage===stageOrIndex||String(stage?.id||'')===String(stageOrIndex?.id||stageOrIndex||'')));
+  const tasks=stageIndex>=0?getTasksForStage(stageIndex,{includeArchived:false}):[];
+  const done=tasks.filter((task)=>task.status==='done'||task.done).length;
+  const total=tasks.length;
+  return {
+    done,
+    total,
+    pct:total>0?Math.round((done/total)*100):0
+  };
 }
 function getTaskProgressWeight(task){
   if(!task||typeof task!=='object') return 0;
@@ -3140,7 +3173,9 @@ async function generateTasksForStage(stageIndex,options={}){
       },
         'tasks_skeleton'
       );
-      const skeletonTasks=Array.isArray(skeletonResult?.data)?skeletonResult.data.slice(0,targetTaskCount):[];
+      const skeletonTasks=Array.isArray(skeletonResult?.data)
+        ? skeletonResult.data.slice(0,targetTaskCount)
+        : [];
       logRoadmapPipelineEvent('active_stage_tasks_skeleton_parsed',{
         requestId:skeletonResult?.meta?.requestId||skeletonRequestId,
         stageCount:getExecutionStages().length,
@@ -3149,14 +3184,8 @@ async function generateTasksForStage(stageIndex,options={}){
         taskCount:skeletonTasks.length,
         targetCount:targetTaskCount
       });
-      while(skeletonTasks.length<targetTaskCount){
-        const fallbackTitle=fallbackFounderTaskBlueprints({
-          goal:onboardingContext.primary_goal||S.user.goal||'',
-          stageObjective:normalizedStage.objective||stage.objective||'',
-          deadline:stageTargetDate||S.user.deadline||'',
-          stageLabel:normalizedStage.title||stage.title||`Stage ${stageIndex+1}`
-        })[skeletonTasks.length % 10]?.title||`Task ${skeletonTasks.length+1}`;
-        skeletonTasks.push({title:fallbackTitle,linkedStage:stageIndex+1});
+      if(skeletonTasks.length!==targetTaskCount){
+        throw new Error(`AI returned ${skeletonTasks.length} task skeletons, expected ${targetTaskCount}.`);
       }
       logRoadmapPipelineEvent('active_stage_task_detail_generation_started',{
         requestId:skeletonResult?.meta?.requestId||skeletonRequestId,
@@ -3216,19 +3245,6 @@ async function generateTasksForStage(stageIndex,options={}){
         }catch(detailError){
           const errorMessage=String(detailError?.message||'');
           detailFailures.push({taskNumber:taskIdx+1,errorMessage});
-          const fallbackTask=buildLocalTaskDetailFallback(skeletonTask,normalizedStage,{
-            stageIndex,
-            stageTitle:normalizedStage.title||stage.title||`Stage ${stageIndex+1}`,
-            stageObjective:normalizedStage.objective||stage.objective||'',
-            stageOutcome:normalizedStage.outcome||stage.outcome||'',
-            stageStartDate,
-            stageTargetDate,
-            deadline:stageTargetDate||S.user.deadline||'',
-            taskDeadline:deadlinePlan[taskIdx]||stageTargetDate||S.user.deadline||'',
-            taskIndex:taskIdx+1,
-            taskTitle:skeletonTask?.title||`Task ${taskIdx+1}`
-          });
-          enrichedTasks.push(fallbackTask);
           logWarn({
             area:'frontend',
             module:'frontend/script.js',
@@ -3237,8 +3253,9 @@ async function generateTasksForStage(stageIndex,options={}){
             stageIndex,
             taskNumber:taskIdx+1,
             errorMessage,
-            fallbackApplied:true
+            fallbackApplied:false
           });
+          throw detailError;
         }
       }
       logRoadmapPipelineEvent('active_stage_task_detail_generation_completed',{
@@ -3258,10 +3275,11 @@ async function generateTasksForStage(stageIndex,options={}){
         stageTargetDate,
         targetCount:targetTaskCount,
         deadlinePlan,
-        allowBlueprintFallback:true
+        allowBlueprintFallback:false,
+        strictAiContent:true
       }).slice(0,targetTaskCount);
-      if(!normalized.length){
-        throw new Error('Task enrichment failed for all generated skeleton tasks.');
+      if(normalized.length!==targetTaskCount||normalized.some((task)=>!isCompleteGeneratedTask(task))){
+        throw new Error('Task enrichment did not produce a complete AI task batch.');
       }
       logRoadmapPipelineEvent('active_stage_task_persistence_started',{
         requestId:skeletonResult?.meta?.requestId||skeletonRequestId,
@@ -3380,7 +3398,7 @@ async function generateTasksForStage(stageIndex,options={}){
       if(options.silentFallback!==true){
         toast2('Task generation failed','AI tasks were not replaced with static fallback tasks.');
       }
-      return existing;
+      throw error;
     }finally{
       stageTaskGenerationInFlight.delete(stageIndex);
     }
@@ -3424,11 +3442,26 @@ async function initializeTasksForActiveStage(options={}){
     activeStageIndex:activeIndex
   });
   renderTasks();
-  const generated=await generateTasksForStage(activeIndex,{
-    force:Boolean(options.force),
-    silentFallback:options.silentFallback!==false,
-    reason:String(options.reason||'lazy_active_stage')
-  });
+  let generated=[];
+  let lastError=null;
+  for(let attempt=0;attempt<2;attempt+=1){
+    try{
+      generated=await generateTasksForStage(activeIndex,{
+        force:Boolean(options.force),
+        silentFallback:options.silentFallback!==false,
+        reason:attempt===0?String(options.reason||'lazy_active_stage'):`${String(options.reason||'lazy_active_stage')}_retry_${attempt+1}`
+      });
+      lastError=null;
+      break;
+    }catch(error){
+      lastError=error;
+      if(attempt<1){
+        setStageTaskStatus(activeIndex,'loading');
+        continue;
+      }
+      throw error;
+    }
+  }
   const taskCount=Array.isArray(generated)?generated.length:0;
   if(taskCount>0){
     setStageTaskStatus(activeIndex,'ready');
@@ -3444,7 +3477,7 @@ async function initializeTasksForActiveStage(options={}){
       stageCount:getExecutionStages().length,
       activeStageId:activeStage.id||'',
       activeStageIndex:activeIndex,
-      errorMessage:String(S.execution?.taskGenerationErrorsByStage?.[activeStage.id]||'no_tasks_generated')
+      errorMessage:String(lastError?.message||S.execution?.taskGenerationErrorsByStage?.[activeStage.id]||'no_tasks_generated')
     });
   }
   saveTasks();
@@ -3475,7 +3508,19 @@ async function ensureActiveStageTasks(options={}){
     return [];
   }
   logStageTaskSnapshot('active_stage_resolved',activeIndex,{reason:String(options.reason||'unspecified')});
-  const generated=await generateTasksForStage(activeIndex,options);
+  let generated=[];
+  let lastError=null;
+  for(let attempt=0;attempt<2;attempt+=1){
+    try{
+      generated=await generateTasksForStage(activeIndex,{...options,force:attempt>0||Boolean(options.force)});
+      lastError=null;
+      break;
+    }catch(error){
+      lastError=error;
+      if(attempt<1) continue;
+      throw error;
+    }
+  }
   const activeTasks=getTasksForStage(activeIndex,{includeArchived:false});
   if(!activeTasks.length){
     logExecutionFlowEvent('stage_tasks_missing',activeIndex,{reason:String(options.reason||'')});
@@ -3488,7 +3533,8 @@ async function ensureActiveStageTasks(options={}){
       function:'ensureActiveStageTasks',
       action:recoveredCount?'stage_tasks_recovery_succeeded':'stage_tasks_recovery_failed',
       stageIndex:activeIndex,
-      taskCount:recoveredCount
+      taskCount:recoveredCount,
+      errorMessage:String(lastError?.message||'')
     });
   }
   return generated;
@@ -4010,7 +4056,10 @@ async function advanceRoadmapStage(options={}){
   if(!hasExecutionStateReady()) return false;
   const stages=getExecutionStages();
   if(!stages.length) return false;
-  const currentIndex=getExecutionActiveStageIndex();
+  const requestedIndex=Number.isFinite(Number(options.completedStageIndex))
+    ? Number(options.completedStageIndex)
+    : getExecutionActiveStageIndex();
+  const currentIndex=Math.max(0,Math.min(stages.length-1,requestedIndex));
   const currentStage=stages[currentIndex];
   if(!currentStage) return false;
   if(!options.force&&!areStageTasksCompleted(currentIndex)) return false;
@@ -4024,12 +4073,22 @@ async function advanceRoadmapStage(options={}){
       S.execution.currentStageIndex=stages.length-1;
       S.execution.status='completed';
       stages.forEach((stage)=>{stage.status='completed';stage.progress=100;});
+      focusedRoadmapStageIndex=stages.length-1;
+      openRoadmapMilestoneIndex=stages.length-1;
       S.execution.updatedAt=nowIso();
       refreshExecutionProgress();
       syncActiveTasksFromExecution();
+      openMilestoneCheckpointForStage(currentIndex,{
+        finalCompleted:true,
+        forceRehydrate:true
+      });
       saveTasks();
       saveAll();
+      updDashboard();
+      updRoadmapProgress();
+      refreshRoadmapSelectionViews();
       toast2('Roadmap completed','All milestones are completed.');
+      renderMilestoneCheckpoint();
       return true;
     }
       stages.forEach((stage,idx)=>{
@@ -4040,6 +4099,8 @@ async function advanceRoadmapStage(options={}){
       S.execution.currentStageIndex=nextIndex;
       S.execution.status='active';
       S.execution.updatedAt=nowIso();
+      focusedRoadmapStageIndex=nextIndex;
+      openRoadmapMilestoneIndex=nextIndex;
     logRoadmapPipelineEvent('active_stage_enrichment_skipped_mvp_mode',{
       stageCount:getExecutionStages().length,
       activeStageId:stages[nextIndex]?.id||'',
@@ -4049,11 +4110,15 @@ async function advanceRoadmapStage(options={}){
       syncActiveTasksFromExecution();
       const nextStage=stages[nextIndex];
       milestoneCheckpointState={
-        stageIndex:nextIndex,
-        stageId:String(nextStage?.id||''),
-        title:String(nextStage?.title||`Stage ${nextIndex+1}`),
+        completedStageIndex:currentIndex,
+        completedStageId:String(currentStage.id||''),
+        completedStageTitle:String(currentStage.title||`Stage ${currentIndex+1}`),
+        nextStageIndex:nextIndex,
+        nextStageId:String(nextStage?.id||''),
+        nextStageTitle:String(nextStage?.title||`Stage ${nextIndex+1}`),
         openedAt:nowIso(),
-        taskGenerationStarted:false
+        taskGenerationStarted:false,
+        finalCompleted:false
       };
       logInfo({
         area:'frontend',
@@ -4064,30 +4129,132 @@ async function advanceRoadmapStage(options={}){
         stageId:String(nextStage?.id||''),
         title:String(nextStage?.title||`Stage ${nextIndex+1}`)
       });
-      toast2('Milestone completed',`Ready for the next stage: ${nextStage?.title||`Stage ${nextIndex+1}`}`);
-      renderMilestoneCheckpoint();
+      toast2('Milestone completed',`${currentStage.title||`Stage ${currentIndex+1}`} is complete. Next: ${nextStage?.title||`Stage ${nextIndex+1}`}`);
+      openMilestoneCheckpointForStage(currentIndex,{
+        nextStageIndex:nextIndex,
+        forceRehydrate:true
+      });
       saveTasks();
       saveAll();
+      updDashboard();
+      updRoadmapProgress();
+      refreshRoadmapSelectionViews();
       return true;
   }finally{
     stageAdvanceInFlight=false;
   }
 }
-async function maybeAutoAdvanceRoadmapStage(){
+async function maybeAutoAdvanceRoadmapStage(options={}){
   if(stageAdvanceInFlight) return false;
   ensureExecutionState();
   if(!hasExecutionStateReady()) return false;
-  const activeIndex=getExecutionActiveStageIndex();
-  if(activeIndex<0) return false;
-  if(!areStageTasksCompleted(activeIndex)) return false;
-  return advanceRoadmapStage({force:false,reason:'all_stage_tasks_done'});
+  const candidateIndex=Number.isFinite(Number(options.completedStageIndex))
+    ? Number(options.completedStageIndex)
+    : getExecutionActiveStageIndex();
+  if(candidateIndex<0) return false;
+  if(!areStageTasksCompleted(candidateIndex)) return false;
+  return advanceRoadmapStage({force:false,reason:'all_stage_tasks_done',completedStageIndex:candidateIndex});
 }
-function clearMilestoneCheckpointState(){
+function getExecutionPendingMilestoneCheckpoint(){
+  return S.execution&&typeof S.execution.pendingMilestoneCheckpoint==='object'
+    ? S.execution.pendingMilestoneCheckpoint
+    : null;
+}
+function setExecutionPendingMilestoneCheckpoint(state){
+  if(!S.execution) return null;
+  const nextState=state&&typeof state==='object'?{...state}:null;
+  if(nextState){
+    S.execution.pendingMilestoneCheckpoint=nextState;
+  }else{
+    delete S.execution.pendingMilestoneCheckpoint;
+  }
+  return nextState;
+}
+function buildMilestoneCheckpointState(completedStageIndex,options={}){
+  if(!Number.isFinite(Number(completedStageIndex))) return null;
+  const stages=getExecutionStages();
+  if(!stages.length) return null;
+  const currentIndex=Math.max(0,Math.min(stages.length-1,Number(completedStageIndex)));
+  const currentStage=stages[currentIndex];
+  if(!currentStage||!areStageTasksCompleted(currentIndex)) return null;
+  const nextIndex=currentIndex+1;
+  if(nextIndex>=stages.length){
+    return {
+      completedStageIndex:currentIndex,
+      completedStageId:String(currentStage.id||''),
+      completedStageTitle:String(currentStage.title||`Stage ${currentIndex+1}`),
+      nextStageIndex:null,
+      nextStageId:'',
+      nextStageTitle:'',
+      openedAt:String(options.openedAt||nowIso()),
+      taskGenerationStarted:false,
+      finalCompleted:true
+    };
+  }
+  const nextStage=stages[nextIndex];
+  return {
+    completedStageIndex:currentIndex,
+    completedStageId:String(currentStage.id||''),
+    completedStageTitle:String(currentStage.title||`Stage ${currentIndex+1}`),
+    nextStageIndex:nextIndex,
+    nextStageId:String(nextStage?.id||''),
+    nextStageTitle:String(nextStage?.title||`Stage ${nextIndex+1}`),
+    openedAt:String(options.openedAt||nowIso()),
+    taskGenerationStarted:false,
+    finalCompleted:false
+  };
+}
+function openMilestoneCheckpointForStage(completedStageIndex,options={}){
+  ensureExecutionState();
+  const builtState=buildMilestoneCheckpointState(completedStageIndex,options);
+  if(!builtState) return null;
+  milestoneCheckpointState=builtState;
+  const pendingCheckpoint={
+    ...builtState,
+    status:'pending',
+    presentedAt:String(options.openedAt||nowIso()),
+    acknowledgedAt:''
+  };
+  setExecutionPendingMilestoneCheckpoint(pendingCheckpoint);
+  if(options.forceRehydrate!==false) saveAll();
+  renderMilestoneCheckpoint();
+  return milestoneCheckpointState;
+}
+function rehydrateMilestoneCheckpointState(){
+  if(milestoneCheckpointState) return milestoneCheckpointState;
+  const pendingCheckpoint=getExecutionPendingMilestoneCheckpoint();
+  if(!pendingCheckpoint||String(pendingCheckpoint.status||'')!=='pending') return null;
+  const completedStageIndex=Number(pendingCheckpoint.completedStageIndex);
+  const builtState=buildMilestoneCheckpointState(completedStageIndex,pendingCheckpoint);
+  if(!builtState){
+    setExecutionPendingMilestoneCheckpoint(null);
+    saveAll();
+    return null;
+  }
+  milestoneCheckpointState={
+    ...builtState,
+    openedAt:String(pendingCheckpoint.presentedAt||pendingCheckpoint.openedAt||builtState.openedAt||nowIso()),
+    taskGenerationStarted:Boolean(pendingCheckpoint.taskGenerationStarted)
+  };
+  return milestoneCheckpointState;
+}
+function clearMilestoneCheckpointState(options={}){
   milestoneCheckpointState=null;
+  const pendingCheckpoint=getExecutionPendingMilestoneCheckpoint();
+  if(pendingCheckpoint){
+    setExecutionPendingMilestoneCheckpoint({
+      ...pendingCheckpoint,
+      status:options.resolved?'resolved':'acknowledged',
+      acknowledgedAt:nowIso(),
+      taskGenerationStarted:Boolean(pendingCheckpoint.taskGenerationStarted)
+    });
+    if(options.persist!==false) saveAll();
+  }
   const overlay=document.getElementById('milestone-checkpoint-overlay');
   if(overlay) overlay.classList.remove('on');
 }
 function renderMilestoneCheckpoint(){
+  rehydrateMilestoneCheckpointState();
   const overlay=document.getElementById('milestone-checkpoint-overlay');
   if(!overlay){
     return;
@@ -4096,21 +4263,51 @@ function renderMilestoneCheckpoint(){
     overlay.classList.remove('on');
     return;
   }
-  const stage=getExecutionStage(milestoneCheckpointState.stageIndex);
+  const completedStage=Number.isFinite(Number(milestoneCheckpointState.completedStageIndex))
+    ? getExecutionStage(milestoneCheckpointState.completedStageIndex)
+    : null;
+  const nextStage=Number.isFinite(Number(milestoneCheckpointState.nextStageIndex))
+    ? getExecutionStage(milestoneCheckpointState.nextStageIndex)
+    : null;
+  const hasNextStage=Boolean(nextStage);
   const titleEl=document.getElementById('milestone-checkpoint-title');
   const copyEl=document.getElementById('milestone-checkpoint-copy');
   const stageEl=document.getElementById('milestone-checkpoint-stage');
-  if(titleEl) titleEl.textContent='Milestone completed';
-  if(copyEl) copyEl.textContent='Ready for the next stage. Generate tasks to continue the flow.';
-  if(stageEl) stageEl.textContent=stage?.title||milestoneCheckpointState.title||'Next milestone';
+  const isFinal=Boolean(milestoneCheckpointState.finalCompleted)||!hasNextStage;
+  if(titleEl) titleEl.textContent=isFinal?'Congratulations, you completed the roadmap':'Congratulations, you completed this milestone';
+  if(copyEl){
+    copyEl.textContent=isFinal
+      ? 'You have completed the final milestone. There are no more milestones to generate.'
+      : 'Generate AI tasks for the next milestone and continue straight into review.';
+  }
+  if(stageEl){
+    stageEl.textContent=isFinal
+      ? `Finished: ${completedStage?.title||milestoneCheckpointState.completedStageTitle||'Final milestone'}`
+      : `${completedStage?.title||milestoneCheckpointState.completedStageTitle||'Completed milestone'} → ${nextStage?.title||milestoneCheckpointState.nextStageTitle||'Next milestone'}`;
+  }
+  const actions=document.querySelector('.milestone-checkpoint-actions');
+  if(actions){
+    actions.innerHTML=isFinal
+      ? '<button class="btn btn-primary btn-sm" onclick="clearMilestoneCheckpointState()">Close</button>'
+      : '<button class="btn btn-ghost btn-sm" onclick="clearMilestoneCheckpointState()">Later</button><button class="btn btn-primary btn-sm" onclick="generateTasksForNextMilestone()">Generate next milestone tasks</button>';
+  }
   overlay.classList.add('on');
 }
 async function generateTasksForNextMilestone(){
   ensureExecutionState();
   if(!milestoneCheckpointState) return [];
-  const stageIndex=Number(milestoneCheckpointState.stageIndex);
+  if(milestoneCheckpointState.finalCompleted){
+    clearMilestoneCheckpointState({resolved:true});
+    toast2('Roadmap complete','No next milestone is available.');
+    return [];
+  }
+  const stageIndex=Number(milestoneCheckpointState.nextStageIndex);
   const stage=getExecutionStage(stageIndex);
-  if(!stage) return [];
+  if(!stage){
+    clearMilestoneCheckpointState({resolved:true});
+    toast2('Roadmap complete','No next milestone is available.');
+    return [];
+  }
   milestoneCheckpointState.taskGenerationStarted=true;
   renderMilestoneCheckpoint();
   logInfo({
@@ -4132,11 +4329,12 @@ async function generateTasksForNextMilestone(){
     stageId:stage.id,
     taskCount:Array.isArray(generated)?generated.length:0
   });
-  clearMilestoneCheckpointState();
+  clearMilestoneCheckpointState({resolved:true});
   renderTasks();
   renderSessionWorkspace();
   renderSessionOverlay();
-  if(S.roadmap) renderRM();
+  if(S.roadmap) refreshRoadmapSelectionViews();
+  showTaskPreviewPrompt({stageIndex,regenerated:false});
   return generated;
 }
 async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx='',opts={},action='chat'){
@@ -4325,6 +4523,7 @@ const S = {
   goals:[], notes:[],
   activeSession:null, paypalLoaded:false
 };
+const AI_CHAT_ENABLED = false;
 const INITIAL_STATE_SNAPSHOT = JSON.parse(JSON.stringify(S));
 const STORAGE_PROTO = Storage.prototype;
 const NATIVE_GET_ITEM = STORAGE_PROTO.getItem;
@@ -4612,6 +4811,7 @@ async function handleSignedInUser(user){
       initHM2();
       if(S.roadmap){updDashboard();renderRM();updRoadmapProgress();}
       gp('dashboard');
+      renderMilestoneCheckpoint();
       feedLine(`Welcome back, ${S.user.name}.`);
       showApiKeyBanner();
       trackEvent('auto_login');
@@ -4795,6 +4995,7 @@ function saveAll(){
     localStorage.setItem('sa_user',JSON.stringify(S.user));
     localStorage.setItem('sa_progress',JSON.stringify(S.progress));
     localStorage.setItem('sa_billing',JSON.stringify(S.billing));
+    localStorage.setItem('sa_chat_history',JSON.stringify(Array.isArray(S.chatHistory)?S.chatHistory.slice(-80):[]));
     if(S.roadmap)localStorage.setItem('sa_roadmap',JSON.stringify(S.roadmap));
     if(S.execution)localStorage.setItem(SA_EXECUTION_KEY,JSON.stringify(S.execution));
     else localStorage.removeItem(SA_EXECUTION_KEY);
@@ -4812,6 +5013,7 @@ function loadAll(){
     const p=localStorage.getItem('sa_progress');if(p)Object.assign(S.progress,JSON.parse(p));
     ensureSessionProgressCounters();
     const b=localStorage.getItem('sa_billing');if(b)Object.assign(S.billing,JSON.parse(b));
+    const ch=localStorage.getItem('sa_chat_history');if(ch)S.chatHistory=JSON.parse(ch);
     const r=localStorage.getItem('sa_roadmap');if(r)S.roadmap=JSON.parse(r);
     const ex=localStorage.getItem(SA_EXECUTION_KEY);if(ex)S.execution=JSON.parse(ex);
   }catch(e){}
@@ -5293,7 +5495,8 @@ function normalizeAiTasks(tasks,options={}){
       stageTitle:options.stageTitle||'Stage 1',
       stageObjective:options.stageObjective||existing?.stageObjective||'',
       deadline:options.deadline||S.user.deadline||'',
-      stageCount
+      stageCount,
+      strictAiContent:true
     });
     return {
       ...normalized,
@@ -5495,11 +5698,7 @@ function showRoadmapReadyPrompt(){
       'Milestones mapped.',
       'Execution path ready.',
       'Previewing the generated roadmap.'
-    ],
-    actionsHtml:[
-      '<button class="btn btn-primary btn-sm" onclick="continueRoadmapToTasks()">Continue to Tasks</button>',
-      '<button class="btn btn-ghost btn-sm" onclick="regenerateRoadmapFromPreview()">Regenerate</button>'
-    ].join('')
+    ]
   });
   renderRoadmapPreview();
 }
@@ -5523,8 +5722,7 @@ function showTaskPreviewPrompt({stageIndex=0,regenerated=false}={}){
       milestoneTitleType:typeof tasks[0].milestoneTitle
     }:null
   });
-  const previewTasks=tasks.slice(0,3);
-  const taskCards=previewTasks.map((task)=>{
+  const taskCards=tasks.map((task)=>{
     const prio=normalizeTaskPriority(task.priority||task.prio);
     const title=getTaskTitle(task);
     return `<div class="flow-task-preview-item">
@@ -5561,10 +5759,10 @@ function showTaskPreviewPrompt({stageIndex=0,regenerated=false}={}){
         <div class="flow-task-preview-title-main">${escHtml(stage?.title||'Active milestone')}</div>
         <div class="flow-task-preview-sub">${escHtml(stage?.objective||S.user.goal||'')}</div>
       </div>
-      <div class="flow-task-preview-grid">
-        ${taskCards || '<div class="flow-task-preview-empty">No generated tasks are available yet.</div>'}
-      </div>
-    </div>`;
+    <div class="flow-task-preview-grid">
+      ${taskCards || '<div class="flow-task-preview-empty">No generated tasks are available yet.</div>'}
+    </div>
+  </div>`;
   }
   taskPreviewPending=true;
   taskPreviewStageIndex=stageIndex;
@@ -5860,9 +6058,8 @@ async function obGenerateRoadmap(){
   }
 }
 function renderRoadmapPreview(){
-  const host=document.getElementById('flow-preview');
-  if(!host||!S.roadmap||!S.roadmap.length) return;
-  host.innerHTML=buildRoadmapSurfaceMarkup({
+  if(!S.roadmap||!S.roadmap.length) return;
+  renderRoadmapSurfaceToHost('flow-preview',{
     showFocus:true,
     showDetail:true,
     showFooter:false,
@@ -5897,7 +6094,7 @@ async function continueRoadmapToTasks(){
   showFlowLoading(
     'Preparing tasks',
     'Generating the first milestone tasks from the same roadmap context.',
-    ['Loading milestone scope.', 'Building the first execution list.', 'Preparing Tasks & Goals.']
+    ['Loading milestone scope.', 'Building the first execution list.', 'Preparing Tasks and Goals.']
   );
   try{
     let tasks=getActiveStageTasks();
@@ -6240,11 +6437,15 @@ function obLaunch(opts={}){
 /* ══ PAGE NAV ══ */
 function gp(id){
   if(id==='chat') id='notes';
+  if(id==='notes'&&!AI_CHAT_ENABLED){
+    renderChatPage();
+  }
   if(id==='analytics'&&!isAdmin()){toast2('Restricted','Analytics is available only to admins');id='dashboard';}
   closeTaskDetail(true);
   const topbarMap={
     dashboard:{eyebrow:'Strategy Hub',title:'Dashboard'},
-    work:{eyebrow:'Execution Loop',title:'Tasks & Goals'},
+    work:{eyebrow:'Execution Loop',title:'Tasks'},
+    goals:{eyebrow:'Execution Loop',title:'Goals'},
     notes:{eyebrow:'Daily Loop',title:'AI Chat'},
     roadmap:{eyebrow:'Roadmap Command',title:'Roadmap'},
     analytics:{eyebrow:'Signal Center',title:'Analytics'},
@@ -6264,12 +6465,15 @@ function gp(id){
   document.querySelectorAll('.htab').forEach(b=>{if(b.getAttribute('onclick')&&b.getAttribute('onclick').includes("'"+id+"'"))b.classList.add('on');});
   if(id==='work'){
     renderTasks();
-    renderGoals();
     updTaskBadge();
+  }
+  if(id==='goals'){
+    renderGoals();
   }
   if(id==='notes'){renderChatPage();}
   if(id==='analytics'){renderAnalytics();}
   if(id==='roadmap'){updRoadmapProgress();if(S.roadmap)renderRM();}
+  if(id==='dashboard'){updDashboard();}
   if(id==='billing'){renderBillingBtns();}
   renderDashboardSessionControls();
   renderSessionOverlay();
@@ -6281,11 +6485,13 @@ let guidedTourIndex=0;
 function getGuidedTourSteps(){
   const steps=[
     {page:'dashboard',target:'tab-dashboard',title:'Dashboard',body:'This is your operating surface. Daily focus, session state, streak, and execution signal live here.'},
-    {page:'work',target:'tab-work',title:'Tasks & Goals',body:'Your daily tasks and milestone goals stay in one place. This is where the plan turns into concrete work.'},
-    {page:'notes',target:'tab-notes',title:'AI Chat',body:'Use this space for daily check-ins, blockers, and quick guidance from the coach.'},
+    {page:'work',target:'tab-work',title:'Tasks',body:'Your daily tasks now have their own section. Goals live separately so the tasks view stays focused on execution.'},
     {page:'roadmap',target:'tab-roadmap',title:'Roadmap',body:'This view now shows the actual roadmap: milestones, sequencing, and the active execution window instead of an activity graph.'},
     {page:'settings',target:'tab-settings',title:'Settings',body:'This area now focuses on account, plan, and system actions for the MVP.'}
   ];
+  if(AI_CHAT_ENABLED){
+    steps.splice(2,0,{page:'notes',target:'tab-notes',title:'AI Chat',body:'Use this space for daily check-ins, blockers, and quick guidance from the coach.'});
+  }
   if(isAdmin()&&document.getElementById('tab-analytics')?.style.display!=='none'){
     steps.push({page:'analytics',target:'tab-analytics',title:'Analytics',body:'Analytics stays admin-only. Regular users do not see this tab or page.'});
   }
@@ -6361,23 +6567,18 @@ function closeGuidedTour(){
 }
 window.addEventListener('resize',()=>{if(document.getElementById('tour-overlay')?.classList.contains('on')&&!document.getElementById('tour-final-card')?.classList.contains('on'))renderGuidedTour();});
 
-/* ══ TASKS+GOALS SUB-TABS ══ */
+/* ══ TASKS + GOALS NAV ══ */
 function switchWorkTab(tab){
-  document.getElementById('st-tasks').classList.toggle('on',tab==='tasks');
-  document.getElementById('st-goals').classList.toggle('on',tab==='goals');
-  document.getElementById('wp-tasks').classList.toggle('on',tab==='tasks');
-  document.getElementById('wp-goals').classList.toggle('on',tab==='goals');
-  if(tab!=='tasks') closeTaskDetail(true);
-  if(tab==='tasks'){
-    renderTasks();
+  if(tab==='goals'){
+    gp('goals');
+    return;
   }
-  // Swap action buttons
   const actions=document.getElementById('work-actions');
-  if(tab==='tasks'){
+  if(actions){
     actions.innerHTML=`<button class="btn btn-primary btn-sm" onclick="gp('dashboard')">Start working</button>`;
-  } else {
-    actions.innerHTML=`<button class="btn btn-primary btn-sm" onclick="addGoal()">+ Add Goal</button>`;
   }
+  closeTaskDetail(true);
+  renderTasks();
 }
 
 /* ══ USER UI ══ */
@@ -6515,6 +6716,9 @@ function updDashboard(){
   renderDashboardSessionControls();
   renderSessionOverlay();
 }
+function refreshDashboardPanels(){
+  updDashboard();
+}
 
 /* ══ FEED ══ */
 let feedLines=[];
@@ -6522,6 +6726,22 @@ function feedLine(txt){feedLines.unshift(txt);if(feedLines.length>6)feedLines=fe
 
 /* ══ ROADMAP ══ */
 let focusedRoadmapStageIndex=null, openRoadmapMilestoneIndex=null, openRoadmapTimelineKey='';
+function renderRoadmapSurfaceToHost(hostId,opts={}){
+  const host=document.getElementById(hostId);
+  if(!host) return false;
+  const markup=buildRoadmapSurfaceMarkup(opts);
+  if(!markup) return false;
+  host.innerHTML=markup;
+  return true;
+}
+function refreshRoadmapSelectionViews(){
+  renderRM();
+  const previewHost=document.getElementById('flow-preview');
+  const overlay=document.getElementById('flow-overlay');
+  if((overlay&&overlay.classList.contains('on'))||Boolean(previewHost?.innerHTML)){
+    renderRoadmapPreview();
+  }
+}
 
 function getRoadmapActiveIndex(){
   if(getExecutionStages().length) return getCanonicalExecutionActiveStageIndex();
@@ -6627,13 +6847,14 @@ function getRoadmapRelatedTasks(index){
 }
 function focusRoadmapStage(index){
   focusedRoadmapStageIndex=index;
-  renderRM();
+  openRoadmapMilestoneIndex=index;
+  refreshRoadmapSelectionViews();
   const target=document.getElementById('rm-focus-panel');
   if(target) target.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 function toggleRoadmapMilestone(index){
   focusedRoadmapStageIndex=index;
-  openRoadmapMilestoneIndex=openRoadmapMilestoneIndex===index?null:index;
+  openRoadmapMilestoneIndex=index;
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
@@ -6643,7 +6864,11 @@ function toggleRoadmapMilestone(index){
     selectedMilestoneId:getExecutionStage(index)?.id||S.roadmap?.[index]?.id||'',
     selectedMilestoneTitle:clipText(getExecutionStage(index)?.title||S.roadmap?.[index]?.title||'',80)
   });
-  renderRM();
+  refreshRoadmapSelectionViews();
+}
+function closeRoadmapMilestoneDetail(){
+  openRoadmapMilestoneIndex=-1;
+  refreshRoadmapSelectionViews();
 }
 function toggleRoadmapTimelineItem(index,dayIndex){
   const key=`${index}-${dayIndex}`;
@@ -6704,7 +6929,7 @@ function buildRoadmapPath(points=[]){
   }
   return d;
 }
-function buildRoadmapDetailPanel(index){
+function buildRoadmapDetailPanel(index,opts={}){
   if(index===null||index===undefined||!S.roadmap||!S.roadmap[index]) return '';
   const wk=S.roadmap[index];
   const stage=getExecutionStage(index);
@@ -6712,6 +6937,7 @@ function buildRoadmapDetailPanel(index){
   const stageObjective=getStageObjectiveText(stage||wk)||'';
   const stageOutcome=getStageOutcomeText(stage||wk)||'';
   const stageReasoning=getStageReasoningText(stage||wk)||'';
+  const stageTasks=getTasksForStage(index,{includeArchived:false});
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
@@ -6728,8 +6954,22 @@ function buildRoadmapDetailPanel(index){
     reasoningIsArray:Array.isArray(stageReasoning)
   });
   const pct=getRoadmapStagePct(index);
-  const taskCount=getTasksForStage(index,{includeArchived:false}).length;
+  const taskCount=stageTasks.length;
   const stageCriteria=getRoadmapStageCriteria(index);
+  const stageStatus=String(stage?.status||getRoadmapStageStatus(index)||'');
+  const stageStatusLabel=stageStatus==='completed'
+    ? 'Completed'
+    : stageStatus==='active'
+      ? 'Active'
+      : 'Locked';
+  const allowGenerationActions=Boolean(opts.allowGenerationActions);
+  const stageTasksPreview=stageTasks.slice(0,4).map((task)=>`<div class="rm-task-preview-item">
+      <div class="rm-task-preview-title">${escHtml(getTaskTitle(task))}</div>
+      <div class="rm-task-preview-meta">
+        <span>${escHtml(taskPrioLabel(task.prio||task.priority))}</span>
+        <span>${escHtml(task.deadline||'No deadline')}</span>
+      </div>
+    </div>`).join('');
   const criteriaCount=Math.max(1,stageCriteria.length);
   const criteriaDone=Math.round((pct/100)*criteriaCount);
   const checklist=stageCriteria.slice(0,3).map((day,dayIndex)=>{
@@ -6741,19 +6981,32 @@ function buildRoadmapDetailPanel(index){
     }
     return `<div class="rm-check-item ${status}"><div class="rm-check-icon">${status==='done'?'✓':status==='active'?'●':'·'}</div><div class="rm-check-copy"><strong>${escHtml(day.task||'Milestone step')}</strong><span>${escHtml(day.day||'DAY')} · ${escHtml(day.duration||'no estimate')}</span></div></div>`;
   }).join('');
+  const emptyTasksCopy=allowGenerationActions
+    ? 'Generate tasks for this milestone to populate the preview.'
+    : 'Tasks for this milestone will appear here once they are generated.';
+  const detailActions=allowGenerationActions
+    ? `<div class="rm-detail-actions">
+    <button class="btn btn-primary btn-sm" onclick="continueRoadmapToTasks()">Continue to Tasks</button>
+    <button class="btn btn-ghost btn-sm" onclick="regenerateRoadmapFromPreview()">Regenerate</button>
+  </div>`
+    : '';
   return `<div class="rm-detail-head">
     <div>
       <div class="rm-detail-kicker">Milestone snapshot</div>
       <div class="rm-detail-title">${escHtml(stageTitle)}</div>
       <div class="rm-detail-copy">${escHtml(clipText([stageObjective,stageOutcome].filter(Boolean).join(' · ')||'Execution objective pending',180))}</div>
     </div>
-    <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${index})">Close</button>
+    <button class="btn btn-ghost btn-sm" onclick="closeRoadmapMilestoneDetail()">Close</button>
   </div>
   <div class="rm-detail-grid">
     <div class="rm-detail-stat"><strong>${pct}%</strong><span>Progress</span></div>
     <div class="rm-detail-stat"><strong>${taskCount}</strong><span>Tasks</span></div>
-    <div class="rm-detail-stat"><strong>${escHtml(getRoadmapTargetDate(index,S.roadmap.length))}</strong><span>Target</span></div>
-    <div class="rm-detail-stat"><strong>${stageCriteria.length}</strong><span>Checks</span></div>
+    <div class="rm-detail-stat"><strong>${escHtml(stageStatusLabel)}</strong><span>Status</span></div>
+    <div class="rm-detail-stat"><strong>${escHtml(stage?.targetDate||wk.target_date||getRoadmapTargetDate(index,S.roadmap.length))}</strong><span>Target</span></div>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:14px;">
+    <span>Start: ${escHtml(stage?.startDate||wk.startDate||'—')}</span>
+    <span>Target: ${escHtml(stage?.targetDate||wk.target_date||getRoadmapTargetDate(index,S.roadmap.length))}</span>
   </div>
   <div class="rm-detail-list">
     <div>
@@ -6766,16 +7019,16 @@ function buildRoadmapDetailPanel(index){
         <div class="rm-related-item rm-related-item--brief">
           <div class="rm-check-icon">↗</div>
           <div class="rm-related-copy">
-            <strong>Tasks live in Tasks &amp; Goals</strong>
-            <span>${escHtml(clipText(stageReasoning||stageObjective||stageOutcome||'Open the execution list to work through the full task inventory for this milestone.',160))}</span>
+            <strong>Why it matters</strong>
+            <span>${escHtml(clipText(stageReasoning||stageObjective||stageOutcome||'Execution rationale is not available yet.',160))}</span>
           </div>
         </div>
       </div>
+      <div class="rm-list-title" style="margin-top:12px;">Tasks preview</div>
+      <div class="rm-related-list">${stageTasksPreview||`<div class="rm-related-item rm-related-item--brief"><div class="rm-check-icon">·</div><div class="rm-related-copy"><strong>No tasks yet</strong><span>${escHtml(emptyTasksCopy)}</span></div></div>`}</div>
     </div>
   </div>
-  <div class="rm-detail-actions">
-    <button class="btn btn-primary btn-sm" onclick="openExecutionTasks()">Go to Tasks &amp; Goals</button>
-  </div>`;
+  ${detailActions}`;
 }
 function buildRoadmapSurfaceMarkup(opts={}){
   const roadmapStages=getRoadmapViewStages();
@@ -6787,12 +7040,13 @@ function buildRoadmapSurfaceMarkup(opts={}){
   const showFocus=opts.showFocus!==false;
   const showDetail=opts.showDetail!==false;
   const showFooter=opts.showFooter!==false;
+  const allowGenerationActions=Boolean(opts.interactiveNodes);
   const surfaceClass=String(opts.surfaceClass||'').trim();
   focusedRoadmapStageIndex=focusedIndex;
   if(openRoadmapMilestoneIndex===null||openRoadmapMilestoneIndex===undefined){
     openRoadmapMilestoneIndex=Math.max(0,Math.min(lastIndex,activeIndex>=0?activeIndex:0));
   }
-  if(openRoadmapMilestoneIndex<0||openRoadmapMilestoneIndex>lastIndex){
+  if(Number.isFinite(Number(openRoadmapMilestoneIndex))&&openRoadmapMilestoneIndex>lastIndex){
     openRoadmapMilestoneIndex=Math.max(0,Math.min(lastIndex,openRoadmapMilestoneIndex));
   }
   const focusedMilestone=roadmapStages[focusedIndex]||{};
@@ -6818,8 +7072,8 @@ function buildRoadmapSurfaceMarkup(opts={}){
   const canvasKicker=String(opts.canvasKicker||'Roadmap canvas');
   const footerChipTarget=String(opts.footerTarget||`Target ${escHtml(getRoadmapTargetDate(activeIndex,roadmapStages.length)).toUpperCase()}`);
   const detailHtml=showDetail
-    ? (openRoadmapMilestoneIndex!==null
-      ? `<section class="rm-detail-panel" id="rm-detail-panel" style="display:block">${buildRoadmapDetailPanel(openRoadmapMilestoneIndex)}</section>`
+    ? (Number.isFinite(Number(openRoadmapMilestoneIndex))&&openRoadmapMilestoneIndex>=0
+      ? `<section class="rm-detail-panel" id="rm-detail-panel" style="display:block">${buildRoadmapDetailPanel(openRoadmapMilestoneIndex,{allowGenerationActions})}</section>`
       : `<section class="rm-detail-panel" id="rm-detail-panel" style="display:none"></section>`)
     : '';
   const focusHtml=showFocus?`<aside class="rm-roadmap-focus" id="rm-focus-panel">
@@ -6839,8 +7093,7 @@ function buildRoadmapSurfaceMarkup(opts={}){
           <div class="rm-focus-mini"><span>Target</span><strong>${escHtml(getRoadmapTargetDate(focusedIndex,S.roadmap.length))}</strong></div>
         </div>
         <div class="rm-focus-actions">
-          <button class="btn btn-primary btn-sm" onclick="openExecutionTasks()">Go to Tasks &amp; Goals</button>
-          <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${focusedIndex})">${openRoadmapMilestoneIndex===focusedIndex?'Hide detail':'Open detail'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleRoadmapMilestone(${focusedIndex})">Open detail</button>
         </div>
       </aside>`:'';
   const footerHtml=showFooter?`<div class="rm-roadmap-footer">
@@ -7002,11 +7255,10 @@ function renderRM(){
   const roadmapStages=getRoadmapViewStages();
   if(!roadmapStages.length)return;
   ensureExecutionState();
-  const rb=document.getElementById('rb');
   const activeIndex=getRoadmapActiveIndex();
   if(focusedRoadmapStageIndex===null||focusedRoadmapStageIndex===undefined) focusedRoadmapStageIndex=activeIndex;
   if(openRoadmapMilestoneIndex===null||openRoadmapMilestoneIndex===undefined) openRoadmapMilestoneIndex=activeIndex;
-  if(openRoadmapMilestoneIndex!==null&&openRoadmapMilestoneIndex!==undefined){
+  if(Number.isFinite(Number(openRoadmapMilestoneIndex))&&openRoadmapMilestoneIndex>=0){
     openRoadmapMilestoneIndex=Math.max(0,Math.min(roadmapStages.length-1,openRoadmapMilestoneIndex));
   }
   logInfo({
@@ -7018,7 +7270,7 @@ function renderRM(){
     stageCount:roadmapStages.length,
     stages:summarizeRoadmapStagesForLog(roadmapStages)
   });
-  rb.innerHTML=buildRoadmapSurfaceMarkup({
+  renderRoadmapSurfaceToHost('rb',{
     showFocus:true,
     showDetail:true,
     showFooter:true,
@@ -7029,61 +7281,279 @@ function renderRM(){
   document.getElementById('rm-span').textContent=`Plan for ${roadmapStages.length} stages · Active stage ${Math.min(activeIndex+1,roadmapStages.length)}`;
 }
 
-/* ══ AI CHAT — paywall for free users ══ */
+/* ══ AI CHAT — execution coach ══ */
+let chatRequestSeq=0;
+let chatLoadToken=0;
+let chatLoading=false;
+let chatError='';
+let chatSeeded=false;
+function normalizeChatText(value, fallback=''){
+  const text=String(value||'').trim();
+  return text||String(fallback||'').trim();
+}
+function getRecentTaskTitles(tasks=[],limit=4){
+  return tasks
+    .map((task)=>clipText(getTaskTitle(task),72))
+    .filter(Boolean)
+    .slice(0,limit);
+}
+function formatChatDate(value){
+  const raw=String(value||'').trim();
+  if(!raw) return '';
+  const safe=toIsoDateOnly(raw)||raw.slice(0,10);
+  if(!safe) return raw;
+  const date=new Date(`${safe}T00:00:00`);
+  if(Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+}
+function getVisibleCompletedTasks(){
+  return getVisibleActiveTasks().filter((task)=>Boolean(task?.done||task?.status==='done'));
+}
+function getVisibleOverdueTasks(){
+  const today=todayISO();
+  return getVisibleActiveTasks().filter((task)=>{
+    if(Boolean(task?.done||task?.status==='done')) return false;
+    const due=String(task?.deadline||task?.dueDate||task?.targetDate||'').slice(0,10);
+    return Boolean(due&&due<today);
+  });
+}
+function getCompletedTaskTitles(limit=4){
+  return getVisibleCompletedTasks()
+    .slice(0,limit)
+    .map((task)=>clipText(getTaskTitle(task),72))
+    .filter(Boolean);
+}
+function getOverdueTaskTitles(limit=4){
+  return getVisibleOverdueTasks()
+    .slice(0,limit)
+    .map((task)=>clipText(getTaskTitle(task),72))
+    .filter(Boolean);
+}
+function getChatSessionSummary(){
+  const sessions=Array.isArray(S.progress?.sessionLog)?S.progress.sessionLog:[];
+  const totalSessions=Number(S.progress?.sessions)||sessions.length||0;
+  const lastSession=sessions[sessions.length-1]||null;
+  const activeSession=getExecutionSession();
+  const review=normalizeExecutionSessionReview(activeSession?.review||lastSession?.review||{});
+  const answers=review.answers||normalizeSessionReviewAnswers();
+  const blockers=[
+    normalizeChatText(answers.blocked,''),
+    normalizeChatText(answers.blocker,''),
+    normalizeChatText(S.user.blockers,'')
+  ].filter(Boolean);
+  return [
+    `Sessions: ${totalSessions}`,
+    lastSession?`Last: ${clipText(lastSession.status||'unknown',18)}`:'Last: none',
+    blockers.length?`Blockers: ${blockers.slice(0,2).join(' | ')}`:'Blockers: none',
+    answers.completed?`Done: ${clipText(answers.completed,120)}`:'Done: none',
+    answers.changed?`Learned: ${clipText(answers.changed,120)}`:'Learned: none'
+  ].join('\n');
+}
+function buildChatContextSummary(){
+  const ctx=buildRoadmapOnboardingContext();
+  const stages=getExecutionStages();
+  const activeIndex=getExecutionActiveStageIndex();
+  const stage=stages[activeIndex]||null;
+  const activeTasks=getVisibleActiveTasks().filter((task)=>!task.done).slice(0,3);
+  const overdueTasks=getVisibleOverdueTasks().slice(0,2);
+  const completedTasks=getVisibleCompletedTasks().slice(0,2);
+  const stageProgress=stage?getStageTaskProgress(stage,activeIndex):null;
+  const latestSession=getExecutionSession()||((S.progress?.sessionLog||[]).slice(-1)[0]||null);
+  const sessionReview=normalizeExecutionSessionReview(latestSession?.review||{});
+  const sessionAnswers=sessionReview.answers||normalizeSessionReviewAnswers();
+  return [
+    `Goal: ${normalizeChatText(ctx.primary_goal||S.user.goal,'not set')}`,
+    `Milestone: ${stage?clipText(stage.title||'Active milestone',48):'none'}${stageProgress?` (${stageProgress.done}/${stageProgress.total})`:''}`,
+    activeTasks.length?`Active: ${activeTasks.map((task)=>clipText(getTaskTitle(task),44)).join(' | ')}`:'Active: none',
+    overdueTasks.length?`Overdue: ${overdueTasks.map((task)=>clipText(getTaskTitle(task),44)).join(' | ')}`:'Overdue: none',
+    completedTasks.length?`Done: ${completedTasks.map((task)=>clipText(getTaskTitle(task),44)).join(' | ')}`:'Done: none',
+    `Session: ${latestSession?clipText(latestSession.status||'none',16):'none'}${sessionAnswers.blocked||sessionAnswers.blocker?` | Blocked: ${clipText(sessionAnswers.blocked||sessionAnswers.blocker,90)}`:''}`,
+    sessionAnswers.completed?`Review done: ${clipText(sessionAnswers.completed,90)}`:'Review done: none',
+    sessionAnswers.changed?`Review learned: ${clipText(sessionAnswers.changed,90)}`:'Review learned: none'
+  ].join('\n');
+}
+function renderMarkdownishText(text){
+  return escHtml(String(text||'')).replace(/\n/g,'<br>');
+}
+function buildChatSystemCtx(mode='daily'){
+  const modeLabel=mode==='post_session'?'post-session feedback':'daily check-in';
+  return `StriveAI execution coach for ${modeLabel}. Be concise, factual, and specific. No motivational filler. Use only the provided app context. If data is missing, say so briefly.`;
+}
+function buildChatPrompt(message='',mode='daily'){
+  const context=buildChatContextSummary();
+  const userMessage=normalizeChatText(message,'');
+  if(mode==='post_session'){
+    return [
+      `Mode: post-session feedback.`,
+      `Return max 4 short bullets.`,
+      `Include one bottleneck, one focus, one concrete next step, one question.`,
+      userMessage?`User asked: ${userMessage}`:'',
+      `Context:\n${context}`
+    ].filter(Boolean).join('\n\n');
+  }
+  return [
+    `Mode: daily check-in.`,
+    `Return max 4 short bullets.`,
+    `Include one bottleneck, one focus, one concrete next step, one question.`,
+    userMessage?`User asked: ${userMessage}`:'',
+    `Context:\n${context}`
+  ].filter(Boolean).join('\n\n');
+}
+function chatStarterPrompts(){
+  return [
+    'What should I focus on today?',
+    'Review my last session',
+    'I am blocked',
+    'How far am I from my current milestone?'
+  ];
+}
+function setChatState({loading=false,error='' }={}){
+  if(!AI_CHAT_ENABLED) return;
+  chatLoading=Boolean(loading);
+  chatError=String(error||'');
+  const wrap=document.getElementById('chat-shell');
+  if(wrap) wrap.classList.toggle('is-loading',chatLoading);
+  const btn=document.getElementById('chat-send-btn');
+  if(btn){
+    btn.disabled=chatLoading;
+    btn.setAttribute('aria-busy',chatLoading?'true':'false');
+    btn.innerHTML=chatLoading?'<span class="spin-sm" aria-hidden="true"></span><span>Sending...</span>':'Send';
+  }
+  const input=document.getElementById('chat-in');
+  if(input) input.disabled=chatLoading;
+  const errorEl=document.getElementById('chat-error');
+  if(errorEl){
+    errorEl.textContent=chatError;
+    errorEl.style.display=chatError?'block':'none';
+  }
+  document.querySelectorAll('#chat-starters .starter-chip').forEach((btn)=>{
+    btn.disabled=chatLoading;
+  });
+  const msgs=document.getElementById('chat-msgs');
+  if(msgs) renderChatMsgs();
+}
 function renderChatPage(){
   const wrap=document.getElementById('chat-inner');
-  const plan=S.billing.plan;
-  // Paywall for free users
-  if(plan==='free'){
-    wrap.innerHTML=`<div class="paywall-overlay">
-      <div class="paywall-icon">✦</div>
-      <div class="paywall-title">AI Chat</div>
-      <div class="paywall-desc">Get unlimited access to your personal AI execution coach. Use it for daily check-ins, blockers, planning, and quick guidance — powered by Gemini.</div>
-      <div class="paywall-features">
-        <div class="paywall-feat">Unlimited AI chat sessions</div>
-        <div class="paywall-feat">Daily check-ins</div>
-        <div class="paywall-feat">Blocker breakthrough prompts</div>
-        <div class="paywall-feat">Quick planning prompts</div>
-        <div class="paywall-feat">Roadmap guidance</div>
-        <div class="paywall-feat">Weekly reflection loops</div>
+  if(!wrap) return;
+  if(!AI_CHAT_ENABLED){
+    wrap.innerHTML=`<div class="chat-shell chat-shell--disabled" id="chat-shell">
+      <div class="chat-header">
+        <div>
+          <div class="chat-kicker">Temporarily disabled</div>
+          <div class="chat-title">AI Chat</div>
+        </div>
+        <div class="chat-subtitle">This feature is turned off while the chat pipeline is being stabilized.</div>
       </div>
-      <div class="paywall-plans">
-        <div class="paywall-plan featured">
-          <div class="paywall-plan-price">$19</div>
-          <div class="paywall-plan-name">Pro / month</div>
-          <button class="paywall-plan-btn" onclick="gp('billing')">Upgrade to Pro →</button>
-        </div>
-        <div class="paywall-plan">
-          <div class="paywall-plan-price">$49</div>
-          <div class="paywall-plan-name">Team / month</div>
-          <button class="paywall-plan-btn" onclick="gp('billing')" style="background:transparent;color:var(--ink);border-color:var(--ink);">Upgrade to Team →</button>
-        </div>
+      <div class="chat-error" style="display:block">AI Chat is temporarily unavailable. No messages, prompts, or backend requests will be sent.</div>
+      <div class="chat-empty">
+        <div class="chat-empty-title">Chat disabled</div>
+        <div class="chat-empty-body">Use Dashboard, Tasks, Roadmap, Goals, or Settings while this feature is offline.</div>
       </div>
     </div>`;
     return;
   }
-  // Paid users get full chat
-  wrap.innerHTML=`<div class="chat-msgs" id="chat-msgs"></div>
+  wrap.innerHTML=`<div class="chat-shell" id="chat-shell">
+    <div class="chat-header">
+      <div>
+        <div class="chat-kicker">Daily Loop</div>
+        <div class="chat-title">AI Chat</div>
+      </div>
+      <div class="chat-subtitle">Execution coach for check-ins, blockers, and post-session feedback.</div>
+    </div>
+    <div id="chat-error" class="chat-error" style="display:none"></div>
+    <div class="chat-msgs" id="chat-msgs"></div>
     <div class="chat-starters" id="chat-starters"></div>
     <div class="chat-input-row">
-      <textarea id="chat-in" placeholder="Спроси AI-коуча о плане, приоритетах или следующем шаге…" rows="2" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}"></textarea>
-      <button class="chat-send-btn" onclick="sendChat()">Отправить →</button>
-    </div>`;
-  renderChatMsgs();buildStarters();
+      <textarea id="chat-in" placeholder="Ask for today’s focus, a session review, or blocker help…" rows="2" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}"></textarea>
+      <button class="chat-send-btn" id="chat-send-btn" onclick="sendChat()">Send</button>
+    </div>
+  </div>`;
+  buildStarters();
+  renderChatMsgs();
+  maybeSeedChat();
 }
-function renderChatMsgs(){const el=document.getElementById('chat-msgs');if(!el)return;if(!S.chatHistory.length){el.innerHTML=`<div class="chat-msg ai"><div class="msg-av ai">S</div><div class="msg-bubble">Привет, ${escHtml(S.user.name)}. Я твой AI-коуч по исполнению. Могу помочь с приоритетами, roadmap, разбивкой задач и разбором затыков. С чего начнём?</div></div>`;return;}el.innerHTML=S.chatHistory.map(m=>`<div class="chat-msg ${m.role}"><div class="msg-av ${m.role}">${m.role==='ai'?'S':S.user.name.charAt(0).toUpperCase()}</div><div class="msg-bubble">${escHtml(m.content)}</div></div>`).join('');el.scrollTop=el.scrollHeight;}
-function buildStarters(){const el=document.getElementById('chat-starters');if(!el)return;const starters=['На чём мне сфокусироваться сегодня?','Разбери мой текущий прогресс','Разложи мою цель на этапы','Что у меня следующий milestone?','Я застрял, помоги выбрать следующий шаг'];el.innerHTML=starters.map(s=>`<button class="starter-chip" onclick="sendChatMsg(${JSON.stringify(s)})">${s}</button>`).join('');}
-async function sendChat(){const el=document.getElementById('chat-in');if(!el)return;const msg=el.value.trim();if(!msg)return;el.value='';sendChatMsg(msg);}
-async function sendChatMsg(msg){
-  S.chatHistory.push({role:'user',content:msg});renderChatMsgs();
+function renderChatMsgs(){
+  if(!AI_CHAT_ENABLED) return;
   const el=document.getElementById('chat-msgs');
-  if(el)el.innerHTML+=`<div class="chat-msg ai"><div class="msg-av ai">S</div><div class="msg-bubble"><span class="spin-sm"></span></div></div>`;
+  if(!el) return;
+  const messages=S.chatHistory.slice(-20);
+  const emptyState=`
+    <div class="chat-empty">
+      <div class="chat-empty-title">Daily check-in</div>
+      <div class="chat-empty-body">I pulled your roadmap, active milestone, tasks, and recent sessions. Ask for today’s focus, a blocker plan, or a review of the last session.</div>
+    </div>`;
+  const stream=messages.length?messages.map((m)=>`<div class="chat-msg ${m.role}"><div class="msg-av ${m.role}">${m.role==='ai'?'S':S.user.name.charAt(0).toUpperCase()}</div><div class="msg-bubble">${renderMarkdownishText(m.content)}</div></div>`).join(''):emptyState;
+  const pending=chatLoading?`<div class="chat-msg ai" id="chat-pending"><div class="msg-av ai">S</div><div class="msg-bubble"><span class="spin-sm" aria-hidden="true"></span></div></div>`:'';
+  el.innerHTML=`${stream}${pending}`;
+  el.scrollTop=el.scrollHeight;
+}
+function buildStarters(){
+  if(!AI_CHAT_ENABLED) return;
+  const el=document.getElementById('chat-starters');
+  if(!el) return;
+  el.innerHTML=chatStarterPrompts().map((s)=>`<button class="starter-chip" data-chat-starter="1" onclick="sendChatMsg(${JSON.stringify(s)})">${escHtml(s)}</button>`).join('');
+}
+function maybeSeedChat(force=false){
+  if(!AI_CHAT_ENABLED) return;
+  if(chatLoading) return;
+  const hasConversation=Array.isArray(S.chatHistory)&&S.chatHistory.length>0;
+  if(hasConversation&&!force) return;
+  if(chatSeeded&&!force) return;
+  chatSeeded=true;
+  sendChatMsg('',{mode:getChatModeForState(),seed:true}).catch((error)=>console.error('Chat seed failed',error));
+}
+function getChatModeForState(){
+  if(!AI_CHAT_ENABLED) return 'daily';
+  const session=getExecutionSession();
+  if(session?.status==='completed') return 'post_session';
+  const reviewOpen=isSessionReviewOpen();
+  if(reviewOpen) return 'post_session';
+  return 'daily';
+}
+async function sendChat(){
+  if(!AI_CHAT_ENABLED){
+    toast2('AI Chat disabled','This feature is temporarily unavailable.');
+    return;
+  }
+  const el=document.getElementById('chat-in');
+  if(!el) return;
+  const msg=el.value.trim();
+  if(!msg) return;
+  el.value='';
+  await sendChatMsg(msg,{mode:'daily'});
+}
+async function sendChatMsg(msg,options={}){
+  if(!AI_CHAT_ENABLED){
+    return '';
+  }
+  const mode=options?.mode==='post_session'?'post_session':'daily';
+  const seed=Boolean(options?.seed);
+  const userText=normalizeChatText(msg,'');
+  if(chatLoading) return;
+  if(userText) S.chatHistory.push({role:'user',content:userText});
+  renderChatMsgs();
+  setChatState({loading:true,error:''});
+  const requestId=++chatRequestSeq;
   try{
-    const recentHistory=S.chatHistory.slice(-12).map(m=>`${m.role==='user'?'Пользователь':'Ассистент'}: ${clipText(m.content,300)}`);
-    const history=recentHistory.join('\n\n');
-    const reply=await gemini(history,sysp(),700,{},'chat');
-    S.chatHistory.push({role:'ai',content:reply});renderChatMsgs();saveAll();
-  }catch(e){S.chatHistory.push({role:'ai',content:'⚠ Ошибка: '+e.message});renderChatMsgs();}
+    const prompt=buildChatPrompt(userText,mode);
+    const reply=await gemini(prompt,buildChatSystemCtx(mode),520,{temperature:0.25,topP:0.8},'chat');
+    if(requestId!==chatRequestSeq) return;
+    const cleaned=normalizeChatText(reply,'I need a bit more context to help with that.');
+    S.chatHistory.push({role:'ai',content:cleaned});
+    saveAll();
+  }catch(error){
+    if(requestId!==chatRequestSeq) return;
+    const message=mapGeminiErrorMessage(error,'chat');
+    chatError=message;
+    if(userText||seed){
+      S.chatHistory.push({role:'ai',content:`Unable to answer right now. ${message}`});
+    }
+  }finally{
+    if(requestId===chatRequestSeq){
+      setChatState({loading:false,error:chatError});
+      renderChatMsgs();
+    }
+  }
 }
 
 /* ══ TASKS ══ */
@@ -7091,6 +7561,25 @@ let taskFilter='all',aiTasksDraft=null,activeTaskDetailId=null,taskDetailEscBoun
 let taskCalendarMonthAnchor=null,taskCalendarSelectedDate='',taskCalendarSelectedTaskId=null;
 let sessionOverlayMode='';
 let milestoneCheckpointState=null;
+let isApplyingReview=false;
+let sessionReviewSubmitError='';
+function setSessionReviewSubmitState(isBusy,errorMessage=''){
+  isApplyingReview=Boolean(isBusy);
+  sessionReviewSubmitError=String(errorMessage||'');
+  const btn=document.getElementById('session-review-apply-btn');
+  if(btn){
+    btn.disabled=isApplyingReview;
+    btn.setAttribute('aria-busy',isApplyingReview?'true':'false');
+    btn.innerHTML=isApplyingReview
+      ? '<span class="spin-sm" aria-hidden="true"></span><span>Applying...</span>'
+      : 'Apply Review';
+  }
+  const errorEl=document.getElementById('session-review-error');
+  if(errorEl){
+    errorEl.textContent=sessionReviewSubmitError;
+    errorEl.style.display=sessionReviewSubmitError?'block':'none';
+  }
+}
 function getTaskById(id){
   const canonical=getExecutionTaskById(id);
   if(canonical){
@@ -7479,8 +7968,9 @@ function buildSessionReviewMarkup(session,stage,taskIds,sessionTasks){
           <textarea id="session-review-notes" class="inp session-review-text" placeholder="Scope changes, blockers, or the next direction.">${escHtml(notesPrefill)}</textarea>
         </div>
         <div class="session-review-actions">
-          <button class="btn btn-primary btn-sm" onclick="applySessionReviewResults()">Apply Review</button>
+          <button id="session-review-apply-btn" class="btn btn-primary btn-sm" onclick="applySessionReviewResults()" ${isApplyingReview?'disabled':''} aria-busy="${isApplyingReview?'true':'false'}">${isApplyingReview?'<span class="spin-sm" aria-hidden="true"></span><span>Applying...</span>':'Apply Review'}</button>
         </div>
+        <div id="session-review-error" class="session-review-error" style="display:${sessionReviewSubmitError?'block':'none'}">${escHtml(sessionReviewSubmitError)}</div>
         ${reviewSummary?`<div class="session-review-summary-wrap">${reviewSummary}</div>`:''}
       </div>
     </div>
@@ -7698,9 +8188,11 @@ function endSession(outcome='completed'){
   sessionOverlayMode='review';
   clearSessionTimer();
   syncActiveSessionRuntime();
+  updDashboard();
   renderDashboardSessionControls();
   renderSessionWorkspace();
   renderSessionOverlay();
+  if(S.roadmap) refreshRoadmapSelectionViews();
   saveAll();
   logInfo({
     area:'frontend',
@@ -7739,6 +8231,7 @@ function completeSessionTask(taskId){
   }
   const canonical=getExecutionTaskById(taskId);
   if(!canonical) return;
+  const stageIndex=Math.max(0,Number(canonical.linkedStageIndex)||Math.max(0,(Number(canonical.linkedStage)||1)-1));
   canonical.status='done';
   canonical.done=true;
   canonical.progressPct=100;
@@ -7748,8 +8241,10 @@ function completeSessionTask(taskId){
   S.execution.updatedAt=nowIso();
   refreshExecutionProgress();
   syncActiveTasksFromExecution();
+  maybeAutoAdvanceRoadmapStage({completedStageIndex:stageIndex}).catch((error)=>console.error('Stage auto-advance failed', error));
   saveTasks();
   saveAll();
+  updDashboard();
   renderDashboardSessionControls();
   renderTasks();
   renderSessionWorkspace();
@@ -7757,7 +8252,10 @@ function completeSessionTask(taskId){
   updTaskBadge();
   updMilestoneBar();
   updRoadmapProgress();
-  if(S.roadmap) renderRM();
+  if(S.roadmap) refreshRoadmapSelectionViews();
+  updDashboard();
+  updRoadmapProgress();
+  if(S.roadmap) refreshRoadmapSelectionViews();
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
@@ -7787,6 +8285,7 @@ function blockSessionTask(taskId){
   syncActiveTasksFromExecution();
   saveTasks();
   saveAll();
+  updDashboard();
   renderDashboardSessionControls();
   renderTasks();
   renderSessionWorkspace();
@@ -7794,7 +8293,7 @@ function blockSessionTask(taskId){
   updTaskBadge();
   updMilestoneBar();
   updRoadmapProgress();
-  if(S.roadmap) renderRM();
+  if(S.roadmap) refreshRoadmapSelectionViews();
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
@@ -8044,6 +8543,9 @@ async function applySessionReviewResults(){
     toast2('No session to apply','Start and end a session first.');
     return;
   }
+  if(isApplyingReview) return;
+  setSessionReviewSubmitState(true,'');
+  try{
   const stage=getExecutionSessionStage()||getExecutionStage(getExecutionActiveStageIndex());
   const answers=buildSessionReviewAnswersFromUI(session);
   const selectedTaskIds=Array.from(new Set((session.taskIds||[]).map((taskId)=>Number(taskId)).filter((taskId)=>Number.isFinite(taskId))));
@@ -8226,7 +8728,10 @@ async function applySessionReviewResults(){
   S.execution.updatedAt=nowIso();
   refreshExecutionProgress();
   syncActiveTasksFromExecution();
-  await maybeAutoAdvanceRoadmapStage();
+  await maybeAutoAdvanceRoadmapStage({completedStageIndex:stageIndexForReview});
+  updDashboard();
+  updRoadmapProgress();
+  if(S.roadmap) refreshRoadmapSelectionViews();
   const nextStageIndex=getExecutionActiveStageIndex();
   const nextStage=getExecutionStage(nextStageIndex);
   const nextActionTaskId=Number(appliedReview.interpretation?.nextBestAction?.taskId||0);
@@ -8275,6 +8780,17 @@ async function applySessionReviewResults(){
   clearSessionTimer();
   saveTasks();
   saveAll();
+  const feedbackLines=[
+    appliedReview.summary?`Session applied: ${appliedReview.summary}`:'',
+    nextSession.status?`Status: ${nextSession.status}.`:'',
+    completedDelta?`Completed tasks: ${completedDelta}.`:'',
+    Number.isFinite(durationMinutes)?`Time spent: ${durationMinutes}m.`:'',
+    appliedReview.interpretation?.nextBestAction?.title?`Next action: ${appliedReview.interpretation.nextBestAction.title}.`:''
+  ].filter(Boolean);
+  if(feedbackLines.length){
+    S.chatHistory.push({role:'ai',content:feedbackLines.join(' ')});
+    saveAll();
+  }
   renderDashboardSessionControls();
   renderTasks();
   renderSessionWorkspace();
@@ -8282,7 +8798,7 @@ async function applySessionReviewResults(){
   updTaskBadge();
   updMilestoneBar();
   updRoadmapProgress();
-  if(S.roadmap) renderRM();
+  if(S.roadmap) refreshRoadmapSelectionViews();
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
@@ -8330,10 +8846,27 @@ async function applySessionReviewResults(){
   }else if(nextSession.status==='blocked'){
     trackEvent('blocked_session_count');
   }
+  }catch(error){
+    const message=String(error?.message||'Unable to apply review.');
+    setSessionReviewSubmitState(false,message);
+    toast2('Review apply failed',message);
+    return;
+  }
+  setSessionReviewSubmitState(false,'');
 }
 function getTaskCalendarSource(){
   if(isExecutionStateObject(S.execution)){
-    return getAllExecutionTasks().filter((task)=>task.status!=='archived');
+    return getAllExecutionTasks()
+      .filter((task)=>task.status!=='archived')
+      .map((task)=>{
+        const stageIndex=Number.isFinite(Number(task?.linkedStageIndex))
+          ? Number(task.linkedStageIndex)
+          : Math.max(0,(Number(task?.linkedStage)||1)-1);
+        return {
+          ...task,
+          deadline:repairTaskDeadline(task,stageIndex)
+        };
+      });
   }
   return (S.tasks||[]).filter((task)=>task.status!=='archived');
 }
@@ -8702,8 +9235,10 @@ function ensureTaskDetailBindings(){
   window.addEventListener('keydown',(event)=>{
     if(event.key!=='Escape') return;
     const taskOverlay=document.getElementById('task-detail-overlay');
+    const goalOverlay=document.getElementById('goal-detail-overlay');
     const calendarOverlay=document.getElementById('calendar-day-overlay');
     if(taskOverlay&&taskOverlay.classList.contains('on')) closeTaskDetail(true);
+    else if(goalOverlay&&goalOverlay.classList.contains('on')) closeGoalDetail(true);
     else if(calendarOverlay&&calendarOverlay.classList.contains('on')) closeCalendarDay(true);
   });
   taskDetailEscBound=true;
@@ -8836,6 +9371,7 @@ function renderTasks(){
   });
   syncActiveTasksFromExecution();
   renderSessionWorkspace();
+  renderActiveMilestoneHeader();
   renderDashboardSessionControls();
   const source=getTaskCalendarSource();
   const sub=document.getElementById('task-count-sub');
@@ -8863,6 +9399,7 @@ async function toggleTask(id){
   if(!t) return;
   const canonical=getExecutionTaskById(t.id);
   if(!canonical) return;
+  const stageIndex=Math.max(0,Number(canonical.linkedStageIndex)||Math.max(0,(Number(canonical.linkedStage)||1)-1));
   const currentlyDone=Boolean(canonical.done)||canonical.status==='done';
   canonical.done=!currentlyDone;
   canonical.status=canonical.done?'done':'active';
@@ -8870,6 +9407,9 @@ async function toggleTask(id){
   S.execution.updatedAt=nowIso();
   refreshExecutionProgress();
   syncActiveTasksFromExecution();
+  if(canonical.done){
+    maybeAutoAdvanceRoadmapStage({completedStageIndex:stageIndex}).catch((error)=>console.error('Stage auto-advance failed', error));
+  }
   saveTasks();
   saveAll();
   renderTasks();
@@ -8881,7 +9421,6 @@ async function toggleTask(id){
   updMilestoneBar();
   updRoadmapProgress();
   if(S.roadmap) renderRM();
-  await maybeAutoAdvanceRoadmapStage();
   syncActiveTasksFromExecution();
   renderTasks();
   if(S.roadmap) renderRM();
@@ -8927,18 +9466,50 @@ function updTaskBadge(){
 function saveTasks(){
   if(!canPersistUserData()) return;
   try{
+    const stages=getExecutionStages().length?getExecutionStages():(Array.isArray(S.roadmap)?S.roadmap:[]);
     const snapshot=isExecutionStateObject(S.execution)
       ? getExecutionActiveTasks()
         .filter((task)=>task.status!=='archived')
-        .map((task)=>({
-          ...task,
-          linkedStage:Number(task.linkedStageIndex||0)+1,
-          done:Boolean(task.done)||task.status==='done'
-        }))
-      : (S.tasks||[]);
+        .map((task)=>{
+          const stageIndex=Math.max(0,Math.min(stages.length-1,Number(task.linkedStageIndex)||0));
+          const stage=stages[stageIndex]||{};
+          return {
+            ...task,
+            linkedStage:Number(task.linkedStageIndex||0)+1,
+            done:Boolean(task.done)||task.status==='done',
+            deadline:repairTaskDeadline(task,stageIndex,stages)||stage?.targetDate||S.user.deadline||task.deadline||''
+          };
+        })
+      : (S.tasks||[]).map((task)=>({
+        ...task,
+        deadline:repairTaskDeadline(task,Number(task.linkedStageIndex)||Math.max(0,(Number(task.linkedStage)||1)-1),stages)||task.deadline||''
+      }));
     localStorage.setItem('sa_tasks',JSON.stringify(snapshot));
     localStorage.setItem('sa_context_summary',refreshContextSummary());
   }catch(e){}
+}
+function repairTasksInState(){
+  let changed=false;
+  const stages=getExecutionStages().length?getExecutionStages():(Array.isArray(S.roadmap)?S.roadmap:[]);
+  if(isExecutionStateObject(S.execution)){
+    const tasks=getExecutionActiveTasks();
+    tasks.forEach((task)=>{
+      const stageIndex=Math.max(0,Math.min(stages.length-1,Number(task.linkedStageIndex)||0));
+      const repaired=repairTaskDeadline(task,stageIndex,stages)||stages[stageIndex]?.targetDate||S.user.deadline||task.deadline||'';
+      if(String(repaired||'')!==String(task.deadline||'')){
+        task.deadline=repaired;
+        changed=true;
+      }
+    });
+  }else if(Array.isArray(S.tasks)){
+    S.tasks=S.tasks.map((task)=>{
+      const idx=Math.max(0,Number(task.linkedStageIndex)||Math.max(0,(Number(task.linkedStage)||1)-1));
+      const repaired=repairTaskDeadline(task,idx,stages)||task.deadline||'';
+      if(String(repaired||'')!==String(task.deadline||'')) changed=true;
+      return {...task,deadline:repaired};
+    });
+  }
+  return changed;
 }
 function loadTasks(){
   if(!canPersistUserData()){S.tasks=[];return;}
@@ -8961,6 +9532,9 @@ function loadTasks(){
         linkedStage:1,
         linkedStageIndex:0
       }));
+    }
+    if(repairTasksInState()){
+      saveTasks();
     }
   }catch(e){
     S.tasks=[];
@@ -9034,12 +9608,165 @@ function applyAiTasks(){
 }
 
 /* ══ GOALS ══ */
-function addGoal(){document.getElementById('goal-form').style.display='flex';}
-function saveGoal(){const t=document.getElementById('goal-title-input').value.trim();if(!t)return;const g={id:Date.now(),title:t,deadline:document.getElementById('goal-deadline-input').value,desc:document.getElementById('goal-desc-input').value.trim(),pct:0};S.goals=S.goals||[];S.goals.unshift(g);document.getElementById('goal-title-input').value='';document.getElementById('goal-desc-input').value='';document.getElementById('goal-form').style.display='none';saveGoals();renderGoals();toast2('Цель добавлена','');}
-function renderGoals(){const el=document.getElementById('goal-list');if(!el)return;if(!(S.goals||[]).length){el.innerHTML='<div class="task-empty"><span class="task-empty-icon">◎</span>Целей пока нет</div>';return;}el.innerHTML=(S.goals||[]).map(g=>`<div class="goal-card"><div class="goal-card-progress"><div class="goal-card-fill" style="width:${g.pct||0}%"></div></div><div class="goal-card-body"><div class="goal-card-title" contenteditable="true" onblur="editGoalField(${g.id},'title',this.textContent)">${escHtml(g.title)}</div><div class="goal-card-desc" contenteditable="true" onblur="editGoalField(${g.id},'desc',this.textContent)">${escHtml(g.desc||'Добавь описание…')}</div><div class="goal-card-meta">${g.deadline?`<span class="goal-tag-item">📅 ${g.deadline}</span>`:''}<span class="goal-tag-item">Готово: ${g.pct||0}%</span></div></div><div class="goal-card-footer"><input class="goal-pct-in" type="number" min="0" max="100" value="${g.pct||0}" onchange="updateGoalPct(${g.id},this.value)"/> % <span style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:4px">прогресс</span><button class="btn btn-danger btn-sm" onclick="deleteGoal(${g.id})" style="margin-left:auto">Удалить</button></div></div>`).join('');}
+function addGoal(){document.getElementById('goal-form')?.style.setProperty('display','flex');}
+function saveGoal(){const t=document.getElementById('goal-title-input')?.value.trim();if(!t)return;const g={id:Date.now(),title:t,deadline:document.getElementById('goal-deadline-input')?.value||'',desc:document.getElementById('goal-desc-input')?.value.trim()||'',pct:0};S.goals=S.goals||[];S.goals.unshift(g);const titleInput=document.getElementById('goal-title-input');if(titleInput) titleInput.value='';const descInput=document.getElementById('goal-desc-input');if(descInput) descInput.value='';const form=document.getElementById('goal-form');if(form) form.style.display='none';saveGoals();renderGoals();toast2('Цель добавлена','');}
+function getGoalById(id){return (S.goals||[]).find((goal)=>Number(goal.id)===Number(id))||null;}
+function getGoalLinkedStageInfo(goal){
+  const stages=getExecutionStages();
+  const explicitIndexRaw=goal?.stageIndex??goal?.milestoneIndex??goal?.linkedStageIndex;
+  const explicitIndex=Number(explicitIndexRaw);
+  if(Number.isFinite(explicitIndex)&&explicitIndex>=0){
+    const stage=getExecutionStage(explicitIndex)||stages[explicitIndex]||null;
+    if(stage) return {stage,stageIndex:explicitIndex,inferred:false};
+  }
+  const stageId=String(goal?.stageId||goal?.milestoneId||'').trim();
+  if(stageId){
+    const stageIndex=stages.findIndex((stage)=>String(stage?.id||'')===stageId);
+    if(stageIndex>=0){
+      return {stage:getExecutionStage(stageIndex)||stages[stageIndex],stageIndex,inferred:false};
+    }
+  }
+  const deadline=normalizeTaskCalendarDate(goal?.deadline||goal?.targetDate||'');
+  if(deadline&&stages.length){
+    const stageIndex=getCalendarMilestoneIndexForDate(deadline);
+    if(stageIndex>=0){
+      return {stage:getExecutionStage(stageIndex)||stages[stageIndex],stageIndex,inferred:true};
+    }
+  }
+  return null;
+}
+function ensureGoalDetailBindings(){
+  ensureTaskDetailBindings();
+}
+function buildGoalDetailMarkup(goal){
+  if(!goal){
+    return `<div class="task-detail-headline">
+      <div>
+        <div class="task-detail-kicker">Goal detail</div>
+        <div class="task-detail-title" id="goal-detail-title">Goal not found</div>
+      </div>
+      <button class="task-detail-close" onclick="closeGoalDetail()">Close</button>
+    </div>
+    <div class="calendar-day-empty" style="margin-top:14px;">The selected goal no longer exists.</div>`;
+  }
+  const pct=Math.min(100,Math.max(0,Number(goal.pct||0)));
+  const status=pct>=100?'Completed':pct>0?'In progress':'Not started';
+  const linked=getGoalLinkedStageInfo(goal);
+  const linkedStage=linked?.stage||null;
+  const relatedTasks=linkedStage?getTasksForStage(linked.stageIndex,{includeArchived:false}):[];
+  const rationale=String(goal.rationale||goal.why||goal.reason||'').trim();
+  const desc=String(goal.desc||goal.description||'').trim();
+  const deadline=String(goal.deadline||goal.targetDate||'').trim();
+  const titleValue=escHtml(goal.title||'Untitled goal');
+  const stageLabel=linkedStage
+    ? `${linked.inferred?'Inferred from deadline: ':'Linked milestone: '}${linkedStage.title||`Stage ${linked.stageIndex+1}`}`
+    : '';
+  return `<div class="task-detail-headline">
+    <div>
+      <div class="task-detail-kicker">Goal detail</div>
+      <div class="task-detail-title" id="goal-detail-title">${titleValue}</div>
+    </div>
+    <button class="task-detail-close" onclick="closeGoalDetail()" aria-label="Close goal detail">Close</button>
+  </div>
+  <div class="task-detail-meta">
+    <span class="task-detail-chip">Status: ${escHtml(status)}</span>
+    <span class="task-detail-chip">Progress: ${pct}%</span>
+    ${deadline?`<span class="task-detail-chip">Deadline: ${escHtml(deadline)}</span>`:''}
+    ${stageLabel?`<span class="task-detail-chip">${escHtml(stageLabel)}</span>`:''}
+  </div>
+  ${desc?`<div class="task-detail-section"><div class="task-detail-label">Description</div><p>${escHtml(desc)}</p></div>`:''}
+  ${rationale?`<div class="task-detail-section"><div class="task-detail-label">Why this matters</div><p>${escHtml(rationale)}</p></div>`:''}
+  ${linkedStage?`<div class="task-detail-section"><div class="task-detail-label">Linked milestone</div><p>${escHtml(linkedStage.title||`Stage ${linked.stageIndex+1}`)}${linkedStage.objective?`<br>${escHtml(linkedStage.objective)}`:''}</p></div>`:''}
+  ${relatedTasks.length?`<div class="task-detail-section"><div class="task-detail-label">Related tasks</div><div class="calendar-day-panel-list">${relatedTasks.map((task)=>`<button class="calendar-day-panel-task" onclick="event.stopPropagation();openTaskDetail(${Number(task.id)})"><div class="calendar-day-task-head"><span class="calendar-day-task-title">${escHtml(getTaskTitle(task))}</span><span class="calendar-day-task-prio prio-${normalizeTaskPriority(task.priority||task.prio)}">${escHtml(taskPrioLabel(task.priority||task.prio))}</span></div><div class="calendar-day-task-meta"><span>${escHtml(task.deadline||'No deadline')}</span><span>${escHtml(task.done||task.status==='done'?'Done':'Active')}</span></div></button>`).join('')}</div></div>`:''}
+  <div class="task-detail-section">
+    <div class="task-detail-label">Edit goal</div>
+    <div style="display:grid;gap:10px;">
+      <div class="field"><label>Title</label><input class="inp" id="goal-detail-edit-title" value="${titleValue.replace(/"/g,'&quot;')}" /></div>
+      <div class="field"><label>Description</label><textarea class="inp" id="goal-detail-edit-desc" rows="3">${escHtml(desc)}</textarea></div>
+      <div class="field"><label>Progress</label><input class="inp" id="goal-detail-edit-pct" type="number" min="0" max="100" value="${pct}" /></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" onclick="saveGoalDetail(${Number(goal.id)})">Save changes</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteGoal(${Number(goal.id)})">Delete</button>
+      </div>
+    </div>
+  </div>`;
+}
+function renderGoalDetail(){
+  const el=document.getElementById('goal-detail-content');
+  if(!el) return;
+  el.innerHTML=buildGoalDetailMarkup(getGoalById(activeGoalDetailId));
+}
+function openGoalDetail(id){
+  ensureGoalDetailBindings();
+  const goal=getGoalById(id);
+  if(!goal){toast2('Goal not found','Reload goals and try again.');return;}
+  activeGoalDetailId=Number(goal.id);
+  renderGoalDetail();
+  const overlay=document.getElementById('goal-detail-overlay');
+  if(overlay) overlay.classList.add('on');
+  document.body.classList.add('task-detail-open');
+}
+function closeGoalDetail(silent=false){
+  const overlay=document.getElementById('goal-detail-overlay');
+  if(overlay) overlay.classList.remove('on');
+  if(!silent){
+    const content=document.getElementById('goal-detail-content');
+    if(content) content.innerHTML='';
+  }
+  activeGoalDetailId=null;
+  const taskOverlay=document.getElementById('task-detail-overlay');
+  if(!taskOverlay||!taskOverlay.classList.contains('on')){
+    document.body.classList.remove('task-detail-open');
+  }
+}
+function onGoalDetailOverlayClick(event){
+  if(event.target&&event.target.id==='goal-detail-overlay') closeGoalDetail();
+}
+function saveGoalDetail(id){
+  const goal=getGoalById(id);
+  if(!goal) return;
+  goal.title=document.getElementById('goal-detail-edit-title')?.value.trim()||goal.title;
+  goal.desc=document.getElementById('goal-detail-edit-desc')?.value.trim()||'';
+  goal.pct=Math.min(100,Math.max(0,parseInt(document.getElementById('goal-detail-edit-pct')?.value||goal.pct||0,10)||0));
+  saveGoals();
+  renderGoals();
+  renderGoalDetail();
+  toast2('Goal updated','');
+}
+function renderGoals(){
+  const el=document.getElementById('goal-list');
+  if(!el) return;
+  if(!(S.goals||[]).length){
+    el.innerHTML='<div class="task-empty"><span class="task-empty-icon">◎</span>Целей пока нет</div>';
+    return;
+  }
+  el.innerHTML=(S.goals||[]).map((goal)=>{
+    const pct=Math.min(100,Math.max(0,Number(goal.pct||0)));
+    const linked=getGoalLinkedStageInfo(goal);
+    const stageLabel=linked?.stage
+      ? `${linked.inferred?'Inferred stage: ':'Milestone: '}${linked.stage.title||`Stage ${linked.stageIndex+1}`}`
+      : '';
+    return `<div class="goal-card" role="button" tabindex="0" onclick="openGoalDetail(${Number(goal.id)})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openGoalDetail(${Number(goal.id)})}">
+      <div class="goal-card-progress"><div class="goal-card-fill" style="width:${pct}%"></div></div>
+      <div class="goal-card-body">
+        <div class="goal-card-title">${escHtml(goal.title)}</div>
+        <div class="goal-card-desc">${escHtml(goal.desc||'Добавь описание…')}</div>
+        <div class="goal-card-meta">
+          ${goal.deadline?`<span class="goal-tag-item">📅 ${escHtml(goal.deadline)}</span>`:''}
+          ${stageLabel?`<span class="goal-tag-item">${escHtml(stageLabel)}</span>`:''}
+          <span class="goal-tag-item">Готово: ${pct}%</span>
+        </div>
+      </div>
+      <div class="goal-card-footer">
+        <input class="goal-pct-in" type="number" min="0" max="100" value="${pct}" onchange="event.stopPropagation();updateGoalPct(${Number(goal.id)},this.value)" onclick="event.stopPropagation()"/> % <span style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:4px">progress</span>
+        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteGoal(${Number(goal.id)})" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
 function editGoalField(id,f,val){const g=(S.goals||[]).find(g=>g.id===id);if(g&&val.trim()&&val.trim()!=='Добавь описание…'){g[f]=val.trim();saveGoals();}}
-function updateGoalPct(id,val){const g=(S.goals||[]).find(g=>g.id===id);if(g){g.pct=Math.min(100,Math.max(0,parseInt(val)||0));saveGoals();renderGoals();}}
-function deleteGoal(id){if(!confirm('Delete?'))return;S.goals=(S.goals||[]).filter(g=>g.id!==id);saveGoals();renderGoals();}
+function updateGoalPct(id,val){const g=(S.goals||[]).find(g=>g.id===id);if(g){g.pct=Math.min(100,Math.max(0,parseInt(val)||0));saveGoals();renderGoals();if(Number(activeGoalDetailId)===Number(id)) renderGoalDetail();}}
+function deleteGoal(id){if(!confirm('Delete goal?'))return;S.goals=(S.goals||[]).filter(g=>g.id!==id);saveGoals();renderGoals();if(Number(activeGoalDetailId)===Number(id)) closeGoalDetail(true);}
 function saveGoals(){if(!canPersistUserData()) return;try{localStorage.setItem('sa_goals',JSON.stringify(S.goals||[]));localStorage.setItem('sa_context_summary',refreshContextSummary());}catch(e){}}
 function loadGoals(){if(!canPersistUserData()){S.goals=[];return;}try{S.goals=JSON.parse(localStorage.getItem('sa_goals')||'[]');}catch(e){S.goals=[];}}
 async function aiReviewGoals(){const goals=S.goals||[];if(!goals.length){toast2('Нет целей','Сначала добавь цели');return;}const bar=document.getElementById('goals-ai-bar'),txt=document.getElementById('goals-ai-txt');bar.style.display='';txt.innerHTML='<span class="spin-sm"></span> Разбираю цели через Gemini…';try{const reply=await gemini(buildGoalsReviewPrompt(goals),sysp(),500,{},'goals_review');txt.textContent=reply;}catch(e){txt.textContent='⚠ '+e.message;}}
@@ -9143,6 +9870,11 @@ document.addEventListener('DOMContentLoaded',async ()=>{
   await loadRuntimeConfig();
   initBetaDeadlineInput();
   enforceBetaOnboardingModes();
+  const notesTab=document.getElementById('tab-notes');
+  if(notesTab) notesTab.style.display=AI_CHAT_ENABLED?'':'none';
+  document.querySelectorAll('button[aria-label="Open AI chat"], button[onclick*="gp(\'notes\')"]').forEach((button)=>{
+    button.style.display=AI_CHAT_ENABLED?'':'none';
+  });
   switchWorkTab('tasks');
   initAuthFlow();
 });

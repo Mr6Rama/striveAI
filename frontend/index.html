@@ -209,8 +209,8 @@
     </div>
     <nav class="header-tabs">
       <button class="htab on" id="tab-dashboard" onclick="gp('dashboard')"><span class="tab-icon">⊞</span> <span>Dashboard</span></button>
-      <!-- MERGED: Tasks + Goals into one tab -->
-      <button class="htab" id="tab-work" onclick="gp('work')"><span class="tab-icon">☑</span> <span>Tasks &amp; Goals</span> <span class="htab-badge" id="task-badge" style="display:none">0</span></button>
+      <button class="htab" id="tab-work" onclick="gp('work')"><span class="tab-icon">☑</span> <span>Tasks</span> <span class="htab-badge" id="task-badge" style="display:none">0</span></button>
+      <button class="htab" id="tab-goals" onclick="gp('goals')"><span class="tab-icon">◎</span> <span>Goals</span></button>
       <button class="htab" id="tab-notes" onclick="gp('notes')"><span class="tab-icon">≡</span> <span>AI Chat</span></button>
       <!-- MERGED: Roadmap contains Progress inside -->
       <button class="htab" id="tab-roadmap" onclick="gp('roadmap')"><span class="tab-icon">⊢</span> <span>Roadmap</span></button>
@@ -324,73 +324,59 @@
       </div>
     </div>
 
-    <!-- TASKS & GOALS — MERGED -->
+    <!-- TASKS -->
     <div class="pg" id="pg-work">
-      <div class="page-head">
-        <div><div class="page-title">Tasks &amp; Goals</div><div class="page-sub">Read-only milestone view. Start sessions from Dashboard.</div></div>
-        <div class="page-actions" id="work-actions">
-          <!-- Buttons swap based on sub-tab -->
-        </div>
-      </div>
-      <!-- Sub-tabs -->
-      <div class="tg-sub-tabs">
-        <button class="tg-sub-tab on" id="st-tasks" onclick="switchWorkTab('tasks')">☑ Tasks <span id="task-count-sub" style="font-size:9px;margin-left:4px;color:var(--muted)"></span></button>
-        <button class="tg-sub-tab" id="st-goals" onclick="switchWorkTab('goals')">◎ Goals</button>
-      </div>
-
-      <!-- TASKS panel -->
-      <div class="tg-panel on" id="wp-tasks">
-        <div class="tasks-body">
-          <div class="ai-bar" id="tasks-ai-bar" style="display:none">
-            <div class="ai-bar-icon">⚡</div>
-            <div class="ai-bar-txt" id="tasks-ai-txt"></div>
-            <div class="ai-bar-actions">
-              <button class="btn btn-primary btn-sm" onclick="applyAiTasks()">Apply</button>
-              <button class="btn btn-ghost btn-sm" onclick="document.getElementById('tasks-ai-bar').style.display='none'">✕</button>
-            </div>
+      <div class="tasks-body">
+        <div class="page-head">
+          <div><div class="page-title">Tasks</div><div class="page-sub">Read-only milestone task view. Start sessions from Dashboard.</div></div>
+          <div class="page-actions" id="work-actions">
+            <!-- Buttons for task actions -->
           </div>
-          <div id="session-workspace"></div>
-          <div class="tasks-calendar-shell">
-            <div class="tasks-calendar-top">
-              <div class="calendar-nav-shell">
-                <div class="calendar-kicker">Planning context</div>
-                <div class="calendar-title" id="task-calendar-title">April 2026</div>
-                <div class="calendar-actions">
-                  <button class="btn btn-ghost btn-sm" onclick="moveTaskCalendarMonth(-1)">←</button>
-                  <button class="btn btn-ghost btn-sm" onclick="goTaskCalendarToday()">Today</button>
-                  <button class="btn btn-ghost btn-sm" onclick="moveTaskCalendarMonth(1)">→</button>
-                </div>
+        </div>
+        <div class="task-stage-banner">
+          <div>
+            <div class="task-stage-kicker">Active milestone</div>
+            <div class="task-stage-title" id="task-stage-title">No active milestone</div>
+            <div class="task-stage-meta" id="task-stage-meta">Generate a roadmap to start milestone execution.</div>
+          </div>
+          <div class="task-stage-meta" id="task-count-sub"></div>
+        </div>
+        <div id="session-workspace"></div>
+        <div class="tasks-calendar-shell">
+          <div class="tasks-calendar-top">
+            <div>
+              <div class="calendar-kicker">Milestone schedule</div>
+              <div class="calendar-title" id="task-calendar-title">Tasks calendar</div>
+            </div>
+            <div class="calendar-nav-shell">
+              <div class="calendar-actions">
+                <button class="btn btn-ghost btn-sm" onclick="moveTaskCalendarMonth(-1)">← Prev</button>
+                <button class="btn btn-ghost btn-sm" onclick="goTaskCalendarToday()">Today</button>
+                <button class="btn btn-ghost btn-sm" onclick="moveTaskCalendarMonth(1)">Next →</button>
               </div>
             </div>
-            <div class="calendar-weekdays" id="task-calendar-weekdays"></div>
-            <div class="calendar-grid" id="task-calendar-grid"></div>
-            <div class="calendar-footer" id="task-calendar-footer"></div>
-            <div class="task-list" id="task-list" style="display:none"></div>
           </div>
+          <div class="calendar-legend" id="task-calendar-legend"></div>
+          <div class="calendar-weekdays" id="task-calendar-weekdays"></div>
+          <div class="calendar-grid" id="task-calendar-grid"></div>
+          <div class="calendar-footer" id="task-calendar-footer"></div>
         </div>
       </div>
+    </div>
 
-      <!-- GOALS panel -->
-      <div class="tg-panel" id="wp-goals">
-        <div class="goals-wrap" style="padding-top:16px;">
-          <div class="goal-add-form" id="goal-form">
-            <div class="field"><label>Goal title</label><input class="inp" id="goal-title-input" placeholder="e.g. Ship MVP"/></div>
-            <div style="display:flex;gap:10px">
-              <div class="field" style="flex:1"><label>Deadline</label><input class="inp" type="date" id="goal-deadline-input"/></div>
-            </div>
-            <div class="field"><label>Description</label><textarea class="inp" id="goal-desc-input" rows="2" placeholder="What does success look like?"></textarea></div>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-primary btn-sm" onclick="saveGoal()">Save Goal</button>
-              <button class="btn btn-ghost btn-sm" onclick="document.getElementById('goal-form').style.display='none'">Cancel</button>
-            </div>
-          </div>
-          <div class="ai-bar" id="goals-ai-bar" style="display:none">
-            <div class="ai-bar-icon">⚡</div>
-            <div class="ai-bar-txt" id="goals-ai-txt"></div>
-            <div class="ai-bar-actions"><button class="btn btn-ghost btn-sm" onclick="document.getElementById('goals-ai-bar').style.display='none'">✕</button></div>
-          </div>
-          <div id="goal-list"></div>
+    <!-- GOALS -->
+    <div class="pg" id="pg-goals">
+      <div class="page-head">
+        <div><div class="page-title">Goals</div><div class="page-sub">Track progress, edit, and remove goals independently from tasks.</div></div>
+        <div class="page-actions" id="goals-actions"></div>
+      </div>
+      <div class="goals-wrap" style="padding-top:16px;">
+        <div class="ai-bar" id="goals-ai-bar" style="display:none">
+          <div class="ai-bar-icon">⚡</div>
+          <div class="ai-bar-txt" id="goals-ai-txt"></div>
+          <div class="ai-bar-actions"><button class="btn btn-ghost btn-sm" onclick="document.getElementById('goals-ai-bar').style.display='none'">✕</button></div>
         </div>
+        <div id="goal-list"></div>
       </div>
     </div>
 
@@ -401,7 +387,7 @@
           <div><div class="page-title">AI Chat</div><div class="page-sub">Daily check-ins, blockers, and quick prompts</div></div>
           <div class="page-actions">
             <button class="btn btn-ghost btn-sm" onclick="gp('roadmap')">Roadmap</button>
-            <button class="btn btn-primary btn-sm" onclick="gp('work')">Tasks &amp; Goals</button>
+            <button class="btn btn-primary btn-sm" onclick="gp('work')">Tasks</button>
           </div>
         </div>
         <div id="chat-inner"></div>
@@ -568,6 +554,12 @@
   </div>
 </div>
 
+<div class="task-detail-overlay goal-detail-overlay" id="goal-detail-overlay" onclick="onGoalDetailOverlayClick(event)">
+  <div class="task-detail-modal goal-detail-modal" role="dialog" aria-modal="true" aria-labelledby="goal-detail-title" onclick="event.stopPropagation()">
+    <div id="goal-detail-content"></div>
+  </div>
+</div>
+
 <div class="calendar-day-overlay" id="calendar-day-overlay" onclick="onCalendarDayOverlayClick(event)">
   <div class="calendar-day-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-day-title" onclick="event.stopPropagation()">
     <div id="calendar-day-content"></div>
@@ -579,12 +571,12 @@
 <div class="milestone-checkpoint-overlay" id="milestone-checkpoint-overlay" onclick="if(event.target===this){clearMilestoneCheckpointState()}">
   <div class="milestone-checkpoint-card" role="dialog" aria-modal="true" aria-labelledby="milestone-checkpoint-title" onclick="event.stopPropagation()">
     <div class="milestone-checkpoint-kicker">Checkpoint reached</div>
-    <div class="milestone-checkpoint-title" id="milestone-checkpoint-title">Milestone completed</div>
-    <div class="milestone-checkpoint-copy" id="milestone-checkpoint-copy">Ready for the next stage.</div>
+    <div class="milestone-checkpoint-title" id="milestone-checkpoint-title">Congratulations, you completed this milestone</div>
+    <div class="milestone-checkpoint-copy" id="milestone-checkpoint-copy">Generate AI tasks for the next milestone and continue straight into review.</div>
     <div class="milestone-checkpoint-stage" id="milestone-checkpoint-stage"></div>
     <div class="milestone-checkpoint-actions">
       <button class="btn btn-ghost btn-sm" onclick="clearMilestoneCheckpointState()">Later</button>
-      <button class="btn btn-primary btn-sm" onclick="generateTasksForNextMilestone()">Generate Tasks for the Next Milestone</button>
+      <button class="btn btn-primary btn-sm" onclick="generateTasksForNextMilestone()">Generate next milestone tasks</button>
     </div>
   </div>
 </div>

@@ -54,7 +54,7 @@ const ACTION_MAX_OUTPUT_TOKENS = {
   goals_review: 500,
   note_process: 700,
   session_review: 900,
-  chat: 900,
+  chat: 1000,
 };
 const ACTION_CONTEXT_LIMITS = {
   roadmap: { promptChars: 9000, systemChars: 2200, totalChars: 11000 },
@@ -65,7 +65,7 @@ const ACTION_CONTEXT_LIMITS = {
   goals_review: { promptChars: 4200, systemChars: 1500, totalChars: 5200 },
   note_process: { promptChars: 5200, systemChars: 1500, totalChars: 6200 },
   session_review: { promptChars: 5200, systemChars: 1500, totalChars: 6400 },
-  chat: { promptChars: 6000, systemChars: 1700, totalChars: 7200 },
+  chat: { promptChars: 3600, systemChars: 900, totalChars: 4200 },
 };
 const TASK_GENERATION_ACTIONS = new Set(['tasks', 'tasks_skeleton', 'task_detail']);
 
@@ -128,6 +128,26 @@ function compactTaskDetailPrompt(prompt, systemCtx) {
   return {
     prompt: `${promptText.replace(/\nStage outcome:[^\n]*/i, '')}\nCOMPACT RETRY: return the task_detail contract only, with one short sentence per field.`,
     systemCtx: systemText.length > 1200 ? `${systemText.slice(0, 900)}\n...[compact]\n${systemText.slice(-120)}` : systemText,
+  };
+}
+
+function compactChatPrompt(prompt, systemCtx) {
+  const promptText = String(prompt || '').replace(/\n{3,}/g, '\n\n').trim();
+  const systemText = String(systemCtx || '').replace(/\n{3,}/g, '\n\n').trim();
+  const compactPrompt = promptText.length > 2200
+    ? `${promptText.slice(0, 1400)}\n...[compact]\n${promptText.slice(-220)}`
+    : promptText;
+  const compactSystem = systemText.length > 720
+    ? `${systemText.slice(0, 520)}\n...[compact]\n${systemText.slice(-100)}`
+    : systemText;
+  return {
+    prompt: [
+      compactPrompt,
+      'COMPACT RETRY: answer in max 4 short bullets.',
+      'Include exactly one bottleneck, one focus for today, one next step, and one question.',
+      'Use only current app data. No motivational filler.',
+    ].filter(Boolean).join('\n'),
+    systemCtx: compactSystem,
   };
 }
 
@@ -347,6 +367,27 @@ function salvageTaskDetail(raw) {
   return { usable: true, repairedText: repairedText.trim() };
 }
 
+function salvageChatResponse(raw) {
+  const text = String(raw || '').replace(/\r/g, '').trim();
+  if (!text) return { usable: false, repairedText: '', truncated: false };
+  const compact = text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+\n/g, '\n').trim();
+  const lines = compact.split('\n').map((line) => line.trim()).filter(Boolean);
+  const bullets = lines.filter((line) => /^[-•*]\s+/.test(line)).slice(0, 4);
+  let repairedText = bullets.length ? bullets.join('\n') : compact;
+  repairedText = repairedText
+    .split(/(?<=[.!?])\s+/)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(bullets.length ? '\n' : ' ');
+  repairedText = repairedText.replace(/\s+\n/g, '\n').trim();
+  if (!repairedText) repairedText = compact.slice(0, 500).trim();
+  if (repairedText.length < 60) {
+    return { usable: false, repairedText, truncated: true };
+  }
+  return { usable: true, repairedText, truncated: true };
+}
+
 function extractTaskDetailPromptContext(prompt) {
   const text = String(prompt || '');
   const pick = (pattern) => {
@@ -364,36 +405,21 @@ function extractTaskDetailPromptContext(prompt) {
   };
 }
 
-function buildFallbackTaskDetailContract(prompt, opts = {}) {
-  const promptCtx = extractTaskDetailPromptContext(prompt);
-  const title = String(promptCtx.title || opts?.taskTitle || opts?.stageTitle || 'Task').trim();
-  const stageTitle = String(promptCtx.stageTitle || opts?.stageTitle || 'Stage').trim();
-  const objective = String(promptCtx.objective || opts?.stageObjective || 'validate demand and keep execution moving').trim();
-  const outcome = String(promptCtx.outcome || opts?.stageOutcome || 'a measurable stage outcome').trim();
-  const deadline = String(promptCtx.deadline || opts?.deadline || 'none').trim();
-  const description = `Execute "${title}" for ${stageTitle}.`;
-  const why = `WHY | Keeps ${objective} moving with a concrete execution step.`;
-  const deliverable = `DELIVERABLE | A verifiable result for "${title}".`;
-  const done = `DONE | The task is finished and the result is recorded.`;
-  return {
-    usable: true,
-    repairedText: [
-      'TASK_DETAIL_START',
-      `TITLE | ${title}`,
-      `DESCRIPTION | ${description}`,
-      why,
-      deliverable,
-      done,
-      'PRIORITY | med',
-      `DEADLINE | ${deadline || 'none'}`,
-      'TASK_DETAIL_END',
-    ].join('\n'),
-    title,
-    stageTitle,
-    objective,
-    outcome,
-    deadline,
-  };
+function clampDateLikeToWindow(value, startDate, endDate) {
+  const raw = String(value || '').trim();
+  const start = toIsoDateOnly(startDate);
+  const end = toIsoDateOnly(endDate);
+  if (!raw || raw === 'none') return end || start || 'none';
+  const normalized = toIsoDateOnly(raw);
+  if (!normalized) return end || start || raw;
+  let time = new Date(`${normalized}T00:00:00`).getTime();
+  if (Number.isFinite(new Date(`${start}T00:00:00`).getTime()) && time < new Date(`${start}T00:00:00`).getTime()) {
+    time = new Date(`${start}T00:00:00`).getTime();
+  }
+  if (Number.isFinite(new Date(`${end}T00:00:00`).getTime()) && time > new Date(`${end}T00:00:00`).getTime()) {
+    time = new Date(`${end}T00:00:00`).getTime();
+  }
+  return toIsoDateOnly(new Date(time));
 }
 
 function extractRoadmapTargetCount(prompt, fallbackCount = 0) {
@@ -1260,6 +1286,14 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
         systemCtx: trimmedCtx.systemCtx,
       });
     }
+    if (safeAction === 'chat' && effectiveMaxTokens > 800) {
+      attempts.push({
+        maxTokens: Math.max(650, Math.min(800, effectiveMaxTokens - 140)),
+        prompt: trimmedCtx.prompt,
+        systemCtx: trimmedCtx.systemCtx,
+        compactRetry: true,
+      });
+    }
     const retryBackoffMs = TRANSIENT_RETRY_BACKOFF_MS;
 
     let lastFailure = null;
@@ -1267,6 +1301,7 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
     let lastChainAttempt = 0;
     let lastAttemptMaxTokens = effectiveMaxTokens;
     let lastRetryAttempt = 0;
+    let lastChatSalvage = null;
     for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
       const attempt = attempts[attemptIndex];
       lastChainAttempt = attemptIndex + 1;
@@ -1277,6 +1312,8 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
         ? compactRoadmapPrompt(trimmedCtx.prompt, trimmedCtx.systemCtx, requestedRoadmapCount)
         : safeAction === 'task_detail' && attemptIndex > 0
           ? compactTaskDetailPrompt(trimmedCtx.prompt, trimmedCtx.systemCtx)
+          : safeAction === 'chat' && attemptIndex > 0
+            ? compactChatPrompt(trimmedCtx.prompt, trimmedCtx.systemCtx)
         : { prompt: attempt.prompt, systemCtx: attempt.systemCtx };
       const fullPrompt = attemptPrompt.systemCtx ? `${attemptPrompt.systemCtx}\n\n---\n\n${attemptPrompt.prompt}` : attemptPrompt.prompt;
       for (let retryIndex = 0; retryIndex <= retryBackoffMs.length; retryIndex += 1) {
@@ -1534,10 +1571,9 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
                   truncated: true,
                 });
               }
-              const fallbackDetail = buildFallbackTaskDetailContract(trimmedCtx.prompt, opts);
               logGeminiRequest({
                 ...baseLog,
-                logType: 'truncated_response_usable',
+                logType: 'truncated_response_invalid',
                 upstreamStatus: result.upstreamStatus,
                 upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
                 finishReason: result.finishReason || '',
@@ -1546,24 +1582,8 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
                 retryAttempt: retryIndex,
                 latencyMs: Date.now() - attemptStartedAt,
               });
-              baseLog.logType = 'success';
-              baseLog.upstreamStatus = result.upstreamStatus;
-              baseLog.upstreamErrorCode = result.upstreamErrorCode;
-              baseLog.finishReason = result.finishReason;
-              baseLog.latencyMs = Date.now() - startedAt;
-              baseLog.attempt = providerAttempt;
-              baseLog.chainAttempt = attemptIndex + 1;
-              baseLog.retryAttempt = retryIndex;
-              lastRetryAttempt = retryIndex;
-              logGeminiRequest(baseLog);
-              return res.json({
-                text: fallbackDetail.repairedText,
-                finishReason: result.finishReason || '',
-                requestId,
-                status: 'degraded_success',
-                degraded: true,
-                truncated: true,
-              });
+              lastFailure = { ...result, ...classifyFailure(result) };
+              break;
             }
             if (safeAction === 'roadmap') {
               const salvagedRoadmap = roadmapStructured && roadmapStructured.usable
@@ -1604,7 +1624,44 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
                 });
               }
             }
-            if (!TASK_GENERATION_ACTIONS.has(safeAction)) {
+            if (safeAction === 'chat') {
+              const salvagedChat = salvageChatResponse(result.text || '');
+              lastChatSalvage = salvagedChat.usable ? salvagedChat : lastChatSalvage;
+              if (salvagedChat.usable) {
+                logGeminiRequest({
+                  ...baseLog,
+                  logType: 'truncated_response_usable',
+                  upstreamStatus: result.upstreamStatus,
+                  upstreamErrorCode: result.upstreamErrorCode || 'MAX_TOKENS',
+                  finishReason: result.finishReason || '',
+                  attempt: providerAttempt,
+                  chainAttempt: attemptIndex + 1,
+                  retryAttempt: retryIndex,
+                  latencyMs: Date.now() - attemptStartedAt,
+                });
+                baseLog.logType = 'success';
+                baseLog.upstreamStatus = result.upstreamStatus;
+                baseLog.upstreamErrorCode = result.upstreamErrorCode;
+                baseLog.finishReason = result.finishReason;
+                baseLog.latencyMs = Date.now() - startedAt;
+                baseLog.attempt = providerAttempt;
+                baseLog.chainAttempt = attemptIndex + 1;
+                baseLog.retryAttempt = retryIndex;
+                lastRetryAttempt = retryIndex;
+                logGeminiRequest(baseLog);
+                return res.json({
+                  text: salvagedChat.repairedText,
+                  finishReason: result.finishReason || '',
+                  requestId,
+                  status: 'degraded_success',
+                  degraded: true,
+                  truncated: true,
+                });
+              }
+              lastFailure = { ...result, ...classifyFailure(result) };
+              break;
+            }
+            if (!TASK_GENERATION_ACTIONS.has(safeAction) && safeAction !== 'chat') {
               const repaired = parseJsonWithRepair(result.text || '');
               if (repaired.usable) {
                 logGeminiRequest({
@@ -1765,10 +1822,9 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
               truncated: true,
             });
           }
-          const fallbackDetail = buildFallbackTaskDetailContract(trimmedCtx.prompt, opts);
           logGeminiRequest({
             ...baseLog,
-            logType: 'truncated_response_usable',
+            logType: 'truncated_response_invalid',
             upstreamStatus: result.timedOut ? 'TIMEOUT' : result.upstreamStatus,
             upstreamErrorCode: result.upstreamErrorCode || failure.code,
             finishReason: result.finishReason || '',
@@ -1777,23 +1833,8 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
             retryAttempt: retryIndex,
             latencyMs: Date.now() - attemptStartedAt,
           });
-          baseLog.logType = 'success';
-          baseLog.upstreamStatus = result.timedOut ? 'TIMEOUT' : result.upstreamStatus;
-          baseLog.upstreamErrorCode = result.upstreamErrorCode || failure.code;
-          baseLog.finishReason = result.finishReason || '';
-          baseLog.latencyMs = Date.now() - startedAt;
-          baseLog.attempt = providerAttempt;
-          baseLog.chainAttempt = attemptIndex + 1;
-          baseLog.retryAttempt = retryIndex;
-          logGeminiRequest(baseLog);
-          return res.json({
-            text: fallbackDetail.repairedText,
-            finishReason: result.finishReason || '',
-            requestId,
-            status: 'degraded_success',
-            degraded: true,
-            truncated: true,
-          });
+          lastFailure = { ...result, ...classifyFailure(result) };
+          break;
         }
 
         if (
@@ -1830,16 +1871,43 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
       }
     }
 
-    if (safeAction === 'task_detail') {
-      const fallbackDetail = buildFallbackTaskDetailContract(trimmedCtx.prompt, opts);
-      const fallbackLogType = lastFailure?.code === 'RESPONSE_TRUNCATED' || lastFailure?.finishReason === 'MAX_TOKENS'
-        ? 'truncated_response_usable'
-        : 'task_detail_fallback_used';
+    if (safeAction === 'chat' && lastChatSalvage?.usable) {
       logGeminiRequest({
         ...baseLog,
-        logType: fallbackLogType,
+        logType: 'truncated_response_usable',
         upstreamStatus: lastFailure?.timedOut ? 'TIMEOUT' : lastFailure?.upstreamStatus || 0,
-        upstreamErrorCode: lastFailure?.upstreamErrorCode || lastFailure?.code || 'TASK_DETAIL_FALLBACK',
+        upstreamErrorCode: lastFailure?.upstreamErrorCode || lastFailure?.code || 'MAX_TOKENS',
+        finishReason: lastFailure?.finishReason || 'MAX_TOKENS',
+        attempt: providerAttempt,
+        chainAttempt: lastChainAttempt,
+        retryAttempt: lastRetryAttempt,
+        latencyMs: Date.now() - startedAt,
+      });
+      baseLog.logType = 'success';
+      baseLog.upstreamStatus = lastFailure?.timedOut ? 'TIMEOUT' : lastFailure?.upstreamStatus || 0;
+      baseLog.upstreamErrorCode = lastFailure?.upstreamErrorCode || lastFailure?.code || 'MAX_TOKENS';
+      baseLog.finishReason = lastFailure?.finishReason || 'MAX_TOKENS';
+      baseLog.latencyMs = Date.now() - startedAt;
+      baseLog.attempt = providerAttempt;
+      baseLog.chainAttempt = lastChainAttempt;
+      baseLog.retryAttempt = lastRetryAttempt;
+      logGeminiRequest(baseLog);
+      return res.json({
+        text: lastChatSalvage.repairedText,
+        finishReason: lastFailure?.finishReason || 'MAX_TOKENS',
+        requestId,
+        status: 'degraded_success',
+        degraded: true,
+        truncated: true,
+      });
+    }
+
+    if (safeAction === 'task_detail') {
+      logGeminiRequest({
+        ...baseLog,
+        logType: 'final_failure',
+        upstreamStatus: lastFailure?.timedOut ? 'TIMEOUT' : lastFailure?.upstreamStatus || 0,
+        upstreamErrorCode: lastFailure?.upstreamErrorCode || lastFailure?.code || 'TASK_DETAIL_FAILED',
         finishReason: lastFailure?.finishReason || '',
         attempt: providerAttempt,
         chainAttempt: lastChainAttempt,
@@ -1848,24 +1916,32 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
       });
       baseLog.logType = 'success';
       baseLog.upstreamStatus = lastFailure?.timedOut ? 'TIMEOUT' : lastFailure?.upstreamStatus || 0;
-      baseLog.upstreamErrorCode = lastFailure?.upstreamErrorCode || lastFailure?.code || 'TASK_DETAIL_FALLBACK';
+      baseLog.upstreamErrorCode = lastFailure?.upstreamErrorCode || lastFailure?.code || 'TASK_DETAIL_FAILED';
       baseLog.finishReason = lastFailure?.finishReason || '';
       baseLog.latencyMs = Date.now() - startedAt;
       baseLog.attempt = providerAttempt;
       baseLog.chainAttempt = lastChainAttempt;
       baseLog.retryAttempt = lastRetryAttempt;
       logGeminiRequest(baseLog);
-      return res.json({
-        text: fallbackDetail.repairedText,
-        finishReason: lastFailure?.finishReason || '',
+      return res.status(502).json({
+        error: 'Task detail generation failed. Please retry.',
+        code: 'task_detail_generation_failed',
+        retryable: true,
         requestId,
-        status: 'degraded_success',
-        degraded: true,
-        truncated: Boolean(lastFailure?.code === 'RESPONSE_TRUNCATED' || lastFailure?.finishReason === 'MAX_TOKENS'),
       });
     }
 
     const safeFailure = lastFailure || { code: 'UPSTREAM_5XX', httpStatus: 502, upstreamStatus: 0 };
+    if (safeAction === 'chat' && safeFailure.code === 'RESPONSE_TRUNCATED' && String(lastChatSalvage?.repairedText || '').trim()) {
+      return res.json({
+        text: lastChatSalvage.repairedText,
+        finishReason: safeFailure.finishReason || 'MAX_TOKENS',
+        requestId,
+        status: 'degraded_success',
+        degraded: true,
+        truncated: true,
+      });
+    }
     baseLog.logType = 'final_failure';
     baseLog.upstreamStatus = safeFailure.timedOut ? 'TIMEOUT' : safeFailure.upstreamStatus;
     baseLog.upstreamErrorCode = safeFailure.upstreamErrorCode || safeFailure.code;
