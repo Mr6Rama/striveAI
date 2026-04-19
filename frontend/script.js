@@ -1182,6 +1182,17 @@ function normalizeTaskDeadlineValueInWindow(value,options={}){
   if(!parsed) return '';
   return clampIsoDateToWindow(parsed,options.stageStartDate||'',options.stageTargetDate||options.deadline||'');
 }
+function clampTaskDeadlinePlanToWindow(plan,startDate='',endDate=''){
+  const source=Array.isArray(plan)?plan:[];
+  return source.map((value,index)=>({
+    index,
+    value:normalizeTaskDeadlineValueInWindow(value,{stageStartDate:startDate,stageTargetDate:endDate})
+      || clampIsoDateToWindow(value,startDate,endDate)
+      || endDate
+      || startDate
+      || '',
+  })).map((entry)=>entry.value);
+}
 function getMilestonePalette(index,total=0){
   const palette=[
     {accent:'#8FB7FF', tint:'rgba(143,183,255,.12)', border:'rgba(143,183,255,.24)', glow:'rgba(143,183,255,.16)'},
@@ -1403,9 +1414,10 @@ function normalizeFounderTask(raw,options={}){
   const title=getTaskTitle(raw);
   const deadlinePlan=Array.isArray(options.deadlinePlan)?options.deadlinePlan:[];
   const taskIndex=Number.isFinite(Number(options.taskIndex))?Number(options.taskIndex):0;
-  const plannedDeadline=deadlinePlan[taskIndex]||deadlinePlan[deadlinePlan.length-1]||'';
   const windowStart=options.stageStartDate||'';
   const windowEnd=options.stageTargetDate||options.deadline||'';
+  const clampedDeadlinePlan=clampTaskDeadlinePlanToWindow(deadlinePlan,windowStart,windowEnd);
+  const plannedDeadline=clampedDeadlinePlan[taskIndex]||clampedDeadlinePlan[clampedDeadlinePlan.length-1]||'';
   const rawDeadline=normalizeTaskDeadlineValueInWindow(raw?.deadline,{stageStartDate:windowStart,stageTargetDate:windowEnd});
   const fallbackDeadline=normalizeTaskDeadlineValueInWindow(plannedDeadline,{stageStartDate:windowStart,stageTargetDate:windowEnd});
   const normalized={
@@ -1493,7 +1505,7 @@ function normalizeFounderTasks(raw,options={}){
   const seen=new Set();
   const out=[];
   const deadlinePlan=Array.isArray(options.deadlinePlan)&&options.deadlinePlan.length
-    ? options.deadlinePlan
+    ? clampTaskDeadlinePlanToWindow(options.deadlinePlan,stageWindowStart,stageWindowEnd)
     : buildTaskDeadlinePlan({
       stageStartDate:stageWindowStart,
       stageTargetDate:stageWindowEnd,
@@ -4020,27 +4032,43 @@ async function advanceRoadmapStage(options={}){
       toast2('Roadmap completed','All milestones are completed.');
       return true;
     }
-    stages.forEach((stage,idx)=>{
-      if(idx<nextIndex) stage.status='completed';
-      else if(idx===nextIndex) stage.status='active';
-      else stage.status='locked';
-    });
-    S.execution.currentStageIndex=nextIndex;
-    S.execution.status='active';
-    S.execution.updatedAt=nowIso();
+      stages.forEach((stage,idx)=>{
+        if(idx<nextIndex) stage.status='completed';
+        else if(idx===nextIndex) stage.status='active';
+        else stage.status='locked';
+      });
+      S.execution.currentStageIndex=nextIndex;
+      S.execution.status='active';
+      S.execution.updatedAt=nowIso();
     logRoadmapPipelineEvent('active_stage_enrichment_skipped_mvp_mode',{
       stageCount:getExecutionStages().length,
       activeStageId:stages[nextIndex]?.id||'',
       activeStageIndex:nextIndex
-    });
-    refreshExecutionProgress();
-    syncActiveTasksFromExecution();
-    const nextStage=stages[nextIndex];
-    toast2('Milestone completed',`Next milestone unlocked: ${nextStage?.title||`Stage ${nextIndex+1}`}`);
-    await initializeTasksForActiveStage({force:true,silentFallback:false,reason:String(options.reason||'milestone_completed')});
-    saveTasks();
-    saveAll();
-    return true;
+      });
+      refreshExecutionProgress();
+      syncActiveTasksFromExecution();
+      const nextStage=stages[nextIndex];
+      milestoneCheckpointState={
+        stageIndex:nextIndex,
+        stageId:String(nextStage?.id||''),
+        title:String(nextStage?.title||`Stage ${nextIndex+1}`),
+        openedAt:nowIso(),
+        taskGenerationStarted:false
+      };
+      logInfo({
+        area:'frontend',
+        module:'frontend/script.js',
+        function:'execution_flow',
+        action:'milestone_checkpoint_shown',
+        stageIndex:nextIndex,
+        stageId:String(nextStage?.id||''),
+        title:String(nextStage?.title||`Stage ${nextIndex+1}`)
+      });
+      toast2('Milestone completed',`Ready for the next stage: ${nextStage?.title||`Stage ${nextIndex+1}`}`);
+      renderMilestoneCheckpoint();
+      saveTasks();
+      saveAll();
+      return true;
   }finally{
     stageAdvanceInFlight=false;
   }
@@ -4053,6 +4081,63 @@ async function maybeAutoAdvanceRoadmapStage(){
   if(activeIndex<0) return false;
   if(!areStageTasksCompleted(activeIndex)) return false;
   return advanceRoadmapStage({force:false,reason:'all_stage_tasks_done'});
+}
+function clearMilestoneCheckpointState(){
+  milestoneCheckpointState=null;
+  const overlay=document.getElementById('milestone-checkpoint-overlay');
+  if(overlay) overlay.classList.remove('on');
+}
+function renderMilestoneCheckpoint(){
+  const overlay=document.getElementById('milestone-checkpoint-overlay');
+  if(!overlay){
+    return;
+  }
+  if(!milestoneCheckpointState){
+    overlay.classList.remove('on');
+    return;
+  }
+  const stage=getExecutionStage(milestoneCheckpointState.stageIndex);
+  const titleEl=document.getElementById('milestone-checkpoint-title');
+  const copyEl=document.getElementById('milestone-checkpoint-copy');
+  const stageEl=document.getElementById('milestone-checkpoint-stage');
+  if(titleEl) titleEl.textContent='Milestone completed';
+  if(copyEl) copyEl.textContent='Ready for the next stage. Generate tasks to continue the flow.';
+  if(stageEl) stageEl.textContent=stage?.title||milestoneCheckpointState.title||'Next milestone';
+  overlay.classList.add('on');
+}
+async function generateTasksForNextMilestone(){
+  ensureExecutionState();
+  if(!milestoneCheckpointState) return [];
+  const stageIndex=Number(milestoneCheckpointState.stageIndex);
+  const stage=getExecutionStage(stageIndex);
+  if(!stage) return [];
+  milestoneCheckpointState.taskGenerationStarted=true;
+  renderMilestoneCheckpoint();
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'execution_flow',
+    action:'next_milestone_task_generation_started',
+    stageIndex,
+    stageId:stage.id,
+    title:stage.title||`Stage ${stageIndex+1}`
+  });
+  const generated=await initializeTasksForActiveStage({force:true,silentFallback:false,reason:'next_milestone_checkpoint'});
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'execution_flow',
+    action:'next_milestone_task_preview_ready',
+    stageIndex,
+    stageId:stage.id,
+    taskCount:Array.isArray(generated)?generated.length:0
+  });
+  clearMilestoneCheckpointState();
+  renderTasks();
+  renderSessionWorkspace();
+  renderSessionOverlay();
+  if(S.roadmap) renderRM();
+  return generated;
 }
 async function geminiJSON(prompt,_responseJsonSchema,maxTokens=1000,systemCtx='',opts={},action='chat'){
   const callOpts={
@@ -6289,7 +6374,7 @@ function switchWorkTab(tab){
   // Swap action buttons
   const actions=document.getElementById('work-actions');
   if(tab==='tasks'){
-    actions.innerHTML=`<button class="btn btn-primary btn-sm" onclick="focusTaskInput()">+ Add Task</button>`;
+    actions.innerHTML=`<button class="btn btn-primary btn-sm" onclick="gp('dashboard')">Start working</button>`;
   } else {
     actions.innerHTML=`<button class="btn btn-primary btn-sm" onclick="addGoal()">+ Add Goal</button>`;
   }
@@ -6317,22 +6402,7 @@ function applyUserToUI(){
 
 /* ══ SESSION (start/done) ══ */
 function startSession(){
-  const focus=document.getElementById('focus-input').value.trim();
-  if(!focus){document.getElementById('focus-input').style.borderColor='var(--red)';document.getElementById('focus-input').focus();return;}
-  document.getElementById('focus-input').style.borderColor='';
-  document.getElementById('focus-input-row').style.display='none';
-  document.getElementById('default-actions').style.display='none';
-  document.getElementById('session-active-row').style.display='block';
-  document.getElementById('focus-display-text').textContent='🎯 Focus: '+focus;
-  const startTime=Date.now();
-  S.activeSession={startTime,focus,timerInterval:null};
-  S.activeSession.timerInterval=setInterval(()=>{
-    const elapsed=Date.now()-startTime;
-    const m=Math.floor(elapsed/60000),s=Math.floor((elapsed%60000)/1000);
-    document.getElementById('session-timer-display').textContent=String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
-  },1000);
-  feedLine(`Session started: "${focus}"`);
-  toast2('Session started!',focus);
+  openSessionOverlay();
 }
 function markDone(){
   if(isSessionRunning()){
@@ -6343,7 +6413,7 @@ function markDone(){
     applySessionReviewResults().catch((error)=>console.error('Session review apply failed',error));
     return;
   }
-  toast2('Start a session first','Select tasks and start the session from Tasks & Goals.');
+  toast2('Session required','Task status changes only happen inside a session.');
 }
 function logActivityInternal(focus,durationMin){const today=new Date().toDateString();if(!S.progress.activityLog.includes(today)){S.progress.activityLog.push(today);S.lastActivity=Date.now();updStreak();}}
 function updStreak(){let s=0;const today=new Date();for(let i=0;i<60;i++){const d=new Date(today);d.setDate(d.getDate()-i);if(S.progress.activityLog.includes(d.toDateString()))s++;else break;}S.progress.streak=s;}
@@ -7018,7 +7088,9 @@ async function sendChatMsg(msg){
 
 /* ══ TASKS ══ */
 let taskFilter='all',aiTasksDraft=null,activeTaskDetailId=null,taskDetailEscBound=false;
-let taskCalendarMonthAnchor=null,taskCalendarSelectedDate='';
+let taskCalendarMonthAnchor=null,taskCalendarSelectedDate='',taskCalendarSelectedTaskId=null;
+let sessionOverlayMode='';
+let milestoneCheckpointState=null;
 function getTaskById(id){
   const canonical=getExecutionTaskById(id);
   if(canonical){
@@ -7084,19 +7156,11 @@ function renderDashboardSessionControls(){
   const session=getExecutionSession();
   const running=Boolean(session&&session.status==='running');
   const reviewOpen=isSessionReviewOpen();
-  const focusInputRow=document.getElementById('focus-input-row');
   const defaultActions=document.getElementById('default-actions');
-  const activeRow=document.getElementById('session-active-row');
-  const focusDisplay=document.getElementById('focus-display-text');
-  const timerDisplay=document.getElementById('session-timer-display');
-  const focusInput=document.getElementById('focus-input');
-  const focusText=session?.goal||getExecutionSessionStage()?.objective||S.user.goal||'';
-  if(focusInput&&document.activeElement!==focusInput&&focusText) focusInput.value=focusText;
-  if(focusInputRow) focusInputRow.style.display=running||reviewOpen?'none':'flex';
-  if(defaultActions) defaultActions.style.display=running||reviewOpen?'none':'flex';
-  if(activeRow) activeRow.style.display=running||reviewOpen?'block':'none';
-  if(focusDisplay) focusDisplay.textContent=focusText?`🎯 Focus: ${focusText}`:'🎯 Focus: execution';
-  if(timerDisplay) timerDisplay.textContent=getSessionTimerLabel(session);
+  if(defaultActions){
+    defaultActions.style.display='flex';
+    defaultActions.innerHTML=`<button class="btn btn-primary btn-sm" onclick="openSessionOverlay()">${running||reviewOpen?'Open Session':'Start Session'}</button>`;
+  }
 }
 function renderSessionWorkspace(){
   const host=document.getElementById('session-workspace');
@@ -7115,106 +7179,98 @@ function renderSessionWorkspace(){
     host.innerHTML=`<div class="tasks-session-hero">
       <div class="tasks-session-hero-main">
         <div class="tasks-session-kicker">Session first</div>
-        <div class="tasks-session-title">Generate a roadmap to unlock session prep.</div>
-        <div class="tasks-session-copy">Your active milestone, selected tasks, and session review context will appear here once execution is available.</div>
+        <div class="tasks-session-title">Start from the Dashboard.</div>
+        <div class="tasks-session-copy">Tasks are read-only here. Open Dashboard to start a focused session and work from the active milestone.</div>
+      </div>
+      <div class="tasks-session-hero-side">
+        <div class="tasks-session-side-head">
+          <div class="tasks-session-side-label">Execution entry point</div>
+          <div class="tasks-session-side-sub">Milestones and tasks stay visible here. Session setup lives on Dashboard.</div>
+        </div>
+        <div class="tasks-session-actions">
+          <button class="btn btn-primary btn-sm" onclick="gp('dashboard')">Start working</button>
+        </div>
       </div>
     </div>`;
     return;
   }
-  const session=prepareExecutionSession();
   const stage=getExecutionSessionStage()||getExecutionStage(getExecutionActiveStageIndex());
   const stageIndex=stage?getExecutionStages().findIndex((item)=>String(item.id)===String(stage.id)):getExecutionActiveStageIndex();
   const stageTasks=getTasksForStage(stageIndex,{includeArchived:false});
-  const selectedIds=new Set((session?.taskIds||[]).map((taskId)=>Number(taskId)).filter((taskId)=>Number.isFinite(taskId)));
-  const recommendedIds=new Set(recommendSessionTaskIds(stageIndex));
-  const selectedTasks=(session?.taskIds||[])
-    .map((taskId)=>getExecutionTaskById(taskId))
-    .filter(Boolean);
-  const canEditSelection=String(session?.status||'planned')==='planned';
-  const sessionTasks=[...selectedTasks];
-  stageTasks.forEach((task)=>{
-    if(sessionTasks.length>=3) return;
-    if(!sessionTasks.some((item)=>Number(item.id)===Number(task.id))) sessionTasks.push(task);
-  });
-  const taskCards=sessionTasks.slice(0,3).map((task)=>{
-    const taskId=Number(task.id);
-    const checked=selectedIds.has(taskId);
-    const isRecommended=recommendedIds.has(taskId);
-    const status=String(task.status||'active');
-    return `<label class="tasks-session-task ${checked?'on':''} ${status==='done'?'done':''}">
-      <input type="checkbox" ${checked?'checked':''} ${canEditSelection?'':'disabled'} onchange="toggleSessionTaskSelection(${taskId}, this.checked)"/>
-      <div class="tasks-session-task-copy">
-        <div class="tasks-session-task-top">
-          <span class="tasks-session-task-title">${escHtml(getTaskTitle(task))}</span>
-          <span class="tasks-session-task-pill ${status}">${status==='blocked'?'Blocked':status==='done'?'Done':isRecommended?'Recommended':'Task'}</span>
-        </div>
-        <div class="tasks-session-task-meta">${escHtml(task.priority||task.prio||'med')} · ${task.estimateHours||2}h</div>
-      </div>
-    </label>`;
-  }).join('');
-  const timerLabel=getSessionTimerLabel(session);
-  const statusLabel=String(session?.status||'planned');
-  const milestoneDoneCount=stageTasks.filter((task)=>task.status==='done'||task.done).length;
-  const nextBestAction=String(
-    session?.review?.interpretation?.nextBestAction?.title
-    || S.execution?.lastReviewResult?.review?.interpretation?.nextBestAction?.title
-    || session?.outcomeSummary
-    || ''
-  ).trim();
-  const reviewCompact=buildSessionReviewCompactMarkup(S.execution?.lastReviewResult||session);
-  const primaryLabel=statusLabel==='running'?'Open Session':'Start Session';
-  const primaryDisabled=statusLabel!=='running'&&!selectedIds.size;
-  const primaryAction=statusLabel==='running'?'openSessionOverlay()':'startSession()';
+  const selectedTaskId=Number(activeTaskDetailId)||0;
   host.innerHTML=`<div class="tasks-session-hero">
     <div class="tasks-session-hero-main">
-      <div class="tasks-session-kicker">${escHtml(statusLabel==='running'?'Session in progress':'Current milestone')}</div>
+      <div class="tasks-session-kicker">Execution context</div>
       <div class="tasks-session-title">${escHtml(stage?.title||'No active milestone')}</div>
-      <div class="tasks-session-copy">${escHtml(stage?.objective||S.user.goal||'Generate a roadmap to define the next milestone objective.')}</div>
+      <div class="tasks-session-copy">${escHtml(stage?.objective||S.user.goal||'Open Dashboard to start a session against the active milestone.')}</div>
       <div class="tasks-session-meta">
         <span>${escHtml(stage?.status||'active')} milestone</span>
-        <span>${selectedTasks.length ? `${selectedTasks.length} task${selectedTasks.length===1?'':'s'} selected` : 'Choose up to 3 tasks'}</span>
-        <span>${timerLabel}</span>
+        <span>${stageTasks.length} visible task${stageTasks.length===1?'':'s'}</span>
+        <span>${stageTasks.filter((task)=>task.done||task.status==='done').length} done</span>
+        <span>${getSessionTimerLabel(getExecutionSession())}</span>
       </div>
     </div>
     <div class="tasks-session-hero-side">
       <div class="tasks-session-side-head">
-        <div class="tasks-session-side-label">Recommended tasks</div>
-        <div class="tasks-session-side-sub">${canEditSelection?'Pick 1-3 tasks for the next session.':'Selection is locked while the session is running.'}</div>
-      </div>
-      <div class="tasks-session-task-list">
-        ${taskCards || '<div class="session-empty-copy">No recommended tasks available yet.</div>'}
+        <div class="tasks-session-side-label">Session only</div>
+        <div class="tasks-session-side-sub">Tasks are read-only here. Completion and blocking happen inside a session on Dashboard.</div>
       </div>
       <div class="tasks-session-actions">
-        <button class="btn btn-primary btn-sm" onclick="${primaryAction}" ${primaryDisabled?'disabled':''}>${primaryLabel}</button>
-        <button class="btn btn-ghost btn-sm" onclick="openSessionOverlay()">Open Focus Mode</button>
+        <button class="btn btn-primary btn-sm" onclick="gp('dashboard')">Start working</button>
       </div>
     </div>
   </div>
   <div class="tasks-session-context">
     <div class="tasks-session-context-item">
       <span>Milestone progress</span>
-      <strong>${milestoneDoneCount}/${stageTasks.length||0} done</strong>
+      <strong>${stageTasks.filter((task)=>task.done||task.status==='done').length}/${stageTasks.length||0} done</strong>
     </div>
     <div class="tasks-session-context-item">
-      <span>Selection</span>
-      <strong>${selectedTasks.length ? `${selectedTasks.length}/3 ready` : 'Select one clear task'}</strong>
+      <span>Execution mode</span>
+      <strong>Session required for status changes</strong>
     </div>
     <div class="tasks-session-context-item">
-      <span>Next best action</span>
-      <strong>${escHtml(nextBestAction||'Choose the clearest task and start.')}</strong>
+      <span>Active tasks</span>
+      <strong>${stageTasks.length ? `${stageTasks.length} in the current milestone` : 'No tasks yet'}</strong>
     </div>
   </div>
-  ${reviewCompact?`<div class="tasks-session-review-row">${reviewCompact}</div>`:''}`;
+  <div class="tasks-session-list">
+    <div class="tasks-session-list-head">
+      <div>
+        <div class="tasks-session-list-title">Session tasks</div>
+        <div class="tasks-session-list-sub">Click a task to inspect the canonical detail view without leaving the session.</div>
+      </div>
+    </div>
+    <div class="tasks-session-task-grid">
+      ${stageTasks.length?stageTasks.map((task)=>{
+        const meta=decorateTaskWithMilestoneMeta(task);
+        const prio=normalizeTaskPriority(task.prio||task.priority);
+        const done=task.done||task.status==='done';
+        const selected=Number(task.id)===selectedTaskId;
+        return `<button class="tasks-session-task-card ${selected?'selected':''} ${done?'done':''}" style="--milestone-accent:${meta.milestoneColor};--milestone-tint:${meta.milestoneTint};--milestone-border:${meta.milestoneBorder};--milestone-glow:${meta.milestoneGlow};" onclick="openTaskDetail(${Number(task.id)})">
+          <div class="tasks-session-task-top">
+            <span class="tasks-session-task-title">${escHtml(getTaskTitle(task))}</span>
+            <span class="tasks-session-task-pill prio-${prio}">${escHtml(taskPrioLabel(prio))}</span>
+          </div>
+          <div class="tasks-session-task-meta">
+            <span>${escHtml(stage?.title||`Stage ${stageIndex+1}`)}</span>
+            <span>${escHtml(task.deadline||'No deadline')}</span>
+            <span>${done?'Done':escHtml(String(task.status||'active'))}</span>
+          </div>
+        </button>`;
+      }).join(''):'<div class="tasks-session-empty">No tasks are available for this milestone yet.</div>'}
+    </div>
+  </div>`;
   logInfo({
     area:'frontend',
     module:'frontend/script.js',
     function:'renderSessionWorkspace',
     action:'session_workspace_render_completed',
     taskCount:stageTasks.length,
-    selectedTaskIds:selectedTasks.map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id)),
+    activeTaskIds:stageTasks.map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id)),
     hasReviewResult:Boolean(S.execution?.lastReviewResult)
   });
-  if(statusLabel==='running'||isSessionReviewOpen()) renderSessionOverlay();
+  if(isSessionRunning()||isSessionReviewOpen()||sessionOverlayMode==='setup') renderSessionOverlay();
   else hideSessionOverlay();
 }
 function buildSessionReviewCompactMarkup(session){
@@ -7284,101 +7340,203 @@ function buildSessionReviewImpactMarkup(session){
     ${interpretation.nextBestAction?.reason?`<div class="session-review-next-copy">${escHtml(interpretation.nextBestAction.reason)}</div>`:''}
   </div>`:''}`;
 }
+function buildSessionSetupMarkup(session,stage,stageTasks){
+  const selectedIds=new Set((session?.taskIds||[]).map((taskId)=>Number(taskId)).filter((taskId)=>Number.isFinite(taskId)));
+  const selectedCount=selectedIds.size;
+  const taskCards=stageTasks.length
+    ? stageTasks.map((task)=>{
+        const taskId=Number(task.id);
+        const checked=selectedIds.has(taskId);
+        const meta=decorateTaskWithMilestoneMeta(task);
+        const status=String(task.status||'active');
+        return `<label class="session-task-card ${checked?'on':''} ${status==='done'?'done':''}" style="--milestone-accent:${meta.milestoneColor};--milestone-tint:${meta.milestoneTint};--milestone-border:${meta.milestoneBorder};--milestone-glow:${meta.milestoneGlow};">
+          <input type="checkbox" ${checked?'checked':''} onchange="toggleSessionTaskSelection(${taskId}, this.checked)"/>
+          <div class="session-task-copy">
+            <div class="session-task-top">
+              <span class="session-task-title">${escHtml(getTaskTitle(task))}</span>
+              <span class="session-task-pill ${status}">${status==='blocked'?'Blocked':status==='done'?'Done':'Task'}</span>
+            </div>
+            <div class="session-task-meta">${escHtml(task.priority||task.prio||'med')} · ${escHtml(task.deadline||'No deadline')}</div>
+          </div>
+        </label>`;
+      }).join('')
+    : '<div class="session-empty-copy">No tasks are ready in this milestone yet.</div>';
+  const focusValue=String(session?.goal||stage?.objective||S.user.goal||'');
+  return `<div class="session-prep-card">
+    <div class="session-prep-head">
+      <div>
+        <div class="session-kicker">Session setup</div>
+        <div class="session-prep-title">What are you focusing on?</div>
+        <div class="session-prep-sub">Pick 1-3 tasks from the active milestone. Session start is the only place where task status changes.</div>
+      </div>
+      <div class="session-status-chip planned">Planned</div>
+    </div>
+    <div class="session-prep-grid">
+      <div class="session-prep-summary">
+        <div class="session-summary-label">Active milestone</div>
+        <div class="session-summary-value">${escHtml(stage?.title||'No active milestone')}</div>
+        <div class="session-summary-row">
+          <span>${escHtml(stage?.status||'active')} milestone</span>
+          <span>${stageTasks.length} task${stageTasks.length===1?'':'s'}</span>
+        </div>
+        <div class="session-review-field">
+          <label for="session-setup-focus">Focus</label>
+          <input id="session-setup-focus" class="inp session-setup-focus" placeholder="What are you focusing on?" value="${escHtml(focusValue)}"/>
+        </div>
+      </div>
+      <div class="session-prep-list">
+        <div class="session-list-title">Tasks from this milestone</div>
+        <div class="session-list-sub">${selectedCount ? `${selectedCount}/3 selected` : 'Choose 1-3 tasks before starting.'}</div>
+        ${taskCards}
+      </div>
+    </div>
+    <div class="session-prep-footer">
+      <div class="session-prep-note">Focus is optional but encouraged. Tasks stay read-only until the session begins.</div>
+      <div class="session-prep-actions">
+        <button class="btn btn-ghost btn-sm" onclick="closeSessionOverlay()">Cancel</button>
+        <button class="btn btn-primary btn-sm" onclick="startSession()">Start Session</button>
+      </div>
+    </div>
+  </div>`;
+}
+function buildSessionRunMarkup(session,stage,taskIds,sessionTasks){
+  const goal=String(session.goal||stage?.objective||S.user.goal||'');
+  const taskRows=sessionTasks.length
+    ? sessionTasks.map((task)=>{
+        const taskStatus=String(task.status||'active');
+        return `<div class="session-run-task ${taskStatus}">
+          <div class="session-run-task-copy">
+            <div class="session-run-task-title">${escHtml(getTaskTitle(task))}</div>
+            <div class="session-run-task-meta">${escHtml(task.priority||task.prio||'med')} · ${escHtml(task.deadline||'No deadline')} · ${taskStatus}</div>
+          </div>
+          <div class="session-run-task-actions">
+            <button class="btn btn-primary btn-sm" onclick="completeSessionTask(${Number(task.id)})" ${taskStatus==='done'?'disabled':''}>Complete</button>
+            <button class="btn btn-ghost btn-sm" onclick="blockSessionTask(${Number(task.id)})" ${taskStatus==='blocked'?'disabled':''}>Blocked</button>
+          </div>
+        </div>`;
+      }).join('')
+    : '<div class="session-empty-copy">No session tasks selected.</div>';
+  return `<div class="session-modal">
+    <div class="session-modal-head">
+      <div>
+        <div class="session-kicker">Focused execution</div>
+        <div class="session-modal-title">${escHtml(stage?.title||'Active milestone')}</div>
+        <div class="session-modal-sub">${escHtml(goal)}</div>
+      </div>
+      <div class="session-status-chip running">running</div>
+    </div>
+    <div class="session-modal-metrics">
+      <div class="session-metric"><strong>${getSessionTimerLabel(session)}</strong><span>Elapsed</span></div>
+      <div class="session-metric"><strong>${escHtml(goal)}</strong><span>Session goal</span></div>
+      <div class="session-metric"><strong>${taskIds.length}</strong><span>Selected tasks</span></div>
+    </div>
+    <div class="session-modal-body session-modal-body--single">
+      <div class="session-modal-list">
+        <div class="session-list-head">
+          <div class="session-list-title">Working tasks</div>
+          <div class="session-list-sub">Complete or block tasks only while the session is running.</div>
+        </div>
+        ${taskRows}
+        <div class="session-review-actions">
+          <button class="btn btn-ghost btn-sm" onclick="pauseSession()">Pause</button>
+          <button class="btn btn-danger btn-sm" onclick="endSession('completed')">End Session</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+function buildSessionReviewMarkup(session,stage,taskIds,sessionTasks){
+  const review=normalizeExecutionSessionReview(session?.review||{});
+  const reviewAnswers=review.answers||normalizeSessionReviewAnswers();
+  const completedTaskTitles=sessionTasks.filter((task)=>task.done||task.status==='done').map((task)=>getTaskTitle(task)).filter(Boolean);
+  const completedPrefill=String(reviewAnswers.completed||completedTaskTitles.join(' · ')||session.outcomeSummary||'').trim();
+  const blockedPrefill=String(reviewAnswers.blocked||session.review?.blockers||'').trim();
+  const notesPrefill=String(reviewAnswers.changed||session.review?.notes||session.notes||'').trim();
+  const reviewSummary=buildSessionReviewImpactMarkup(session);
+  return `<div class="session-modal">
+    <div class="session-modal-head">
+      <div>
+        <div class="session-kicker">Session review</div>
+        <div class="session-modal-title">${escHtml(stage?.title||'Active milestone')}</div>
+        <div class="session-modal-sub">Answer 2-3 short questions. Completed tasks are prefilled from the session.</div>
+      </div>
+      <div class="session-status-chip ${session.status}">${escHtml(session.status||'completed')}</div>
+    </div>
+    <div class="session-modal-body session-modal-body--single">
+      <div class="session-review-card on">
+        <div class="session-list-title">Review session</div>
+        <div class="session-review-copy">What did you complete, what got blocked, and what changed?</div>
+        <div class="session-review-field">
+          <label>What did you complete?</label>
+          <textarea id="session-review-summary" class="inp session-review-text" placeholder="Completed task, shipped result, or concrete outcome.">${escHtml(completedPrefill)}</textarea>
+        </div>
+        <div class="session-review-field">
+          <label>What got blocked?</label>
+          <textarea id="session-review-blockers" class="inp session-review-text" placeholder="Blocked tasks, unfinished work, or unresolved issues.">${escHtml(blockedPrefill)}</textarea>
+        </div>
+        <div class="session-review-field">
+          <label>Anything important learned?</label>
+          <textarea id="session-review-notes" class="inp session-review-text" placeholder="Scope changes, blockers, or the next direction.">${escHtml(notesPrefill)}</textarea>
+        </div>
+        <div class="session-review-actions">
+          <button class="btn btn-primary btn-sm" onclick="applySessionReviewResults()">Apply Review</button>
+        </div>
+        ${reviewSummary?`<div class="session-review-summary-wrap">${reviewSummary}</div>`:''}
+      </div>
+    </div>
+  </div>`;
+}
 function renderSessionOverlay(){
   const host=document.getElementById('session-overlay');
   if(!host) return;
   ensureExecutionState();
   const session=getExecutionSession();
-  const visible=Boolean(session&&((session.status==='running')||isSessionReviewOpen()));
+  const plannedSetup=session&&session.status==='planned'&&sessionOverlayMode==='setup';
+  const visible=Boolean(session&&((session.status==='running')||isSessionReviewOpen()||plannedSetup));
   host.classList.toggle('on',visible);
   if(!visible){
     host.innerHTML='';
     clearSessionTimer();
+    document.body.classList.remove('task-detail-open');
     return;
   }
-  if(session.status==='running'&&!S.activeSession?.timerInterval) startSessionTimer();
   const stage=getExecutionSessionStage()||getExecutionStage(getExecutionActiveStageIndex());
-  const taskIds=(session?.taskIds||[]).slice(0,3);
-  const sessionTasks=taskIds
-    .map((taskId)=>getExecutionTaskById(taskId))
-    .filter(Boolean);
-  const statusLabel=String(session.status||'planned');
-  const reviewOpen=isSessionReviewOpen();
-  const reviewAnswers=session?.review?.answers||normalizeSessionReviewAnswers(session?.review||{});
-  const reviewSummary=buildSessionReviewImpactMarkup(session);
-  const taskRows=sessionTasks.map((task)=>{
-    const taskStatus=String(task.status||'active');
-    return `<div class="session-run-task ${taskStatus}">
-      <div class="session-run-task-copy">
-        <div class="session-run-task-title">${escHtml(getTaskTitle(task))}</div>
-        <div class="session-run-task-meta">${escHtml(task.priority||task.prio||'med')} · ${task.estimateHours||2}h · ${taskStatus}</div>
-      </div>
-      <div class="session-run-task-actions">
-        <button class="btn btn-primary btn-sm" onclick="completeSessionTask(${Number(task.id)})" ${taskStatus==='done'?'disabled':''}>Complete Task</button>
-        <button class="btn btn-ghost btn-sm" onclick="blockSessionTask(${Number(task.id)})" ${taskStatus==='blocked'?'disabled':''}>Mark Blocked</button>
-      </div>
-    </div>`;
-  }).join('');
-  const showReviewFields=reviewOpen||statusLabel!=='running';
-  host.innerHTML=`<div class="session-modal">
-    <div class="session-modal-head">
-      <div>
-        <div class="session-kicker">Focused Execution</div>
-        <div class="session-modal-title">${escHtml(stage?.title||'Active milestone')}</div>
-        <div class="session-modal-sub">${escHtml(stage?.objective||session.goal||S.user.goal||'')}</div>
-      </div>
-      <div class="session-status-chip ${statusLabel}">${statusLabel}</div>
-    </div>
-    <div class="session-modal-metrics">
-      <div class="session-metric"><strong>${getSessionTimerLabel(session)}</strong><span>Elapsed</span></div>
-      <div class="session-metric"><strong>${escHtml(session.goal||stage?.objective||S.user.goal||'')}</strong><span>Session goal</span></div>
-      <div class="session-metric"><strong>${taskIds.length}</strong><span>Selected tasks</span></div>
-    </div>
-    <div class="session-modal-body">
-      <div class="session-modal-list">
-        <div class="session-list-head">
-          <div class="session-list-title">Selected tasks</div>
-          <div class="session-list-sub">Complete or block tasks directly from the session surface.</div>
-        </div>
-        ${taskRows || '<div class="session-empty-copy">No session tasks selected.</div>'}
-      </div>
-      <div class="session-modal-side">
-      <div class="session-review-card ${reviewOpen?'on':''}">
-        <div class="session-list-title">${reviewOpen?'Review session':'Session controls'}</div>
-        <div class="session-review-copy">${reviewOpen?'Answer 3 short questions. The system will interpret them and update tasks, milestone progress, and the next session direction.':'Use the controls below to pause or end the session.'}</div>
-          <div class="session-review-field" style="display:${showReviewFields?'flex':'none'}">
-            <label>What did you actually complete?</label>
-            <textarea id="session-review-summary" class="inp session-review-text" placeholder="Completed task, shipped result, or concrete outcome.">${escHtml(reviewAnswers.completed||session.review?.summary||session.outcomeSummary||'')}</textarea>
-          </div>
-          <div class="session-review-field" style="display:${showReviewFields?'flex':'none'}">
-            <label>What stayed blocked or unfinished?</label>
-            <textarea id="session-review-blockers" class="inp session-review-text" placeholder="Blocked tasks, unfinished work, or unresolved issues.">${escHtml(reviewAnswers.blocked||session.review?.blockers||'')}</textarea>
-          </div>
-          <div class="session-review-field" style="display:${showReviewFields?'flex':'none'}">
-            <label>What slowed you down or changed?</label>
-            <textarea id="session-review-notes" class="inp session-review-text" placeholder="Scope changes, blockers, or the next direction.">${escHtml(reviewAnswers.changed||session.review?.notes||session.notes||'')}</textarea>
-          </div>
-          <div class="session-review-actions">
-            ${statusLabel==='running'
-              ? "<button class=\"btn btn-ghost btn-sm\" onclick=\"pauseSession()\">Pause</button><button class=\"btn btn-danger btn-sm\" onclick=\"endSession('completed')\">End Session</button>"
-              : ''}
-            <button class="btn btn-primary btn-sm" onclick="openSessionReview()">Review</button>
-            ${reviewOpen?'<button class="btn btn-primary btn-sm" onclick="applySessionReviewResults()">Apply Review</button>':''}
-          </div>
-          ${reviewSummary?`<div class="session-review-summary-wrap">${reviewSummary}</div>`:''}
-        </div>
-      </div>
-    </div>
-  </div>`;
+  const stageIndex=getExecutionStages().findIndex((item)=>String(item.id)===String(stage?.id||session?.stageId||''));
+  const resolvedStageIndex=stageIndex>=0?stageIndex:getExecutionActiveStageIndex();
+  const stageTasks=getTasksForStage(resolvedStageIndex,{includeArchived:false});
+  const taskIds=Array.from(new Set((session?.taskIds||[]).map((taskId)=>Number(taskId)).filter((taskId)=>Number.isFinite(taskId)))).slice(0,3);
+  const sessionTasks=taskIds.map((taskId)=>getExecutionTaskById(taskId)).filter(Boolean);
+  if(session.status==='running'&&!S.activeSession?.timerInterval) startSessionTimer();
+  if(session.status==='planned'){
+    host.innerHTML=buildSessionSetupMarkup(session,stage,stageTasks);
+    document.body.classList.add('task-detail-open');
+    return;
+  }
+  if(isSessionReviewOpen()||session.status!=='running'){
+    host.innerHTML=buildSessionReviewMarkup(session,stage,taskIds,sessionTasks);
+    document.body.classList.add('task-detail-open');
+    return;
+  }
+  host.innerHTML=buildSessionRunMarkup(session,stage,taskIds,sessionTasks);
+  document.body.classList.add('task-detail-open');
 }
 function hideSessionOverlay(){
   const host=document.getElementById('session-overlay');
   if(!host) return;
   host.classList.remove('on');
   host.innerHTML='';
+  sessionOverlayMode='';
+  document.body.classList.remove('task-detail-open');
 }
 function onSessionOverlayClick(event){
   if(event&&event.target!==event.currentTarget) return;
+  const session=getExecutionSession();
+  if(session&&session.status==='running') return;
+  closeSessionOverlay();
+}
+function closeSessionOverlay(){
+  sessionOverlayMode='';
+  hideSessionOverlay();
 }
 function toggleSessionTaskSelection(taskId,checked){
   ensureExecutionState();
@@ -7419,22 +7577,18 @@ function toggleSessionTaskSelection(taskId,checked){
 }
 function openSessionOverlay(){
   ensureExecutionState();
-  if(!hasExecutionStateReady()) return;
-  const session=getExecutionSession();
-  if(!session){
-    prepareExecutionSession();
-  }
-  if((getExecutionSession()?.status||session?.status)==='planned'){
-    startSession();
+  if(!hasExecutionStateReady()){
+    toast2('Roadmap required','Generate a roadmap before starting a session.');
     return;
   }
+  prepareExecutionSession({silent:true});
+  sessionOverlayMode=isSessionRunning()?'running':'setup';
   renderSessionOverlay();
-  if(!S.activeSession?.timerInterval&&isSessionRunning()) startSessionTimer();
 }
 function startSession(){
   ensureExecutionState();
   if(!hasExecutionStateReady()) return;
-  const prepared=prepareExecutionSession();
+  const prepared=prepareExecutionSession({silent:true});
   if(!prepared){
     toast2('No active milestone','Generate a roadmap first.');
     return;
@@ -7445,7 +7599,7 @@ function startSession(){
     renderSessionWorkspace();
     return;
   }
-  const focusInput=String(document.getElementById('focus-input')?.value||'').trim();
+  const focusInput=String(document.getElementById('session-setup-focus')?.value||'').trim();
   const startedAt=nowIso();
   const nextSession=normalizeExecutionSession({
     ...prepared,
@@ -7462,6 +7616,7 @@ function startSession(){
   },{stageId:prepared.stageId,goal:prepared.goal});
   S.execution.session=nextSession;
   S.execution.updatedAt=nowIso();
+  sessionOverlayMode='running';
   syncActiveSessionRuntime();
   startSessionTimer();
   renderDashboardSessionControls();
@@ -7540,6 +7695,7 @@ function endSession(outcome='completed'){
   },{stageId:session.stageId,goal:session.goal});
   S.execution.session=nextSession;
   S.execution.updatedAt=nowIso();
+  sessionOverlayMode='review';
   clearSessionTimer();
   syncActiveSessionRuntime();
   renderDashboardSessionControls();
@@ -7576,6 +7732,11 @@ function pauseSession(){
 function completeSessionTask(taskId){
   ensureExecutionState();
   if(!hasExecutionStateReady()) return;
+  const session=getExecutionSession();
+  if(!session||session.status!=='running'){
+    toast2('Session required','Complete tasks inside a running session.');
+    return;
+  }
   const canonical=getExecutionTaskById(taskId);
   if(!canonical) return;
   canonical.status='done';
@@ -7609,6 +7770,11 @@ function completeSessionTask(taskId){
 function blockSessionTask(taskId){
   ensureExecutionState();
   if(!hasExecutionStateReady()) return;
+  const session=getExecutionSession();
+  if(!session||session.status!=='running'){
+    toast2('Session required','Block tasks inside a running session.');
+    return;
+  }
   const canonical=getExecutionTaskById(taskId);
   if(!canonical) return;
   canonical.status='blocked';
@@ -8094,6 +8260,7 @@ async function applySessionReviewResults(){
     baseline:buildSessionBaseline(nextStageIndex)
   },{stageId:nextStage?.id||'',goal:nextStage?.objective||S.user.goal||''});
   S.execution.session=nextPlannedSession;
+  sessionOverlayMode='';
   syncActiveSessionRuntime();
   logInfo({
     area:'frontend',
@@ -8287,13 +8454,18 @@ function renderTaskCalendar(){
     const isToday=cellKey===todayKey;
     const isSelected=cellKey===taskCalendarSelectedDate;
     const milestoneMeta=getMilestoneVisualMetaForDate(cellKey);
+    const stageIndex=getCalendarMilestoneIndexForDate(cellKey);
+    const stage=getExecutionStage(stageIndex)||stages[stageIndex]||{};
+    const stageStart=toIsoDateOnly(stage?.startDate||stage?.start_date||'');
+    const stageEnd=toIsoDateOnly(stage?.targetDate||stage?.target_date||'');
+    const isBoundaryDay=stageIndex>=0&&(cellKey===stageStart||cellKey===stageEnd);
     const visibleTasks=tasks.slice(0,3);
     const moreCount=Math.max(0,tasks.length-visibleTasks.length);
     const weekdayName=new Intl.DateTimeFormat('en-US',{weekday:'short'}).format(cellDate);
     const zoneVars=milestoneMeta
       ? `--milestone-accent:${milestoneMeta.accent};--milestone-tint:${milestoneMeta.tint};--milestone-border:${milestoneMeta.border};--milestone-glow:${milestoneMeta.glow};`
       : '';
-    return `<div class="calendar-day ${inMonth?'':'out-month'} ${isToday?'today':''} ${isSelected?'selected':''} ${milestoneMeta?'milestone-zone':''}" style="${zoneVars}" onclick="openTaskCalendarDay(${JSON.stringify(cellKey)})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openTaskCalendarDay(${JSON.stringify(cellKey)})}" role="button" tabindex="0" aria-label="${weekdayName} ${cellDate.getDate()} ${formatTaskCalendarMonth(cellDate)}">
+    return `<div class="calendar-day ${inMonth?'':'out-month'} ${isToday?'today':''} ${isSelected?'selected':''} ${milestoneMeta?'milestone-zone':''} ${isBoundaryDay?'milestone-boundary':''} ${cellKey===stageStart&&milestoneMeta?'milestone-start':''} ${cellKey===stageEnd&&milestoneMeta?'milestone-end':''}" style="${zoneVars}" onclick="openTaskCalendarDay(${JSON.stringify(cellKey)})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openTaskCalendarDay(${JSON.stringify(cellKey)})}" role="button" tabindex="0" aria-label="${weekdayName} ${cellDate.getDate()} ${formatTaskCalendarMonth(cellDate)}">
       <div class="calendar-day-head">
         <div class="calendar-day-number">${cellDate.getDate()}</div>
         <div class="calendar-day-meta">${tasks.length?`${tasks.length}`:'&nbsp;'}</div>
@@ -8338,38 +8510,72 @@ function openTaskCalendarDay(dateKey){
   const tasks=dateKey==='__unscheduled__'
     ? unscheduled
     : (buckets.get(dateKey)||[]);
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'openTaskCalendarDay',
+    action:'calendar_day_opened',
+    dayKey:String(dateKey||''),
+    taskCount:tasks.length
+  });
   const milestoneMeta=dateKey==='__unscheduled__'?null:getMilestoneVisualMetaForDate(dateKey);
   const title=dateKey==='__unscheduled__'
     ? 'Unscheduled tasks'
     : new Intl.DateTimeFormat('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(new Date(`${dateKey}T00:00:00`));
-  content.innerHTML=`<div class="calendar-day-headline">
-    <div>
-      <div class="calendar-day-kicker">Calendar Day</div>
-      <div class="calendar-day-title" id="calendar-day-title">${escHtml(title)}</div>
-      ${milestoneMeta?`<div class="calendar-day-zone-pill" style="--milestone-accent:${milestoneMeta.accent};--milestone-tint:${milestoneMeta.tint};--milestone-border:${milestoneMeta.border};"> ${escHtml(milestoneMeta.label)} · ${escHtml(milestoneMeta.title)}</div>`:''}
-      <div class="calendar-day-sub">${tasks.length} task${tasks.length===1?'':'s'}</div>
+  let selectedTask=taskCalendarSelectedTaskId?getTaskById(taskCalendarSelectedTaskId):tasks[0]||null;
+  if(!selectedTask||!tasks.some((item)=>Number(item.id)===Number(selectedTask.id))){
+    selectedTask=tasks[0]||null;
+    taskCalendarSelectedTaskId=selectedTask?Number(selectedTask.id)||null:null;
+  }
+  const taskCards=tasks.length?tasks.map((task)=>{
+    const prio=normalizeTaskPriority(task.priority||task.prio);
+    const done=task.done||task.status==='done';
+    const taskMeta=decorateTaskWithMilestoneMeta(task);
+    const selected=Number(taskCalendarSelectedTaskId)===Number(task.id);
+    return `<button class="calendar-day-task milestone-zone ${done?'done':''} ${selected?'selected':''}" style="--milestone-accent:${taskMeta.milestoneColor};--milestone-tint:${taskMeta.milestoneTint};--milestone-border:${taskMeta.milestoneBorder};--milestone-glow:${taskMeta.milestoneGlow};" onclick="focusCalendarDayTask(${Number(task.id)})">
+      <div class="calendar-day-task-head">
+        <span class="calendar-day-task-title">${escHtml(getTaskTitle(task))}</span>
+        <span class="calendar-day-task-prio prio-${prio}">${escHtml(taskPrioLabel(prio))}</span>
+      </div>
+      <div class="calendar-day-task-meta">
+        <span>${done?'Done':'Active'}</span>
+        <span>${escHtml(task.deadline||'No deadline')}</span>
+      </div>
+    </button>`;
+  }).join(''):'<div class="calendar-day-empty">No tasks scheduled for this day.</div>';
+  content.innerHTML=`<div class="calendar-day-layout">
+    <div class="calendar-day-main">
+      <div class="calendar-day-headline">
+        <div>
+          <div class="calendar-day-kicker">Calendar Day</div>
+          <div class="calendar-day-title" id="calendar-day-title">${escHtml(title)}</div>
+          ${milestoneMeta?`<div class="calendar-day-zone-pill" style="--milestone-accent:${milestoneMeta.accent};--milestone-tint:${milestoneMeta.tint};--milestone-border:${milestoneMeta.border};"> ${escHtml(milestoneMeta.label)} · ${escHtml(milestoneMeta.title)}</div>`:''}
+          <div class="calendar-day-sub">${tasks.length} task${tasks.length===1?'':'s'}</div>
+        </div>
+        <button class="calendar-day-close" onclick="closeCalendarDay()" aria-label="Close calendar day">✕</button>
+      </div>
+      <div class="calendar-day-list">
+        ${taskCards}
+      </div>
     </div>
-    <button class="calendar-day-close" onclick="closeCalendarDay()" aria-label="Close calendar day">✕</button>
-  </div>
-  <div class="calendar-day-list">
-    ${tasks.length?tasks.map((task)=>{
-      const prio=normalizeTaskPriority(task.priority||task.prio);
-      const done=task.done||task.status==='done';
-      const taskMeta=decorateTaskWithMilestoneMeta(task);
-      return `<button class="calendar-day-task milestone-zone ${done?'done':''}" style="--milestone-accent:${taskMeta.milestoneColor};--milestone-tint:${taskMeta.milestoneTint};--milestone-border:${taskMeta.milestoneBorder};--milestone-glow:${taskMeta.milestoneGlow};" onclick="openTaskDetail(${Number(task.id)})">
-        <div class="calendar-day-task-head">
-          <span class="calendar-day-task-title">${escHtml(getTaskTitle(task))}</span>
-          <span class="calendar-day-task-prio prio-${prio}">${escHtml(taskPrioLabel(prio))}</span>
-        </div>
-        <div class="calendar-day-task-meta">
-          <span>${done?'Done':'Active'}</span>
-          <span>${escHtml(task.deadline||'No deadline')}</span>
-        </div>
-      </button>`;
-    }).join(''):'<div class="calendar-day-empty">No tasks scheduled for this day.</div>'}
+    <aside class="calendar-day-side">
+      ${renderCalendarDayTaskPanel(selectedTask,dateKey,milestoneMeta)}
+    </aside>
   </div>`;
   overlay.classList.add('on');
   document.body.classList.add('task-detail-open');
+}
+function focusCalendarDayTask(taskId){
+  taskCalendarSelectedTaskId=Number(taskId)||null;
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'focusCalendarDayTask',
+    action:'calendar_day_task_selected',
+    taskId:Number(taskId)||0,
+    dayKey:String(taskCalendarSelectedDate||''),
+  });
+  if(taskCalendarSelectedDate) openTaskCalendarDay(taskCalendarSelectedDate);
 }
 function closeCalendarDay(silent=false){
   const overlay=document.getElementById('calendar-day-overlay');
@@ -8379,6 +8585,7 @@ function closeCalendarDay(silent=false){
     if(content) content.innerHTML='';
   }
   taskCalendarSelectedDate='';
+  taskCalendarSelectedTaskId=null;
   const taskOverlay=document.getElementById('task-detail-overlay');
   if(!taskOverlay||!taskOverlay.classList.contains('on')){
     document.body.classList.remove('task-detail-open');
@@ -8386,6 +8593,94 @@ function closeCalendarDay(silent=false){
 }
 function onCalendarDayOverlayClick(event){
   if(event.target&&event.target.id==='calendar-day-overlay') closeCalendarDay();
+}
+function buildTaskDetailMarkup(task){
+  if(!task) return '<div class="calendar-day-empty">Select a task to see details.</div>';
+  const stageIndex=Math.max(0,Number(task.linkedStageIndex??(Number(task.linkedStage)||1)-1)||0);
+  const stage=getExecutionStage(stageIndex);
+  const stageLabel=`Stage ${stageIndex+1}`;
+  const stageTitle=escHtml(stage?.title||task.stageTitle||'Milestone');
+  const statusLabel=task.done?'Done':'Active';
+  const deadlineLabel=task.deadline?escHtml(task.deadline):'Not set';
+  const description=escHtml(task.description||'Открой задачу и зафиксируй план выполнения.');
+  const whyItMatters=escHtml(task.whyItMatters||task.why_it_matters||'Связь с текущей фазой должна быть явно подтверждена.');
+  const deliverable=escHtml(task.deliverable||'Конкретный артефакт или измеримый результат.');
+  const doneDefinition=escHtml(task.doneDefinition||task.done_definition||'Есть проверяемый результат, который можно показать команде.');
+  const stageObjective=escHtml(clipText(stage?.objective||task.stageObjective||'',180)||'Objective не указан.');
+  const prio=normalizeTaskPriority(task.prio||task.priority);
+  return `<div class="task-detail-shell task-detail-shell--calendar">
+    <div class="task-detail-headline">
+      <div>
+        <div class="task-detail-kicker">Day Task</div>
+        <div class="task-detail-title">${escHtml(getTaskTitle(task))}</div>
+      </div>
+      <button class="task-detail-close" onclick="openTaskDetail(${Number(task.id)})" aria-label="Open full task detail">Open</button>
+    </div>
+    <div class="task-detail-meta">
+      <span class="task-detail-chip">${statusLabel}</span>
+      <span class="task-detail-chip prio-${prio}">${escHtml(taskPrioLabel(prio))}</span>
+      <span class="task-detail-chip">${deadlineLabel}</span>
+      <span class="task-detail-chip">${escHtml(stageLabel)}</span>
+      <span class="task-detail-chip">${stageTitle}</span>
+    </div>
+    <div class="task-detail-section">
+      <div class="task-detail-label">Description</div>
+      <p>${description}</p>
+    </div>
+    <div class="task-detail-section">
+      <div class="task-detail-label">Deliverable</div>
+      <p>${deliverable}</p>
+    </div>
+    <div class="task-detail-section">
+      <div class="task-detail-label">Done Criteria</div>
+      <p>${doneDefinition}</p>
+    </div>
+    <div class="task-detail-section">
+      <div class="task-detail-label">Why This Matters</div>
+      <p>${whyItMatters}</p>
+    </div>
+    <div class="task-detail-section">
+      <div class="task-detail-label">Milestone Objective</div>
+      <p>${stageObjective}</p>
+    </div>
+  </div>`;
+}
+function renderCalendarDayTaskPanel(task,dateKey,milestoneMeta){
+  const tasksForDay=getTaskCalendarSource().filter((item)=>normalizeTaskCalendarDate(item.deadline)===dateKey);
+  const headerTitle=dateKey==='__unscheduled__'
+    ? 'Unscheduled tasks'
+    : 'Day details';
+  const subtitle=task?`1 selected of ${tasksForDay.length} task${tasksForDay.length===1?'':'s'}`:`${tasksForDay.length} task${tasksForDay.length===1?'':'s'} for this day`;
+  return `<div class="calendar-day-panel">
+    <div class="calendar-day-panel-head">
+      <div>
+        <div class="calendar-day-kicker">Selected Day</div>
+        <div class="calendar-day-panel-title">${escHtml(headerTitle)}</div>
+        ${dateKey!=='__unscheduled__'?`<div class="calendar-day-panel-date">${escHtml(new Intl.DateTimeFormat('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(new Date(`${dateKey}T00:00:00`)))}</div>`:''}
+        ${milestoneMeta?`<div class="calendar-day-zone-pill" style="--milestone-accent:${milestoneMeta.accent};--milestone-tint:${milestoneMeta.tint};--milestone-border:${milestoneMeta.border};">${escHtml(milestoneMeta.label)} · ${escHtml(milestoneMeta.title)}</div>`:''}
+      </div>
+      <div class="calendar-day-sub">${subtitle}</div>
+    </div>
+    <div class="calendar-day-panel-list">
+      ${tasksForDay.length?tasksForDay.map((item)=>{
+        const prio=normalizeTaskPriority(item.priority||item.prio);
+        const selected=Number(taskCalendarSelectedTaskId)===Number(item.id);
+        return `<button class="calendar-day-panel-task ${selected?'selected':''}" onclick="focusCalendarDayTask(${Number(item.id)})">
+          <div class="calendar-day-task-head">
+            <span class="calendar-day-task-title">${escHtml(getTaskTitle(item))}</span>
+            <span class="calendar-day-task-prio prio-${prio}">${escHtml(taskPrioLabel(prio))}</span>
+          </div>
+          <div class="calendar-day-task-meta">
+            <span>${escHtml(item.deadline||'No deadline')}</span>
+            <span>${escHtml(String(item.status||((item.done||item.status==='done')?'done':'active')))}</span>
+          </div>
+        </button>`;
+      }).join(''):'<div class="calendar-day-empty">No tasks scheduled for this day.</div>'}
+    </div>
+    <div class="calendar-day-panel-detail">
+      ${buildTaskDetailMarkup(task)}
+    </div>
+  </div>`;
 }
 function moveTaskCalendarMonth(delta){
   const anchor=getTaskCalendarMonthAnchor();
@@ -8398,7 +8693,10 @@ function goTaskCalendarToday(){
   closeCalendarDay(true);
   renderTasks();
 }
-function focusTaskInput(){document.getElementById('task-input').focus();}
+function focusTaskInput(){
+  const el=document.getElementById('task-input');
+  if(el) el.focus();
+}
 function ensureTaskDetailBindings(){
   if(taskDetailEscBound) return;
   window.addEventListener('keydown',(event)=>{
@@ -8415,7 +8713,16 @@ function openTaskDetail(id){
   const task=getTaskById(id);
   if(!task){toast2('Task not found','Reload tasks and try again.');return;}
   activeTaskDetailId=task.id;
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'task_detail',
+    action:'session_task_detail_opened',
+    taskId:Number(task.id),
+    stageIndex:Number(task.linkedStageIndex||0)
+  });
   renderTaskDetail();
+  renderSessionWorkspace();
 }
 function closeTaskDetail(silent=false){
   activeTaskDetailId=null;
@@ -8429,6 +8736,13 @@ function closeTaskDetail(silent=false){
     const content=document.getElementById('task-detail-content');
     if(content) content.innerHTML='';
   }
+  logInfo({
+    area:'frontend',
+    module:'frontend/script.js',
+    function:'task_detail',
+    action:'session_task_detail_closed'
+  });
+  renderSessionWorkspace();
 }
 function onTaskDetailOverlayClick(event){
   if(event.target&&event.target.id==='task-detail-overlay') closeTaskDetail();
@@ -8439,51 +8753,7 @@ function renderTaskDetail(){
   if(!overlay||!content) return;
   const task=getTaskById(activeTaskDetailId);
   if(!task){closeTaskDetail(true);return;}
-  const stageIndex=Math.max(0,Number(task.linkedStageIndex??(Number(task.linkedStage)||1)-1)||0);
-  const stage=getExecutionStage(stageIndex);
-  const stageLabel=`Stage ${stageIndex+1}`;
-  const stageTitle=escHtml(stage?.title||task.stageTitle||'Milestone');
-  const statusLabel=task.done?'Done':'Active';
-  const deadlineLabel=task.deadline?escHtml(task.deadline):'Not set';
-  const description=escHtml(task.description||'Открой задачу и зафиксируй план выполнения.');
-  const whyItMatters=escHtml(task.whyItMatters||'Связь с текущей фазой должна быть явно подтверждена.');
-  const deliverable=escHtml(task.deliverable||'Конкретный артефакт или измеримый результат.');
-  const doneDefinition=escHtml(task.doneDefinition||'Есть проверяемый результат, который можно показать команде.');
-  const stageObjective=escHtml(clipText(stage?.objective||task.stageObjective||'',180)||'Objective не указан.');
-  content.innerHTML=`<div class="task-detail-headline">
-      <div>
-        <div class="task-detail-kicker">Execution Task</div>
-        <div class="task-detail-title" id="task-detail-title">${escHtml(getTaskTitle(task))}</div>
-      </div>
-      <button class="task-detail-close" onclick="closeTaskDetail()" aria-label="Close task detail">✕</button>
-    </div>
-    <div class="task-detail-meta">
-      <span class="task-detail-chip">${statusLabel}</span>
-      <span class="task-detail-chip prio-${normalizeTaskPrio(task.prio)}">${escHtml(taskPrioLabel(task.prio))}</span>
-      <span class="task-detail-chip">${deadlineLabel}</span>
-      <span class="task-detail-chip">${escHtml(stageLabel)}</span>
-      <span class="task-detail-chip">${stageTitle}</span>
-    </div>
-    <div class="task-detail-section">
-      <div class="task-detail-label">Description</div>
-      <p>${description}</p>
-    </div>
-    <div class="task-detail-section">
-      <div class="task-detail-label">Why This Matters</div>
-      <p>${whyItMatters}</p>
-    </div>
-    <div class="task-detail-section">
-      <div class="task-detail-label">Expected Deliverable</div>
-      <p>${deliverable}</p>
-    </div>
-    <div class="task-detail-section">
-      <div class="task-detail-label">Done Definition</div>
-      <p>${doneDefinition}</p>
-    </div>
-    <div class="task-detail-section">
-      <div class="task-detail-label">Linked Stage Objective</div>
-      <p>${stageObjective}</p>
-    </div>`;
+  content.innerHTML=buildTaskDetailMarkup(task).replace('task-detail-shell--calendar','task-detail-shell--full');
   overlay.classList.add('on');
   document.body.classList.add('task-detail-open');
 }
@@ -8579,10 +8849,16 @@ function renderTasks(){
     visibleTaskCount:source.length,
     taskIds:source.map((task)=>Number(task.id)).filter((id)=>Number.isFinite(id))
   });
+  renderMilestoneCheckpoint();
 }
 async function toggleTask(id){
   ensureExecutionState();
   if(!hasExecutionStateReady()) return;
+  const session=getExecutionSession();
+  if(!session||session.status!=='running'){
+    toast2('Session required','Complete tasks inside a running session.');
+    return;
+  }
   const t=getTaskById(id);
   if(!t) return;
   const canonical=getExecutionTaskById(t.id);

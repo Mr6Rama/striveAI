@@ -272,17 +272,6 @@
                 <div class="dash-stat"><div class="dash-stat-val" id="dstat-streak">0🔥</div><div class="dash-stat-lbl">Day Streak</div></div>
                 <div class="dash-stat"><div class="dash-stat-val" id="dstat-pct">0%</div><div class="dash-stat-lbl">Complete</div></div>
               </div>
-              <div id="focus-input-row" class="focus-row">
-                <input class="focus-in" id="focus-input" placeholder="Set your focus for this session…"/>
-                <button style="padding:0 14px;background:var(--green);border:none;border-left:2px solid var(--ink);font-family:var(--mono);font-size:11px;font-weight:700;color:#fff;cursor:pointer;text-transform:uppercase;transition:all .1s;" onclick="startSession()">Start Session</button>
-              </div>
-              <div id="session-active-row" style="display:none;">
-                <div class="focus-display on" id="focus-display-text"></div>
-                <div class="session-timer on" id="session-timer-display">00:00</div>
-                <div class="dash-actions">
-                  <button class="btn btn-green" onclick="markDone()">✓ Session Done</button>
-                </div>
-              </div>
               <div id="default-actions" class="dash-actions" style="margin-top:10px;">
               </div>
             </div>
@@ -338,7 +327,7 @@
     <!-- TASKS & GOALS — MERGED -->
     <div class="pg" id="pg-work">
       <div class="page-head">
-        <div><div class="page-title">Tasks &amp; Goals</div><div class="page-sub">Prepare the next execution session</div></div>
+        <div><div class="page-title">Tasks &amp; Goals</div><div class="page-sub">Read-only milestone view. Start sessions from Dashboard.</div></div>
         <div class="page-actions" id="work-actions">
           <!-- Buttons swap based on sub-tab -->
         </div>
@@ -363,15 +352,6 @@
           <div id="session-workspace"></div>
           <div class="tasks-calendar-shell">
             <div class="tasks-calendar-top">
-              <div class="quick-add">
-                <input class="quick-add-in" id="task-input" placeholder="Add a task and press Enter…" onkeydown="if(event.key==='Enter') addTask()"/>
-                <select class="quick-add-sel" id="task-prio">
-                  <option value="high">🔴 High</option>
-                  <option value="med" selected>🟡 Med</option>
-                  <option value="low">🟢 Low</option>
-                </select>
-                <button class="quick-add-btn" onclick="addTask()">Add</button>
-              </div>
               <div class="calendar-nav-shell">
                 <div class="calendar-kicker">Planning context</div>
                 <div class="calendar-title" id="task-calendar-title">April 2026</div>
@@ -595,6 +575,19 @@
 </div>
 
 <div class="session-overlay" id="session-overlay" onclick="onSessionOverlayClick(event)"></div>
+
+<div class="milestone-checkpoint-overlay" id="milestone-checkpoint-overlay" onclick="if(event.target===this){clearMilestoneCheckpointState()}">
+  <div class="milestone-checkpoint-card" role="dialog" aria-modal="true" aria-labelledby="milestone-checkpoint-title" onclick="event.stopPropagation()">
+    <div class="milestone-checkpoint-kicker">Checkpoint reached</div>
+    <div class="milestone-checkpoint-title" id="milestone-checkpoint-title">Milestone completed</div>
+    <div class="milestone-checkpoint-copy" id="milestone-checkpoint-copy">Ready for the next stage.</div>
+    <div class="milestone-checkpoint-stage" id="milestone-checkpoint-stage"></div>
+    <div class="milestone-checkpoint-actions">
+      <button class="btn btn-ghost btn-sm" onclick="clearMilestoneCheckpointState()">Later</button>
+      <button class="btn btn-primary btn-sm" onclick="generateTasksForNextMilestone()">Generate Tasks for the Next Milestone</button>
+    </div>
+  </div>
+</div>
 
 <div class="flow-overlay" id="flow-overlay" aria-hidden="true">
   <div class="flow-card" id="flow-card">
