@@ -16,6 +16,7 @@ const {
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
+const MAX_EXECUTION_STYLE_CHARS = 300;
 const frontendDir = path.join(__dirname, '..', 'frontend');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -44,7 +45,7 @@ const GEMINI_ALLOWED_CONFIG_KEYS = new Set([
   'responseSchema',
   'thinkingConfig',
 ]);
-const AI_ACTIONS = new Set(['roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit', 'goals_review', 'note_process', 'session_review', 'chat']);
+const AI_ACTIONS = new Set(['roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit', 'goals_review', 'note_process', 'session_review', 'chat', 'goal_complete']);
 const ACTION_MAX_OUTPUT_TOKENS = {
   roadmap: 2200,
   tasks: 1200,
@@ -68,7 +69,18 @@ const ACTION_CONTEXT_LIMITS = {
   chat: { promptChars: 3600, systemChars: 900, totalChars: 4200 },
 };
 const TASK_GENERATION_ACTIONS = new Set(['tasks', 'tasks_skeleton', 'task_detail']);
-
+app.post('/api/goals/:id/complete', async (req, res) => {
+  const { id } = req.params;
+  const trace = createRequestTrace();
+  try {
+    logInfo(trace, `Marking goal ${id} as completed`);
+    // Логика БД будет тут
+    res.status(200).json({ success: true, message: 'Goal marked as completed' });
+  } catch (error) {
+    logError(trace, 'Error completing goal', normalizeError(error));
+    res.status(500).json({ error: 'Failed to update goal status' });
+  }
+});
 function approxInputTokens(charCount) {
   return Math.max(1, Math.round(charCount / 4));
 }
