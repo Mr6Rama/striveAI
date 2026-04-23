@@ -11,9 +11,11 @@ export async function generatePlan(input) {
       maxTokens: 2400,
       temperature: 0.25,
     });
-    const normalized = normalizePlan(aiData, {
+   const normalized = normalizePlan(aiData, {
       goal: input.goal,
       deadline: input.deadline,
+      niche: input.niche,                  
+      executionStyle: input.executionStyle  
     });
     return normalized;
   } catch (_error) {
@@ -138,8 +140,13 @@ function deterministicPlanFallback(input) {
           ],
         },
       ],
-    },
-    { goal, deadline }
+   },
+    { 
+      goal, 
+      deadline,
+      niche: input.niche,                   
+      executionStyle: input.executionStyle  
+    }
   );
 }
 
@@ -172,14 +179,16 @@ function deterministicTodayAdjust(task, level) {
 }
 
 function buildPlanPrompt(input) {
+  const nicheText = input.niche ? `\nNiche/Industry: ${input.niche}` : '';
+  const styleText = input.executionStyle ? `\nExecution Style: ${input.executionStyle}` : '';
+
   return `Create an execution plan.
 Goal: ${String(input.goal || '').trim()}
-Deadline: ${String(input.deadline || '').trim()}
+Deadline: ${String(input.deadline || '').trim()}${nicheText}${styleText}
 
 Rules:
 - Return 3 stages.
-- Max 5 tasks per stage.
-- Every task must be executable in 1-3 hours.
+- Max 8 tasks per stage.
 - Every task must be concrete, action-based, single-step.
 - Status must be todo.
 - Include priority high|med|low.
@@ -187,11 +196,12 @@ Rules:
 }
 
 function buildPartialRebuildPrompt(plan, stage, reason) {
+  const styleText = plan.executionStyle ? `\nExecution Style: ${plan.executionStyle}` : '';
   return `Partially rebuild one stage in execution plan.
 Goal: ${plan.goal}
 Stage: ${stage.title}
 Objective: ${stage.objective}
-Reason: ${reason || 'adaptation needed'}
+Reason: ${reason || 'adaptation needed'}${styleText}
 
 Rules:
 - Max 5 tasks.
@@ -202,7 +212,9 @@ Rules:
 }
 
 function buildTodayAdjustPrompt({ task, stage, context }) {
-  return `Adjust today's task.
+  const styleText = context.executionStyle ? `\nExecution Style: ${context.executionStyle}` : '';
+  const nicheText = context.niche ? `\nNiche: ${context.niche}` : '';
+  return `Adjust today's task.${nicheText}${styleText}
 Current task: ${task.title}
 Stage: ${stage.title}
 Stage objective: ${stage.objective}
@@ -215,7 +227,6 @@ Rules:
 - Must be concrete and single-step.
 - Return JSON only.`;
 }
-
 function planSchema() {
   return {
     type: 'object',
@@ -246,7 +257,7 @@ function stageSchema() {
       tasks: {
         type: 'array',
         minItems: 1,
-        maxItems: 5,
+        maxItems: 8,
         items: {
           type: 'object',
           additionalProperties: false,
