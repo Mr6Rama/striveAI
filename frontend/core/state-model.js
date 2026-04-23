@@ -15,16 +15,18 @@ export function createDefaultUser() {
   };
 }
 
-export function createDefaultPlan() {
+export function createDefaultUser() {
   return {
     id: '',
+    email: '',
+    name: '',
     goal: '',
     deadline: '',
-    currentStageId: '',
-    stages: [],
+    niche: '',           // Здесь будет храниться выбранная сфера (IT, Бизнес и т.д.)
+    executionStyle: '',  // Здесь будет текст о стиле (до 300 символов)
+    // --------------------------
   };
 }
-
 export function createDefaultToday(date = isoDateNow()) {
   return {
     date,
