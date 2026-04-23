@@ -11,17 +11,20 @@ const VAGUE_PATTERNS = [
   /\bvarious\b/i,
 ];
 const MULTI_STEP_PATTERNS = [/\band\b/i, /->/i, /\bthen\b/i, /,/];
-
 export function normalizePlan(rawPlan, context = {}) {
   const goal = String(rawPlan?.goal || context.goal || '').trim();
   const deadline = String(rawPlan?.deadline || context.deadline || '').trim();
+  const niche = String(rawPlan?.niche || context.niche || '').trim();
+  const executionStyle = String(rawPlan?.executionStyle || context.executionStyle || '').trim().slice(0, 300);
   const rawStages = Array.isArray(rawPlan?.stages) ? rawPlan.stages : [];
-  const stages = rawStages.length ? rawStages : [createFallbackStage(goal, 0), createFallbackStage(goal, 1), createFallbackStage(goal, 2)];
-
+  const stages = rawStages.length 
+    ? rawStages 
+    : [createFallbackStage(goal, 0), createFallbackStage(goal, 1), createFallbackStage(goal, 2)];
   const normalizedStages = stages.map((stage, stageIndex) => {
     const stageId = safeId(stage?.id, `stage-${stageIndex + 1}`);
     const title = tidy(stage?.title) || `Stage ${stageIndex + 1}`;
     const objective = tidy(stage?.objective) || `Advance "${goal || 'goal'}" with concrete output.`;
+    
     const rawTasks = Array.isArray(stage?.tasks) ? stage.tasks : [];
     const cleaned = rawTasks.map((task, taskIndex) =>
       normalizeTask(task, {
@@ -33,6 +36,34 @@ export function normalizePlan(rawPlan, context = {}) {
         goal,
       })
     );
+    const unique = dedupeTasks(cleaned).slice(0, 5);
+    const tasks = unique.length 
+      ? unique 
+      : createFallbackTasks({ stageId, stageTitle: title, stageObjective: objective, goal, stageIndex });
+
+    return {
+      id: stageId,
+      title,
+      objective,
+      status: 'locked',
+      tasks: tasks.map((task) => ({
+        ...task,
+        status: task.status === 'done' ? 'done' : 'todo',
+        stageId,
+      })),
+    };
+  });
+  const plan = {
+    id: safeId(rawPlan?.id, `plan-${isoDateNow()}-${Math.floor(Date.now() / 1000)}`),
+    goal,
+    deadline,
+    niche,          
+    executionStyle,  
+    currentStageId: '',
+    stages: normalizedStages,
+  };
+  return recalculatePlan(plan);
+}
     const unique = dedupeTasks(cleaned).slice(0, 5);
     const tasks = unique.length ? unique : createFallbackTasks({ stageId, stageTitle: title, stageObjective: objective, goal, stageIndex });
     return {
