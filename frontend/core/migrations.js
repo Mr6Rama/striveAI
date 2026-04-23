@@ -24,6 +24,8 @@ export function migrateFromLegacy(localRead) {
     name: String(legacyUser?.name || '').trim(),
     goal: String(legacyUser?.goal || '').trim(),
     deadline: String(legacyUser?.deadline || '').trim(),
+    niche: String(legacyUser?.niche || '').trim(), 
+    executionStyle: String(legacyUser?.executionStyle || '').trim().slice(0, 300), // Обрезаем до 300 символов для безопасности
   };
 
   const candidateStages = (Array.isArray(legacyRoadmap) ? legacyRoadmap : []).map((wk, index) => {
