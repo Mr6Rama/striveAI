@@ -842,19 +842,20 @@ function sanitizeGenerationConfig({ opts, action, effectiveMaxTokens }) {
   };
   const warnings = [];
 
-  if (typeof opts.temperature === 'number' && Number.isFinite(opts.temperature)) {
+ if (typeof opts.temperature === 'number' && Number.isFinite(opts.temperature)) {
     generationConfig.temperature = Math.min(2, Math.max(0, opts.temperature));
   } else {
     generationConfig.temperature = action === 'roadmap'
       ? 0.2
-      : (action === 'tasks_skeleton' ? 0 : (action === 'task_detail' ? 0.25 : 0.7));
+      : (action === 'goal_complete' ? 0.3 : (action === 'tasks_skeleton' ? 0 : (action === 'task_detail' ? 0.25 : 0.7))); 
   }
 
   if (typeof opts.topP === 'number' && Number.isFinite(opts.topP)) {
     generationConfig.topP = Math.min(1, Math.max(0, opts.topP));
   } else if (action === 'tasks_skeleton') {
     generationConfig.topP = 0.1;
-  }
+  } else if (action === 'goal_complete') {
+    generationConfig.topP = 0.8;
 
   if (action !== 'roadmap' && typeof opts.responseMimeType === 'string' && opts.responseMimeType.length <= 120) {
     if (GEMINI_ALLOWED_RESPONSE_MIME_TYPES.has(opts.responseMimeType)) {
@@ -906,6 +907,8 @@ function validateGeminiRequestPayload({ model, fullPrompt, generationConfig, act
     errors.push('tasks maxOutputTokens must be 400-1200');
   } else if (action === 'tasks_skeleton' && (generationConfig.maxOutputTokens < 400 || generationConfig.maxOutputTokens > 600)) {
     errors.push('tasks_skeleton maxOutputTokens must be 400-600');
+  } else if (action === 'goal_complete' && (generationConfig.maxOutputTokens < 400 || generationConfig.maxOutputTokens > 1000)) {
+  errors.push('goal_complete maxOutputTokens must be 400-1000');
   } else if (action === 'task_detail' && (generationConfig.maxOutputTokens < 850 || generationConfig.maxOutputTokens > 1100)) {
     errors.push('task_detail maxOutputTokens must be 850-1100');
   }
@@ -1189,15 +1192,17 @@ app.post('/api/gemini/generate', geminiLimiter, async (req, res) => {
     }
 
     const requestedMaxTokens = Math.min(8192, Math.max(1, Math.floor(maxTokens)));
-    const normalizedRequestedMaxTokens = safeAction === 'roadmap'
-      ? Math.min(2200, Math.max(1200, requestedMaxTokens))
-      : safeAction === 'tasks'
-        ? Math.min(1200, Math.max(900, requestedMaxTokens))
-        : safeAction === 'tasks_skeleton'
-          ? Math.min(600, Math.max(400, requestedMaxTokens))
-          : safeAction === 'task_detail'
-            ? Math.min(1100, Math.max(850, requestedMaxTokens))
-        : requestedMaxTokens;
+   const normalizedRequestedMaxTokens = safeAction === 'roadmap'
+    ? Math.min(2200, Math.max(1200, requestedMaxTokens))
+    : safeAction === 'goal_complete'
+        ? Math.min(1000, Math.max(400, requestedMaxTokens))
+        : safeAction === 'tasks'
+            ? Math.min(1200, Math.max(900, requestedMaxTokens))
+            : safeAction === 'tasks_skeleton'
+                ? Math.min(600, Math.max(400, requestedMaxTokens))
+                : safeAction === 'task_detail'
+                    ? Math.min(1100, Math.max(850, requestedMaxTokens))
+                    : requestedMaxTokens;
     const requestedRoadmapCount = safeAction === 'roadmap'
       ? extractRoadmapTargetCount(String(opts?.milestoneCount || opts?.roadmapMilestoneCount || ''), 0)
       : 0;
