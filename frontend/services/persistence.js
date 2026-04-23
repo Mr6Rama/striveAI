@@ -136,6 +136,8 @@ function validateUser(raw) {
     name: String(raw?.name || ''),
     goal: String(raw?.goal || ''),
     deadline: String(raw?.deadline || ''),
+    niche: String(raw?.niche || ''),         
+    executionStyle: String(raw?.executionStyle || ''), 
   };
 }
 
