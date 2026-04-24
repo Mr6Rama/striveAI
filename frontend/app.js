@@ -197,14 +197,14 @@ async function handleSaveSettings(payload) {
     draft.user.name = String(payload.name || draft.user.name || '').trim();
     draft.user.goal = String(payload.goal || draft.user.goal || '').trim();
     draft.user.deadline = String(payload.deadline || draft.user.deadline || '').trim();
-    
     draft.user.niche = String(payload.niche || draft.user.niche || '').trim();                   
     draft.user.executionStyle = String(payload.executionStyle || draft.user.executionStyle || '').trim(); 
-
     draft.plan.goal = draft.user.goal || draft.plan.goal;
     draft.plan.deadline = draft.user.deadline || draft.plan.deadline;
     draft.ui.message = 'Settings saved.';
     draft.ui.error = '';
+    draft.plan.niche = draft.user.niche; 
+    draft.plan.executionStyle = draft.user.executionStyle;
     return draft;
   });
   await persistCurrentDomains();
@@ -297,12 +297,17 @@ function renderApp(state) {
 function setActiveView(route) {
   const map = {
     '/': 'view-today',
+    '/dashboard': 'view-today',
+    '/work': 'view-today',     
     '/onboarding': 'view-onboarding',
     '/roadmap': 'view-roadmap',
     '/settings': 'view-settings',
+    '/goals': 'view-roadmap',   
   };
   const activeId = map[route] || 'view-today';
-  document.querySelectorAll('.view').forEach((view) => view.classList.remove('on'));
+  document.querySelectorAll('.view').forEach((view) => {
+    view.classList.remove('on');
+  });
   const active = document.getElementById(activeId);
   if (active) active.classList.add('on');
 }
@@ -312,7 +317,7 @@ function setActiveNav(route) {
   const roadmap = document.getElementById('nav-roadmap');
   const settings = document.getElementById('nav-settings');
   [today, roadmap, settings].forEach((button) => button?.classList.remove('on'));
-  if (route === '/') today?.classList.add('on');
+  if (route === '/' || route === '/work' || route === '/dashboard') today?.classList.add('on');
   if (route === '/roadmap') roadmap?.classList.add('on');
   if (route === '/settings') settings?.classList.add('on');
 }
@@ -371,3 +376,5 @@ async function handleGoalCompletion() {
     console.error('Failed to complete goal:', error);
   }
 }
+
+window.handleGoalCompletion = handleGoalCompletion;
