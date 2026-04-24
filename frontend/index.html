@@ -406,27 +406,36 @@
 
         <!-- Progress panel INSIDE roadmap -->
         <div class="rm-progress-panel" id="rm-progress-panel">
-          <div class="rm-prog-stat">
-            <div class="rm-prog-lbl">Overall Progress</div>
-            <div class="rm-prog-val" id="rm-pct">0%</div>
-            <div class="rm-prog-sub" id="rm-prog-label">Start your first session</div>
-          </div>
-          <div class="rm-prog-stat">
-            <div class="rm-prog-lbl">Completed Sessions · Streak</div>
-            <div class="rm-prog-val"><span id="rm-sess">0</span> <span style="font-size:14px;color:var(--muted)">·</span> <span id="rm-streak" style="color:var(--amber)">0🔥</span></div>
-            <div class="rm-prog-sub" id="rm-hrs">0h invested</div>
-          </div>
-          <div class="rm-prog-stat">
-            <div class="rm-prog-lbl">Current Milestone</div>
-            <div class="rm-prog-val" id="rm-ms">0</div>
-            <div class="rm-prog-sub" id="rm-total-weeks">of ? weeks</div>
-          </div>
-          <div class="rm-prog-stat">
-            <div class="rm-prog-lbl">Tasks Shipped</div>
-            <div class="rm-prog-val" id="rm-tasks">0</div>
-            <div class="rm-prog-sub">milestone progress</div>
-          </div>
-        </div>
+  <div class="rm-prog-stat">
+    <div class="rm-prog-lbl">Overall Progress</div>
+    <div class="rm-prog-val" id="rm-pct">0%</div>
+    <div class="rm-prog-sub" id="rm-prog-label">Start your first session</div>
+  </div>
+  <div class="rm-prog-stat">
+    <div class="rm-prog-lbl">Completed Sessions · Streak</div>
+    <div class="rm-prog-val"><span id="rm-sess">0</span> <span style="font-size:14px;color:var(--muted)">·</span> <span id="rm-streak" style="color:var(--amber)">0🔥</span></div>
+    <div class="rm-prog-sub" id="rm-hrs">0h invested</div>
+  </div>
+  <div class="rm-prog-stat">
+    <div class="rm-prog-lbl">Current Milestone</div>
+    <div class="rm-prog-val" id="rm-ms">0</div>
+    <div class="rm-prog-sub" id="rm-total-weeks">of ? weeks</div>
+  </div>
+  <div class="rm-prog-stat">
+    <div class="rm-prog-lbl">Tasks Shipped</div>
+    <div class="rm-prog-val" id="rm-tasks">0</div>
+    <div class="rm-prog-sub">milestone progress</div>
+  </div>
+  <div class="rm-prog-stat" style="display: flex; flex-direction: column; justify-content: center; align-items: flex-start; border-left: 1px solid rgba(255,255,255,0.1); padding-left: 20px;">
+    <div class="rm-prog-lbl" style="color: var(--green-l)">Mission Control</div>
+    <button class="btn btn-primary btn-sm" 
+            id="btn-complete-goal-rm" 
+            onclick="handleGoalCompletion()" 
+            style="margin-top: 5px; background: var(--green); border: none; box-shadow: 0 4px 14px rgba(40, 167, 69, 0.3);">
+      Finish Goal 🏁
+    </button>
+  </div>
+</div>
 
         <div class="rm-milestone-strip" id="rm-milestone-strip"></div>
         <div class="rm-detail-panel" id="rm-detail-panel" style="display:none;"></div>
