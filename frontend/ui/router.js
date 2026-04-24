@@ -1,5 +1,15 @@
-const ROUTES = new Set(['/', '/roadmap', '/settings', '/onboarding']);
-
+const ROUTES = new Set([
+  '/', 
+  '/dashboard', 
+  '/work', 
+  '/goals', 
+  '/notes', 
+  '/roadmap', 
+  '/analytics', 
+  '/settings', 
+  '/billing', 
+  '/onboarding'
+]);
 export function initRouter(onRouteChange) {
   document.querySelectorAll('[data-route]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -7,13 +17,15 @@ export function initRouter(onRouteChange) {
       navigate(route, onRouteChange);
     });
   });
-
   window.addEventListener('popstate', () => {
     const route = normalizeRoute(window.location.pathname);
     onRouteChange(route);
   });
+  window.gp = (path) => {
+    const cleanPath = path.startsWith('/') ? path : `/${path}`;
+    navigate(cleanPath, onRouteChange);
+  };
 }
-
 export function navigate(path, onRouteChange, replace = false) {
   const route = normalizeRoute(path);
   if (replace) {
@@ -23,10 +35,10 @@ export function navigate(path, onRouteChange, replace = false) {
   }
   onRouteChange(route);
 }
-
 export function normalizeRoute(pathname) {
+  if (pathname === '/' || pathname === '') return '/';
   if (ROUTES.has(pathname)) return pathname;
-  if (pathname === '/today') return '/';
-  return '/';
+  const withSlash = `/${pathname}`;
+  if (ROUTES.has(withSlash)) return withSlash;
+  return '/'; 
 }
-
