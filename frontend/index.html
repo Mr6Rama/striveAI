@@ -303,19 +303,22 @@
           </div>
         </div>
         <div class="dash-grid-wide">
-          <div class="card mission-card" id="dashboard-mission-card">
-            <div class="mission-label">⚡ Today's Mission</div>
-            <div class="mission-title" id="mc-title">Complete onboarding to generate your plan</div>
-            <div class="mission-detail" id="mc-detail">Set your goal, deadline, and work preferences during onboarding, then build your roadmap.</div>
-            <div class="mission-tags">
-              <span class="mtag" id="mc-tag1">Status: Ready</span>
-              <span class="mtag" id="mc-tag2">Priority: —</span>
-            </div>
-            <div class="mission-actions">
-              <button class="btn btn-ghost btn-sm" onclick="gp('work')">Today's Tasks →</button>
-              <button class="btn btn-outline btn-sm" onclick="gp('settings')">Settings</button>
-            </div>
-          </div>
+         <div class="card mission-card" id="dashboard-mission-card">
+    <div class="mission-label">⚡ Today's Mission</div>
+    <div class="mission-title" id="mc-title">Complete onboarding to generate your plan</div>
+    <div class="mission-detail" id="mc-detail">Set your goal, deadline, and work preferences during onboarding, then build your roadmap.</div>
+    <div class="mission-tags">
+        <span class="mtag" id="mc-tag1">Status: Ready</span>
+        <span class="mtag" id="mc-tag2">Priority: —</span>
+    </div>
+    <div class="mission-actions">
+        <button class="btn btn-ghost btn-sm" onclick="gp('work')">Today's Tasks →</button>
+        <button class="btn btn-success btn-sm" id="btn-complete-goal" style="background: #28a745; color: white; border: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            🏁 Goal Achieved!
+        </button>
+        <button class="btn btn-outline btn-sm" onclick="gp('settings')">Settings</button>
+    </div>
+</div>
           <div class="card feed-card">
             <div class="feed-title"><div class="feed-dot"></div>Live Feed</div>
             <div id="lf"><div class="feed-empty">Activity will appear here</div></div>
