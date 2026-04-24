@@ -1,39 +1,57 @@
 import { overallProgress, stageProgress } from '../../domain/plan-engine.js';
 
 export function renderRoadmap(state) {
-  const goal = state.plan.goal || 'No plan goal set';
-  const progress = overallProgress(state.plan);
-  setText('roadmap-goal', goal);
-  setText('roadmap-progress', `Overall progress: ${progress.done}/${progress.total} tasks (${progress.pct}%).`);
+  const { plan, stats } = state;
 
-  const host = document.getElementById('roadmap-stages');
+  const progress = overallProgress(plan);
+  
+  setText('rm-pct', `${progress.pct}%`);
+  setText('rm-tasks', `${progress.done}/${progress.total}`);
+  setText('rm-sess', stats.completedSessions || 0);
+  setText('rm-streak', `${stats.dayStreak || 0}🔥`);
+  
+  const stages = plan.stages || [];
+  const currentStageIdx = stages.findIndex(s => s.status === 'active');
+  setText('rm-ms', currentStageIdx !== -1 ? currentStageIdx + 1 : 0);
+  setText('rm-total-weeks', `of ${stages.length} milestones`);
+
+  const host = document.getElementById('rb'); // В твоем HTML контейнер называется 'rb'
   if (!host) return;
-  const stages = state.plan.stages || [];
+
   if (!stages.length) {
-    host.innerHTML = '<div class="stage">No stages available yet.</div>';
+
     return;
   }
-
   host.innerHTML = stages
-    .map((stage) => {
+    .map((stage, idx) => {
       const prog = stageProgress(stage);
       const tasks = (stage.tasks || [])
         .map(
-          (task) => `<div class="task-row ${task.status === 'done' ? 'done' : ''}">
-            <span>${escapeHtml(task.title)}</span>
-            <span class="task-prio">${escapeHtml(task.priority)} · ${task.estimateHours}h · ${task.status}</span>
+          (task) => `
+          <div class="task-row ${task.status === 'done' ? 'done' : ''}">
+            <div class="task-info">
+              <span class="task-check">${task.status === 'done' ? '●' : '○'}</span>
+              <span class="task-title">${escapeHtml(task.title)}</span>
+            </div>
+            <span class="task-meta">${task.estimateHours}h · ${escapeHtml(task.priority)}</span>
           </div>`
         )
         .join('');
-      return `<article class="stage ${stage.status}">
-        <div class="stage-head">
-          <div>
-            <div class="stage-title">${escapeHtml(stage.title)}</div>
-            <div class="stage-meta">${escapeHtml(stage.objective)}</div>
+
+      return `
+      <article class="rm-stage ${stage.status}">
+        <div class="rm-stage-header">
+          <div class="rm-stage-number">Milestone ${idx + 1}</div>
+          <div class="rm-stage-info">
+            <h3 class="rm-stage-title">${escapeHtml(stage.title)}</h3>
+            <p class="rm-stage-desc">${escapeHtml(stage.objective)}</p>
           </div>
-          <div class="stage-meta">${prog.done}/${prog.total} · ${prog.pct}% · ${escapeHtml(stage.status)}</div>
+          <div class="rm-stage-stats">
+            <div class="rm-stage-pct">${prog.pct}%</div>
+            <div class="rm-stage-count">${prog.done}/${prog.total} tasks</div>
+          </div>
         </div>
-        <div class="task-list">${tasks}</div>
+        <div class="rm-task-list">${tasks}</div>
       </article>`;
     })
     .join('');
@@ -41,7 +59,7 @@ export function renderRoadmap(state) {
 
 function setText(id, value) {
   const element = document.getElementById(id);
-  if (element) element.textContent = value || '';
+  if (element) element.textContent = value ?? '';
 }
 
 function escapeHtml(value) {
@@ -51,4 +69,3 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
-
