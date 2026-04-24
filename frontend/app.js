@@ -74,6 +74,8 @@ function bindStaticHandlers() {
   document.getElementById('auth-signout-btn')?.addEventListener('click', async () => {
     await signOut();
   });
+
+  document.getElementById('btn-complete-goal')?.addEventListener('click', handleGoalCompletion);
 }
 
 async function handleSignedIn(user) {
@@ -128,6 +130,9 @@ function handleRouteChange(route) {
 async function handleGeneratePlan(payload) {
   const goal = String(payload.goal || '').trim();
   const deadline = String(payload.deadline || '').trim();
+  const niche = String(payload.niche || '').trim();                  
+  const executionStyle = String(payload.executionStyle || '').trim(); 
+
   if (!goal || !deadline) {
     updateState((draft) => {
       draft.ui.error = 'Goal and deadline are required.';
@@ -143,14 +148,21 @@ async function handleGeneratePlan(payload) {
     return draft;
   });
 
-  const plan = await generatePlan({ goal, deadline });
+  // Передаем новые поля в нейросеть
+  const plan = await generatePlan({ goal, deadline, niche, executionStyle }); 
+
   updateState((draft) => {
     draft.user.name = String(payload.name || draft.user.name || '').trim();
     draft.user.goal = goal;
     draft.user.deadline = deadline;
+    draft.user.niche = niche;                  
+    draft.user.executionStyle = executionStyle;
     draft.user.email = draft.user.email || '';
     if (payload.project) draft.user.project = String(payload.project).trim();
-    draft.plan = normalizePlan(plan, { goal, deadline });
+    
+
+    draft.plan = normalizePlan(plan, { goal, deadline, niche, executionStyle }); 
+    
     draft.history.entries = [];
     draft.history.successStreak = 0;
     draft.history.missStreak = 0;
@@ -185,6 +197,10 @@ async function handleSaveSettings(payload) {
     draft.user.name = String(payload.name || draft.user.name || '').trim();
     draft.user.goal = String(payload.goal || draft.user.goal || '').trim();
     draft.user.deadline = String(payload.deadline || draft.user.deadline || '').trim();
+    
+    draft.user.niche = String(payload.niche || draft.user.niche || '').trim();                   
+    draft.user.executionStyle = String(payload.executionStyle || draft.user.executionStyle || '').trim(); 
+
     draft.plan.goal = draft.user.goal || draft.plan.goal;
     draft.plan.deadline = draft.user.deadline || draft.plan.deadline;
     draft.ui.message = 'Settings saved.';
@@ -194,7 +210,6 @@ async function handleSaveSettings(payload) {
   await persistCurrentDomains();
   await ensureTodayAssignedAndPersist();
 }
-
 async function handleRebuildCurrentStage() {
   const state = getState();
   const active = getActiveStage(state.plan);
@@ -333,4 +348,26 @@ function setAuthStatus(message) {
   const el = document.getElementById('auth-status');
   if (el) el.textContent = message || '';
 }
+async function handleGoalCompletion() {
+  if (!confirm('Are you sure you have reached your goal? This will clear your current plan and save it to history.')) {
+    return;
+  }
 
+  try {
+    const res = await fetch('/api/goal/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: currentUser?.uid }) 
+    });
+
+    if (res.ok) {
+      alert('Congratulations! Goal completed.');
+      window.location.reload(); 
+    } else {
+      const err = await res.json();
+      alert('Error: ' + err.error);
+    }
+  } catch (error) {
+    console.error('Failed to complete goal:', error);
+  }
+}
