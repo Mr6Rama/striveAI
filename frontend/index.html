@@ -1,0 +1,617 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>StriveAI // Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@400,0&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="/style.css"/>
+</head>
+<body>
+<div id="auth-screen">
+  <div class="auth-card">
+    <div class="auth-kicker">Secure Access</div>
+    <div class="auth-title">Sign in to StriveAI</div>
+    <div class="auth-sub">Use your email and password to open your personal workspace.</div>
+    <div class="auth-field">
+      <label class="ob-lbl" for="auth-email">Email</label>
+      <input class="ob-in" id="auth-email" type="email" placeholder="you@example.com" autocomplete="email"/>
+    </div>
+    <div class="auth-field">
+      <label class="ob-lbl" for="auth-password">Password</label>
+      <input class="ob-in" id="auth-password" type="password" placeholder="Minimum 6 characters" autocomplete="current-password"/>
+    </div>
+    <div class="auth-actions">
+      <button class="ob-cta" style="margin-top:0" id="auth-signin-btn" onclick="authSignIn()">Sign In</button>
+    </div>
+    <div class="auth-status" id="auth-status"></div>
+    <div class="auth-error" id="auth-error"></div>
+  </div>
+</div>
+<div id="ob">
+  <div class="ob-shell">
+    <aside class="ob-brand-panel">
+      <div class="ob-brand-top">
+        <div class="ob-brand-mark">S</div>
+        <div>
+          <div class="ob-brand-name">StriveAI</div>
+          <div class="ob-brand-tag">BUILD WHAT MATTERS</div>
+        </div>
+      </div>
+      <div class="ob-brand-kicker">INITIALIZATION FLOW</div>
+      <div class="ob-brand-headline">Set the mission, then shape the roadmap.</div>
+      <div class="ob-brand-copy">Answer a few focused prompts and the same roadmap pipeline will turn the inputs into milestones, execution stages, and tasks.</div>
+      <div class="ob-brand-foot">Premium setup flow · no dense form stack · same generation logic</div>
+    </aside>
+
+    <section class="ob-steps">
+      <div class="ob-progress" id="ob-progress">
+        <div class="ob-prog-dot done" id="pd0"></div>
+        <div class="ob-prog-dot" id="pd1"></div>
+        <div class="ob-prog-dot" id="pd2"></div>
+        <div class="ob-prog-dot" id="pd3"></div>
+      </div>
+
+      <div class="ob-step on" id="obs-0">
+        <div class="ob-step-card">
+          <div class="ob-step-label">Step 1 of 4</div>
+          <div class="ob-step-title">Start with identity.</div>
+          <div class="ob-step-sub">Capture the minimum context needed to keep the roadmap coherent.</div>
+          <div class="ob-grid-2">
+            <div class="ob-field">
+              <label class="ob-lbl">Your name</label>
+              <input class="ob-in" id="ob-nm" placeholder="Alex" autocomplete="given-name"
+                onkeydown="if(event.key==='Enter') document.getElementById('ob-proj').focus()"/>
+            </div>
+            <div class="ob-field">
+              <label class="ob-lbl">Project / company</label>
+              <input class="ob-in" id="ob-proj" placeholder="PayFlow, HealthOS, Acme Corp…"
+                onkeydown="if(event.key==='Enter') obNext(0)"/>
+            </div>
+          </div>
+          <div class="ob-nav">
+            <div></div>
+            <button class="ob-cta ob-cta-inline" id="ob-step-1-btn" onclick="obNext(0)">Continue →</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ob-step" id="obs-1">
+        <div class="ob-step-card">
+          <div class="ob-step-label">Step 2 of 4</div>
+          <div class="ob-step-title">Define the goal and constraints.</div>
+          <div class="ob-step-sub">Set the outcome, deadline, available time, and the biggest blocker.</div>
+          <div class="ob-field">
+            <label class="ob-lbl">Primary goal</label>
+            <input class="ob-in" id="ob-goal" placeholder="Ship MVP, launch beta, reach first paying customers…"/>
+          </div>
+          <div class="ob-grid-2">
+            <div class="ob-field">
+              <label class="ob-lbl">Deadline</label>
+              <input class="ob-in" type="date" id="ob-deadline"/>
+              <div class="ob-field-error" id="ob-deadline-error"></div>
+            </div>
+            <div class="ob-field">
+              <label class="ob-lbl">Daily hours</label>
+              <select class="ob-in" id="ob-hrs">
+                <option value="">Not set</option>
+                <option>2–4 hours</option>
+                <option>4–6 hours</option>
+                <option>6–8 hours</option>
+                <option>8–10 hours</option>
+                <option>10+ hours</option>
+              </select>
+            </div>
+          </div>
+          <div class="ob-field">
+            <label class="ob-lbl">Biggest blocker</label>
+            <input class="ob-in" id="ob-block" placeholder="No co-founder, unclear PMF, limited distribution…"/>
+          </div>
+          <div class="ob-field">
+            <label class="ob-lbl">Idea / context</label>
+            <textarea class="ob-in ob-in-area" id="ob-idea" placeholder="What exactly are you building, for whom, and why now?"></textarea>
+          </div>
+          <div class="ob-nav">
+            <button class="ob-back" onclick="obGo(0)">← Back</button>
+            <button class="ob-cta ob-cta-inline" onclick="obNext(1)">Continue →</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ob-step" id="obs-2">
+        <div class="ob-step-card">
+          <div class="ob-step-label">Step 3 of 4</div>
+          <div class="ob-step-title">Shape the execution style.</div>
+          <div class="ob-step-sub">Pick the tempo, then add stage and audience details the planner can use.</div>
+          <div class="ob-variants ob-variant-row">
+            <div class="ob-variant" id="var-safe" onclick="obSelectVariant('safe')">
+              <div class="ob-variant-check" id="vc-safe">✓</div>
+              <div class="ob-variant-tag safe">Conservative</div>
+              <div class="ob-variant-title">Stable pace</div>
+              <div class="ob-variant-desc">Lower risk, tighter focus, slower burn.</div>
+            </div>
+            <div class="ob-variant on" id="var-balanced" onclick="obSelectVariant('balanced')">
+              <div class="ob-variant-check" id="vc-balanced">✓</div>
+              <div class="ob-variant-tag balanced">Balanced</div>
+              <div class="ob-variant-title">Recommended</div>
+              <div class="ob-variant-desc">Strong execution rhythm with sustainable pace.</div>
+            </div>
+            <div class="ob-variant" id="var-aggressive" onclick="obSelectVariant('aggressive')">
+              <div class="ob-variant-check" id="vc-aggressive">✓</div>
+              <div class="ob-variant-tag aggressive">Aggressive</div>
+              <div class="ob-variant-title">Fast push</div>
+              <div class="ob-variant-desc">Maximum output and tighter iteration cycles.</div>
+            </div>
+          </div>
+          <div class="ob-grid-2">
+            <div class="ob-field">
+              <label class="ob-lbl">Stage</label>
+              <select class="ob-in" id="ob-stage">
+                <option value="">Not set</option>
+                <option>Idea</option>
+                <option>MVP</option>
+                <option>Launched</option>
+                <option>Scaling</option>
+              </select>
+            </div>
+            <div class="ob-field">
+              <label class="ob-lbl">Niche</label>
+              <input class="ob-in" id="ob-niche" placeholder="B2B SaaS, creator tools, healthtech…"/>
+            </div>
+          </div>
+          <div class="ob-field">
+            <label class="ob-lbl">Execution style</label>
+            <textarea class="ob-in ob-in-area" id="ob-resources" placeholder="Team setup, pace, constraints, working habits, distribution access…"></textarea>
+          </div>
+          <div class="ob-grid-2">
+            <div class="ob-field">
+              <label class="ob-lbl">Target audience</label>
+              <input class="ob-in" id="ob-audience" placeholder="Who exactly should use or buy this?"/>
+            </div>
+            <div class="ob-field">
+              <label class="ob-lbl">90-day vision</label>
+              <textarea class="ob-in ob-in-area" id="ob-win" placeholder="First paying customers, working prototype, launched beta…"></textarea>
+            </div>
+          </div>
+          <div class="ob-nav">
+            <button class="ob-back" onclick="obGo(1)">← Back</button>
+            <button class="ob-cta ob-cta-inline" onclick="obNext(2)">Continue →</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ob-step" id="obs-3">
+        <div class="ob-step-card">
+          <div class="ob-step-label">Step 4 of 4</div>
+          <div class="ob-step-title">Review and launch.</div>
+          <div class="ob-step-sub">Confirm the inputs, then generate the roadmap using the same pipeline.</div>
+          <div class="ob-review-grid" id="ob-review"></div>
+          <div id="ob-gen-loading" style="display:none">
+            <div class="ob-loading"><div class="spin"></div><div class="ob-loading-txt">Generating your personalized roadmap with AI…</div></div>
+          </div>
+          <div class="ob-nav">
+            <button class="ob-back" onclick="obGo(2)">← Back</button>
+            <button class="ob-cta ob-cta-inline" style="margin-top:0" id="ob-gen-btn" onclick="obGenerateRoadmap()">Generate Roadmap</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ═══════════════════ APP ═══════════════════ -->
+<div id="app">
+  <header class="app-header">
+    <div class="app-logo" onclick="gp('dashboard')">
+      <div class="app-logo-mark">S</div>
+      <div class="app-logo-name">StriveAI</div>
+    </div>
+    <nav class="header-tabs">
+      <button class="htab on" id="tab-dashboard" onclick="gp('dashboard')"><span class="tab-icon">⊞</span> <span>Dashboard</span></button>
+      <button class="htab" id="tab-work" onclick="gp('work')"><span class="tab-icon">☑</span> <span>Tasks</span> <span class="htab-badge" id="task-badge" style="display:none">0</span></button>
+      <button class="htab" id="tab-goals" onclick="gp('goals')"><span class="tab-icon">◎</span> <span>Goals</span></button>
+      <button class="htab" id="tab-notes" onclick="gp('notes')"><span class="tab-icon">≡</span> <span>AI Chat</span></button>
+      <!-- MERGED: Roadmap contains Progress inside -->
+      <button class="htab" id="tab-roadmap" onclick="gp('roadmap')"><span class="tab-icon">⊢</span> <span>Roadmap</span></button>
+      <button class="htab" id="tab-analytics" onclick="gp('analytics')"><span class="tab-icon">◉</span> <span>Analytics</span></button>
+    </nav>
+    <div class="header-right">
+      <span class="plan-chip free" id="plan-chip">FREE</span>
+      <button class="btn btn-ghost btn-sm" id="auth-signout-btn" onclick="authSignOut()">Sign Out</button>
+      <div class="header-user" id="tab-settings" onclick="gp('settings')">
+        <div class="user-avatar" id="user-av">A</div>
+        <div class="user-name" id="user-name-lbl">User</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="app-body">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow" id="topbar-eyebrow">Strategy Hub</div>
+        <h1 class="topbar-title" id="topbar-title">Dashboard</h1>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-button" onclick="gp('roadmap')" aria-label="Open roadmap">
+          <span class="material-symbols-outlined">timeline</span>
+        </button>
+        <button class="icon-button" onclick="gp('notes')" aria-label="Open AI chat">
+          <span class="material-symbols-outlined">sticky_note_2</span>
+        </button>
+        <button class="icon-button icon-button-primary" onclick="gp('settings')" aria-label="Open settings">
+          <span class="material-symbols-outlined">settings</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="work-zone">
+      <div id="work-panel">
+        <div id="drag-handle" title="Drag to reposition panel"></div>
+        <div id="resize-handle-l"></div>
+        <div id="resize-handle"></div>
+        <div id="panel-content">
+    <!-- DASHBOARD -->
+    <div class="pg on" id="pg-dashboard">
+      <div class="dash-wrap">
+        <div class="dash-hero">
+          <div class="dash-greeting" id="dash-greeting">SYSTEM INITIALIZED //</div>
+          <div class="dash-title" id="dash-title">Ready to<br><span class="accent" id="dash-accent">build.</span></div>
+          <div class="dash-goal-line" id="dash-goal-line">Complete onboarding to set your goal and start shipping →</div>
+          <div class="dash-hero-body">
+            <div class="dash-hero-left">
+              <div class="milestone-bar-wrap">
+                <div class="milestone-bar-label">
+                  <span class="milestone-bar-lbl">Milestone <span id="ms-num">1</span> Progress (tasks)</span>
+                  <span class="milestone-bar-pct" id="ms-pct">0%</span>
+                </div>
+                <div class="milestone-bar-track"><div class="milestone-bar-fill" id="ms-bar" style="width:0%"></div></div>
+              </div>
+              <div class="dash-stats-row">
+                <div class="dash-stat"><div class="dash-stat-val" id="dstat-sess">0</div><div class="dash-stat-lbl">Completed Sessions</div></div>
+                <div class="dash-stat"><div class="dash-stat-val" id="dstat-streak">0🔥</div><div class="dash-stat-lbl">Day Streak</div></div>
+                <div class="dash-stat"><div class="dash-stat-val" id="dstat-pct">0%</div><div class="dash-stat-lbl">Complete</div></div>
+              </div>
+              <div id="default-actions" class="dash-actions" style="margin-top:10px;">
+              </div>
+            </div>
+            <div class="dash-hero-right" id="hero-right-panel">
+              <div style="font-family:var(--mono);font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">Activity Heatmap</div>
+              <div class="hmap-days">
+                <div class="hmap-day">M</div><div class="hmap-day">T</div><div class="hmap-day">W</div>
+                <div class="hmap-day">T</div><div class="hmap-day">F</div><div class="hmap-day">S</div><div class="hmap-day">S</div>
+              </div>
+              <div class="hmap-grid" id="hg"></div>
+            </div>
+          </div>
+        </div>
+        <div class="dash-grid">
+          <div class="card metric-card">
+            <div class="metric-lbl">Sprint Speed</div>
+            <div class="metric-val"><span id="m-speed">0.0</span> <span class="unit">pts/day</span></div>
+            <div class="metric-bar"><div class="metric-fill" id="m-speed-bar" style="width:0%"></div></div>
+          </div>
+          <div class="card metric-card">
+            <div class="metric-lbl">Tasks Shipped</div>
+            <div class="metric-val"><span id="m-tasks">0</span> <span class="unit">done</span></div>
+            <div class="metric-bar"><div class="metric-fill green" id="m-tasks-bar" style="width:0%"></div></div>
+          </div>
+          <div class="card metric-card">
+            <div class="metric-lbl">Efficiency</div>
+            <div class="metric-val"><span id="m-eff">0</span> <span class="unit">%</span></div>
+            <div class="metric-bar"><div class="metric-fill amber" id="m-eff-bar" style="width:0%"></div></div>
+          </div>
+        </div>
+        <div class="dash-grid-wide">
+         <div class="card mission-card" id="dashboard-mission-card">
+    <div class="mission-label">⚡ Today's Mission</div>
+    <div class="mission-title" id="mc-title">Complete onboarding to generate your plan</div>
+    <div class="mission-detail" id="mc-detail">Set your goal, deadline, and work preferences during onboarding, then build your roadmap.</div>
+    <div class="mission-tags">
+        <span class="mtag" id="mc-tag1">Status: Ready</span>
+        <span class="mtag" id="mc-tag2">Priority: —</span>
+    </div>
+    <div class="mission-actions">
+        <button class="btn btn-ghost btn-sm" onclick="gp('work')">Today's Tasks →</button>
+        <button class="btn btn-success btn-sm" id="btn-complete-goal" style="background: #28a745; color: white; border: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            🏁 Goal Achieved!
+        </button>
+        <button class="btn btn-outline btn-sm" onclick="gp('settings')">Settings</button>
+    </div>
+</div>
+          <div class="card feed-card">
+            <div class="feed-title"><div class="feed-dot"></div>Live Feed</div>
+            <div id="lf"><div class="feed-empty">Activity will appear here</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TASKS -->
+    <div class="pg" id="pg-work">
+      <div class="tasks-body">
+        <div class="page-head">
+          <div><div class="page-title">Tasks</div><div class="page-sub">Read-only milestone task view. Start sessions from Dashboard.</div></div>
+          <div class="page-actions" id="work-actions">
+            <!-- Buttons for task actions -->
+          </div>
+        </div>
+        <div class="task-stage-banner">
+          <div>
+            <div class="task-stage-kicker">Active milestone</div>
+            <div class="task-stage-title" id="task-stage-title">No active milestone</div>
+            <div class="task-stage-meta" id="task-stage-meta">Generate a roadmap to start milestone execution.</div>
+          </div>
+          <div class="task-stage-meta" id="task-count-sub"></div>
+        </div>
+        <div id="session-workspace"></div>
+        <div class="tasks-calendar-shell">
+          <div class="tasks-calendar-top">
+            <div>
+              <div class="calendar-kicker">Milestone schedule</div>
+              <div class="calendar-title" id="task-calendar-title">Tasks calendar</div>
+            </div>
+            <div class="calendar-nav-shell">
+              <div class="calendar-actions">
+                <button class="btn btn-ghost btn-sm" onclick="moveTaskCalendarMonth(-1)">← Prev</button>
+                <button class="btn btn-ghost btn-sm" onclick="goTaskCalendarToday()">Today</button>
+                <button class="btn btn-ghost btn-sm" onclick="moveTaskCalendarMonth(1)">Next →</button>
+              </div>
+            </div>
+          </div>
+          <div class="calendar-legend" id="task-calendar-legend"></div>
+          <div class="calendar-weekdays" id="task-calendar-weekdays"></div>
+          <div class="calendar-grid" id="task-calendar-grid"></div>
+          <div class="calendar-footer" id="task-calendar-footer"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GOALS -->
+    <div class="pg" id="pg-goals">
+      <div class="page-head">
+        <div><div class="page-title">Goals</div><div class="page-sub">Track progress, edit, and remove goals independently from tasks.</div></div>
+        <div class="page-actions" id="goals-actions"></div>
+      </div>
+      <div class="goals-wrap" style="padding-top:16px;">
+        <div class="ai-bar" id="goals-ai-bar" style="display:none">
+          <div class="ai-bar-icon">⚡</div>
+          <div class="ai-bar-txt" id="goals-ai-txt"></div>
+          <div class="ai-bar-actions"><button class="btn btn-ghost btn-sm" onclick="document.getElementById('goals-ai-bar').style.display='none'">✕</button></div>
+        </div>
+        <div id="goal-list"></div>
+      </div>
+    </div>
+
+    <!-- AI CHAT -->
+    <div class="pg" id="pg-notes">
+      <div class="notes-wrap chat-wrap">
+        <div class="page-head">
+          <div><div class="page-title">AI Chat</div><div class="page-sub">Daily check-ins, blockers, and quick prompts</div></div>
+          <div class="page-actions">
+            <button class="btn btn-ghost btn-sm" onclick="gp('roadmap')">Roadmap</button>
+            <button class="btn btn-primary btn-sm" onclick="gp('work')">Tasks</button>
+          </div>
+        </div>
+        <div id="chat-inner"></div>
+      </div>
+    </div>
+
+    <!-- ROADMAP (with Progress panel inside) -->
+    <div class="pg" id="pg-roadmap">
+      <div class="roadmap-wrap" style="padding-top:20px;">
+        <div class="page-head" style="background:transparent;border:none;padding:0 0 14px;max-width:860px;margin:0 auto;">
+          <div><div class="page-title">Roadmap</div><div class="page-sub" id="rm-span">Your 8-week execution plan</div></div>
+        </div>
+
+        <!-- Progress panel INSIDE roadmap -->
+        <div class="rm-progress-panel" id="rm-progress-panel">
+  <div class="rm-prog-stat">
+    <div class="rm-prog-lbl">Overall Progress</div>
+    <div class="rm-prog-val" id="rm-pct">0%</div>
+    <div class="rm-prog-sub" id="rm-prog-label">Start your first session</div>
+  </div>
+  <div class="rm-prog-stat">
+    <div class="rm-prog-lbl">Completed Sessions · Streak</div>
+    <div class="rm-prog-val"><span id="rm-sess">0</span> <span style="font-size:14px;color:var(--muted)">·</span> <span id="rm-streak" style="color:var(--amber)">0🔥</span></div>
+    <div class="rm-prog-sub" id="rm-hrs">0h invested</div>
+  </div>
+  <div class="rm-prog-stat">
+    <div class="rm-prog-lbl">Current Milestone</div>
+    <div class="rm-prog-val" id="rm-ms">0</div>
+    <div class="rm-prog-sub" id="rm-total-weeks">of ? weeks</div>
+  </div>
+  <div class="rm-prog-stat">
+    <div class="rm-prog-lbl">Tasks Shipped</div>
+    <div class="rm-prog-val" id="rm-tasks">0</div>
+    <div class="rm-prog-sub">milestone progress</div>
+  </div>
+  <div class="rm-prog-stat" style="display: flex; flex-direction: column; justify-content: center; align-items: flex-start; border-left: 1px solid rgba(255,255,255,0.1); padding-left: 20px;">
+    <div class="rm-prog-lbl" style="color: var(--green-l)">Mission Control</div>
+    <button class="btn btn-primary btn-sm" 
+            id="btn-complete-goal-rm" 
+            onclick="handleGoalCompletion()" 
+            style="margin-top: 5px; background: var(--green); border: none; box-shadow: 0 4px 14px rgba(40, 167, 69, 0.3);">
+      Finish Goal 🏁
+    </button>
+  </div>
+</div>
+
+        <div class="rm-milestone-strip" id="rm-milestone-strip"></div>
+        <div class="rm-detail-panel" id="rm-detail-panel" style="display:none;"></div>
+
+        <!-- Roadmap weeks -->
+        <div id="rb">
+          <div class="rm-gen-state">
+            <div style="font-size:36px">◈</div>
+            <div class="rm-gen-title">No Roadmap Yet</div>
+            <div class="rm-gen-sub">Complete onboarding goal setup, then generate your personalized execution plan.</div>
+            <button class="btn btn-primary" style="margin-top:10px" id="rm-generate-btn" onclick="genVariants()">Generate My Plan →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- ANALYTICS -->
+    <div class="pg" id="pg-analytics">
+      <div class="analytics-wrap" style="padding-top:20px;">
+        <div class="page-head" style="background:transparent;border:none;padding:0 0 14px;max-width:860px;margin:0 auto;">
+          <div>
+            <div class="page-title">Analytics</div>
+            <div class="page-sub">Your personal usage data</div>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-ghost btn-sm" onclick="analyticsRange(7,this)">7D</button>
+            <button class="btn btn-ghost btn-sm" id="range-30" onclick="analyticsRange(30,this)" style="border-color:var(--blue);color:var(--blue-l);">30D</button>
+            <button class="btn btn-ghost btn-sm" onclick="analyticsRange(90,this)">90D</button>
+          </div>
+        </div>
+        <div class="live-ticker">
+          <div class="live-dot"></div>
+          <div class="live-text">Active sessions right now:</div>
+          <div class="live-count" id="live-count">1</div>
+          <div style="margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--muted);" id="live-updated"></div>
+        </div>
+        <div class="analytics-stat-grid">
+          <div class="astat"><div class="astat-lbl">Total Visits</div><div class="astat-val" id="a-visits">0</div><div class="astat-delta" id="a-visits-d">—</div></div>
+          <div class="astat"><div class="astat-lbl">Completed Days</div><div class="astat-val" id="a-users">0</div><div class="astat-delta" id="a-users-d">—</div></div>
+          <div class="astat"><div class="astat-lbl">Completed Sessions / Day</div><div class="astat-val" id="a-spd">0</div><div class="astat-delta" id="a-spd-d">—</div></div>
+          <div class="astat"><div class="astat-lbl">Avg. Session</div><div class="astat-val" id="a-dur">—</div><div class="astat-delta" id="a-dur-d">—</div></div>
+        </div>
+        <div class="analytics-grid">
+          <div class="chart-card"><div class="chart-title">Daily Visits</div><div class="chart-sub">Page opens per day</div><canvas id="chart-visits" height="180"></canvas></div>
+          <div class="chart-card"><div class="chart-title">Sessions Completed</div><div class="chart-sub">Done sessions per day</div><canvas id="chart-users" height="180"></canvas></div>
+        </div>
+        <div class="analytics-grid-3">
+          <div class="chart-card"><div class="chart-title">Session Duration</div><div class="chart-sub">Minutes per session</div><canvas id="chart-duration" height="160"></canvas></div>
+          <div class="chart-card"><div class="chart-title">Feature Usage</div><div class="chart-sub">Tab visits</div><canvas id="chart-features" height="160"></canvas></div>
+          <div class="chart-card"><div class="chart-title">Hourly Activity</div><div class="chart-sub">Sessions by hour</div><canvas id="chart-hourly" height="160"></canvas></div>
+        </div>
+        <div class="chart-card" style="margin-bottom:14px;">
+          <div class="chart-title">Recent Events</div>
+          <div class="chart-sub">Last actions</div>
+          <div id="analytics-events" style="max-height:200px;overflow-y:auto;margin-top:8px;"></div>
+        </div>
+        <div style="background:rgba(0,82,255,.06);border:1px solid rgba(0,82,255,.3);padding:14px 18px;font-family:var(--mono);font-size:11px;color:var(--blue-l);margin-bottom:14px;">
+          📊 Multi-user analytics dashboard is not included in this public MVP build.
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="pg" id="pg-settings">
+      <div class="settings-wrap" style="padding-top:20px;">
+        <div class="page-head" style="background:transparent;border:none;padding:0 0 14px;max-width:860px;margin:0 auto;">
+          <div><div class="page-title">Settings</div></div>
+        </div>
+        <div class="settings-section">
+          <div class="ss-head">👤 Profile &amp; Plan</div>
+          <div class="ss-row"><div><div class="ss-row-name">Name</div></div><div style="font-family:var(--mono);font-size:12px;color:var(--muted)" id="set-name">—</div></div>
+          <div class="ss-row"><div><div class="ss-row-name">Project</div></div><div style="font-family:var(--mono);font-size:12px;color:var(--muted)" id="set-proj">—</div></div>
+          <div class="ss-row"><div><div class="ss-row-name">Current Plan</div></div><div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--blue-l)" id="set-plan">Free</div></div>
+          <div class="ss-row"><div><div class="ss-row-name">Upgrade to Pro</div><div class="ss-row-sub">Unlock adaptive rebuilds, unlimited roadmaps, premium AI chat</div></div><button class="btn btn-primary btn-sm" onclick="gp('billing')">View Plans →</button></div>
+          <div class="ss-row"><div><div class="ss-row-name">Sign Out</div><div class="ss-row-sub">Sign out from this account and return to login screen</div></div><button class="btn btn-ghost btn-sm" onclick="authSignOut()">Sign Out</button></div>
+          <div class="ss-row"><div><div class="ss-row-name">Reset All Data</div><div class="ss-row-sub">Clear everything and start fresh</div></div><button class="btn btn-danger btn-sm" onclick="resetAllData()">Reset</button></div>
+        </div>
+        <div class="settings-section"><div class="ss-head">ℹ️ About</div><div class="ss-row"><div><div class="ss-row-name">striveAI v1</div><div class="ss-row-sub">Powered by ChatGPT · Payments via PayPal</div></div><div style="font-family:var(--mono);font-size:10px;color:var(--muted)">v1.0.0</div></div></div>
+      </div>
+    </div>
+
+    <!-- BILLING -->
+    <div class="pg" id="pg-billing">
+      <div class="billing-wrap" style="padding-top:20px;">
+        <div class="page-head" style="background:transparent;border:none;padding:0 0 14px;max-width:860px;margin:0 auto;"><div><div class="page-title">Plans &amp; Billing</div><div class="page-sub">Powered by PayPal · Cancel anytime</div></div></div>
+        <div class="billing-current"><div class="bc-info"><div class="bc-plan" id="bc-plan-name">Free Plan</div><div class="bc-detail" id="bc-detail">Basic tracking · No AI features</div></div><div class="bc-status free" id="bc-status">Active</div></div>
+        <div class="plans-grid">
+          <div class="plan-card"><div class="plan-card-head"><div class="plan-price">$0 <span class="plan-period">/mo</span></div><div class="plan-name">Free</div></div><div class="plan-divider"></div><div class="plan-features"><div class="plan-feat"><div class="feat-check">✓</div>Dashboard workspace</div><div class="plan-feat"><div class="feat-check">✓</div>Tasks, Goals, AI Chat</div><div class="plan-feat"><div class="feat-check">✓</div>7-day trial roadmap</div><div class="plan-feat dim"><div class="feat-dash">—</div>Adaptive rebuilds</div><div class="plan-feat dim"><div class="feat-dash">—</div>Full 8-week roadmap</div></div><div class="plan-cta"><button class="plan-btn current" id="free-btn">✓ Current Plan</button></div></div>
+          <div class="plan-card popular"><div class="plan-card-head"><div class="plan-pop-badge">Most Popular</div><div class="plan-price">$19 <span class="plan-period">/mo</span></div><div class="plan-name">Pro</div></div><div class="plan-divider"></div><div class="plan-features"><div class="plan-feat"><div class="feat-check">✓</div>Everything in Free</div><div class="plan-feat"><div class="feat-check">✓</div>Full 8-week AI roadmap</div><div class="plan-feat"><div class="feat-check">✓</div><strong>Adaptive rebuilds</strong></div><div class="plan-feat"><div class="feat-check">✓</div>Premium AI chat support</div><div class="plan-feat"><div class="feat-check">✓</div>3 projects</div></div><div class="plan-cta"><div id="pp-btn-pro"><button class="plan-btn primary" onclick="initPayPal('pro','pp-btn-pro')">Upgrade to Pro →</button></div></div></div>
+          <div class="plan-card"><div class="plan-card-head"><div class="plan-price">$49 <span class="plan-period">/mo</span></div><div class="plan-name">Team</div></div><div class="plan-divider"></div><div class="plan-features"><div class="plan-feat"><div class="feat-check">✓</div>Everything in Pro</div><div class="plan-feat"><div class="feat-check">✓</div>Team groups</div><div class="plan-feat"><div class="feat-check">✓</div>Shared roadmap</div><div class="plan-feat"><div class="feat-check">✓</div>Unlimited projects</div></div><div class="plan-cta"><div id="pp-btn-team"><button class="plan-btn secondary" onclick="initPayPal('team','pp-btn-team')">Upgrade to Team →</button></div></div></div>
+        </div>
+        <div class="paypal-setup"><div class="paypal-setup-title">⚙️ PayPal Setup Required</div><div class="paypal-step"><div class="ps-num">1</div><div class="ps-txt"><strong>developer.paypal.com</strong> → My Apps → Create App → copy <code>CLIENT_ID</code> → paste into <code>PAYPAL_CLIENT_ID</code> in script</div></div><div class="paypal-step"><div class="ps-num">2</div><div class="ps-txt">PayPal → Subscriptions → Plans → Create <code>$19/mo PRO</code> and <code>$49/mo TEAM</code> → paste IDs into <code>PLAN_PRO</code> and <code>PLAN_TEAM</code></div></div></div>
+      </div>
+    </div>
+
+        </div><!-- /panel-content -->
+      </div><!-- /work-panel -->
+    </div><!-- /work-zone -->
+</main>
+</div>
+
+<div class="tour-overlay" id="tour-overlay">
+  <div class="tour-highlight" id="tour-highlight"></div>
+  <div class="tour-card" id="tour-card">
+    <div class="tour-step" id="tour-step-label">Step 1</div>
+    <div class="tour-title" id="tour-title">Dashboard</div>
+    <div class="tour-copy" id="tour-copy"></div>
+    <div class="tour-actions">
+      <button class="tour-secondary" id="tour-skip-btn" onclick="skipGuidedTour()">Skip Tour</button>
+      <button class="tour-primary" id="tour-next-btn" onclick="nextGuidedTourStep()">Next →</button>
+    </div>
+    <div class="tour-foot" id="tour-foot">1 / 1</div>
+  </div>
+  <div class="tour-final-card" id="tour-final-card">
+    <div class="tour-final-kicker">Workspace Ready</div>
+    <div class="tour-final-title">Good<br><span>luck,</span><br><span id="tour-final-name">builder</span>.</div>
+    <div class="tour-final-copy">Your roadmap is loaded. Your tasks are in place. Now keep pace and let the plan adapt when reality changes.</div>
+    <div class="tour-final-mission">
+      <strong id="tour-final-mission">Ship it.</strong>
+      <span id="tour-final-deadline">No deadline set</span>
+    </div>
+    <button class="ob-cta" style="margin-top:0" onclick="closeGuidedTour()">Enter Workspace →</button>
+  </div>
+</div>
+
+<div class="task-detail-overlay" id="task-detail-overlay" onclick="onTaskDetailOverlayClick(event)">
+  <div class="task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="task-detail-title" onclick="event.stopPropagation()">
+    <div id="task-detail-content"></div>
+  </div>
+</div>
+
+<div class="task-detail-overlay goal-detail-overlay" id="goal-detail-overlay" onclick="onGoalDetailOverlayClick(event)">
+  <div class="task-detail-modal goal-detail-modal" role="dialog" aria-modal="true" aria-labelledby="goal-detail-title" onclick="event.stopPropagation()">
+    <div id="goal-detail-content"></div>
+  </div>
+</div>
+
+<div class="calendar-day-overlay" id="calendar-day-overlay" onclick="onCalendarDayOverlayClick(event)">
+  <div class="calendar-day-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-day-title" onclick="event.stopPropagation()">
+    <div id="calendar-day-content"></div>
+  </div>
+</div>
+
+<div class="session-overlay" id="session-overlay" onclick="onSessionOverlayClick(event)"></div>
+
+<div class="milestone-checkpoint-overlay" id="milestone-checkpoint-overlay" onclick="if(event.target===this){clearMilestoneCheckpointState()}">
+  <div class="milestone-checkpoint-card" role="dialog" aria-modal="true" aria-labelledby="milestone-checkpoint-title" onclick="event.stopPropagation()">
+    <div class="milestone-checkpoint-kicker">Checkpoint reached</div>
+    <div class="milestone-checkpoint-title" id="milestone-checkpoint-title">Congratulations, you completed this milestone</div>
+    <div class="milestone-checkpoint-copy" id="milestone-checkpoint-copy">Generate AI tasks for the next milestone and continue straight into review.</div>
+    <div class="milestone-checkpoint-stage" id="milestone-checkpoint-stage"></div>
+    <div class="milestone-checkpoint-actions">
+      <button class="btn btn-ghost btn-sm" onclick="clearMilestoneCheckpointState()">Later</button>
+      <button class="btn btn-primary btn-sm" onclick="generateTasksForNextMilestone()">Generate next milestone tasks</button>
+    </div>
+  </div>
+</div>
+
+<div class="flow-overlay" id="flow-overlay" aria-hidden="true">
+  <div class="flow-card" id="flow-card">
+    <div class="flow-kicker" id="flow-kicker">Loading</div>
+    <div class="flow-spinner-wrap">
+      <div class="flow-spinner" id="flow-spinner"></div>
+    </div>
+    <div class="flow-title" id="flow-title">Generating roadmap</div>
+    <div class="flow-copy" id="flow-copy"></div>
+    <div class="flow-rotator" id="flow-rotator"></div>
+    <div class="flow-preview" id="flow-preview"></div>
+    <div class="flow-actions" id="flow-actions"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><div class="toast-title" id="tt"></div><div class="toast-body" id="tb2"></div></div>
+<div style="position:fixed;inset:0;background:linear-gradient(rgba(18,16,16,0) 50%,rgba(0,0,0,.1) 50%),linear-gradient(90deg,rgba(255,0,0,.02),rgba(0,255,0,.01),rgba(0,0,243,.02));background-size:100% 2px,3px 100%;pointer-events:none;z-index:9998;opacity:.03"></div>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+<script src="/script.js"></script>
+</body>
+</html>
