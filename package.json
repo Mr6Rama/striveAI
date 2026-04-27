@@ -1,6 +1,7 @@
 {
   "name": "striveai-refactor",
   "version": "1.0.0",
+  "main": "backend/server.js",
   "private": true,
   "scripts": {
     "start": "node backend/server.js",
