@@ -23,10 +23,40 @@
       <input class="ob-in" id="auth-password" type="password" placeholder="Minimum 6 characters" autocomplete="current-password"/>
     </div>
     <div class="auth-actions">
-      <button class="ob-cta" style="margin-top:0" id="auth-signin-btn" onclick="authSignIn()">Sign In</button>
+      <button class="ob-cta" style="margin-top:0" id="auth-signin-btn" onclick="authSignIn()">Log in</button>
     </div>
+    <button type="button" class="auth-link" id="auth-register-link" onclick="authGoSignUp()">Don't have an account? Sign up</button>
     <div class="auth-status" id="auth-status"></div>
     <div class="auth-error" id="auth-error"></div>
+  </div>
+</div>
+<div id="register-screen" style="display:none">
+  <div class="auth-card">
+    <div class="auth-kicker">Secure Access</div>
+    <div class="auth-title">Create your account</div>
+    <div class="auth-sub">Set up your workspace access with email and password.</div>
+    <div class="auth-field">
+      <label class="ob-lbl" for="register-name">Name</label>
+      <input class="ob-in" id="register-name" type="text" placeholder="Alex" autocomplete="name"/>
+    </div>
+    <div class="auth-field">
+      <label class="ob-lbl" for="register-email">Email</label>
+      <input class="ob-in" id="register-email" type="email" placeholder="you@example.com" autocomplete="email"/>
+    </div>
+    <div class="auth-field">
+      <label class="ob-lbl" for="register-password">Password</label>
+      <input class="ob-in" id="register-password" type="password" placeholder="Minimum 6 characters" autocomplete="new-password"/>
+    </div>
+    <div class="auth-field">
+      <label class="ob-lbl" for="register-confirm">Confirm password</label>
+      <input class="ob-in" id="register-confirm" type="password" placeholder="Repeat your password" autocomplete="new-password"/>
+    </div>
+    <div class="auth-actions">
+      <button class="ob-cta" style="margin-top:0" id="auth-signup-btn" onclick="authSignUp()">Sign up</button>
+    </div>
+    <button type="button" class="auth-link" id="auth-login-link" onclick="authGoLogin()">Already have an account? Log in</button>
+    <div class="auth-status" id="register-status"></div>
+    <div class="auth-error" id="register-error"></div>
   </div>
 </div>
 <div id="ob">

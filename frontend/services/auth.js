@@ -27,6 +27,11 @@ export async function signIn(email, password) {
   return firebaseAuth.signInWithEmailAndPassword(email, password);
 }
 
+export async function signUp(email, password) {
+  if (!firebaseAuth) throw new Error('Auth not initialized');
+  return firebaseAuth.createUserWithEmailAndPassword(email, password);
+}
+
 export async function signOut() {
   if (!firebaseAuth) return;
   await firebaseAuth.signOut();
@@ -44,4 +49,3 @@ export function authErrorMessage(error) {
 export function getDb() {
   return firebaseDb;
 }
-

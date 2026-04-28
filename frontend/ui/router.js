@@ -8,7 +8,8 @@ const ROUTES = new Set([
   '/analytics', 
   '/settings', 
   '/billing', 
-  '/onboarding'
+  '/onboarding',
+  '/register'
 ]);
 export function initRouter(onRouteChange) {
   document.querySelectorAll('[data-route]').forEach((button) => {

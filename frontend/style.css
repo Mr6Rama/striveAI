@@ -47,7 +47,8 @@ button,input,textarea,select{font-family:var(--mono);}
 /* ═══════════════════════════════════════════
    AUTH SCREEN
    ═══════════════════════════════════════════ */
-#auth-screen{
+#auth-screen,
+#register-screen{
   position:fixed;inset:0;z-index:950;
   background:var(--bg-low);
   display:flex;align-items:center;justify-content:center;
@@ -90,6 +91,22 @@ button,input,textarea,select{font-family:var(--mono);}
 .auth-actions{display:flex;gap:8px;margin-top:6px;}
 .auth-actions .ob-cta{flex:1;}
 .auth-actions .ob-back{flex:1;}
+.auth-link{
+  width:100%;
+  margin-top:10px;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:var(--blue-l);
+  font-family:var(--mono);
+  font-size:10px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  text-align:left;
+  cursor:pointer;
+}
+.auth-link:hover{color:#fff;}
 .auth-status{
   min-height:16px;
   margin-top:12px;

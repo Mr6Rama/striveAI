@@ -32,6 +32,7 @@ let FB_APP = null;
 let FB_AUTH = null;
 let FB_DB = null;
 let CURRENT_AUTH_USER = null;
+let CURRENT_AUTH_VIEW = 'login';
 let AUTH_STATE_RESOLVED = false;
 let STORAGE_BRIDGE_INSTALLED = false;
 let CLOUD_KV = {};
@@ -178,6 +179,9 @@ function createRequestTrace(fields={}){
   };
   Object.keys(trace).forEach((key)=>{if(!trace[key]) delete trace[key];});
   return trace;
+}
+function getAuthViewFromRoute(){
+  return window.location.pathname === '/register' ? 'register' : 'login';
 }
 
 async function loadRuntimeConfig(){
@@ -4969,6 +4973,18 @@ function clearCurrentUserDataStorage(){
   });
 }
 function authEls(){
+  if(CURRENT_AUTH_VIEW==='register'){
+    return {
+      screen:document.getElementById('register-screen'),
+      email:document.getElementById('register-email'),
+      password:document.getElementById('register-password'),
+      confirm:document.getElementById('register-confirm'),
+      name:document.getElementById('register-name'),
+      signInBtn:document.getElementById('auth-signup-btn'),
+      error:document.getElementById('register-error'),
+      status:document.getElementById('register-status')
+    };
+  }
   return {
     screen:document.getElementById('auth-screen'),
     email:document.getElementById('auth-email'),
@@ -4987,11 +5003,15 @@ function setAuthStatus(msg=''){
   if(status) status.textContent=msg||'';
 }
 function setAuthBusy(isBusy){
-  const {signInBtn}=authEls();
-  if(signInBtn) signInBtn.disabled=Boolean(isBusy);
+  const loginBtn=document.getElementById('auth-signin-btn');
+  const registerBtn=document.getElementById('auth-signup-btn');
+  if(loginBtn) loginBtn.disabled=Boolean(isBusy);
+  if(registerBtn) registerBtn.disabled=Boolean(isBusy);
 }
-function showAuthScreen(){
-  const {screen,password}=authEls();
+function setAuthView(view){
+  CURRENT_AUTH_VIEW=view==='register'?'register':'login';
+  const loginEls=document.getElementById('auth-screen');
+  const registerEls=document.getElementById('register-screen');
   const app=document.getElementById('app');
   const ob=document.getElementById('ob');
   const banner=document.getElementById('api-key-banner');
@@ -5002,12 +5022,45 @@ function showAuthScreen(){
     app.style.marginTop='';
   }
   if(ob) ob.style.display='none';
-  if(screen) screen.style.display='flex';
-  if(password) password.value='';
+  if(loginEls) loginEls.style.display=CURRENT_AUTH_VIEW==='login'?'flex':'none';
+  if(registerEls) registerEls.style.display=CURRENT_AUTH_VIEW==='register'?'flex':'none';
+  const loginEmail=document.getElementById('auth-email');
+  const registerEmail=document.getElementById('register-email');
+  if(CURRENT_AUTH_VIEW==='register' && registerEmail && loginEmail && !registerEmail.value){
+    registerEmail.value=loginEmail.value||'';
+  }
+  if(CURRENT_AUTH_VIEW==='login' && loginEmail && registerEmail && !loginEmail.value){
+    loginEmail.value=registerEmail.value||'';
+  }
+  const loginPassword=document.getElementById('auth-password');
+  const registerPassword=document.getElementById('register-password');
+  const registerConfirm=document.getElementById('register-confirm');
+  if(loginPassword) loginPassword.value='';
+  if(registerPassword) registerPassword.value='';
+  if(registerConfirm) registerConfirm.value='';
+  setAuthError('');
+  setAuthStatus('');
+}
+function showAuthScreen(view=getAuthViewFromRoute()){
+  setAuthView(view);
+}
+function authGoSignUp(){
+  if(window.location.pathname!=='/register'){
+    window.history.pushState({},'', '/register');
+  }
+  showAuthScreen('register');
+}
+function authGoLogin(){
+  if(window.location.pathname!=='/'){
+    window.history.pushState({},'', '/');
+  }
+  showAuthScreen('login');
 }
 function hideAuthScreen(){
-  const {screen}=authEls();
-  if(screen) screen.style.display='none';
+  const loginScreen=document.getElementById('auth-screen');
+  const registerScreen=document.getElementById('register-screen');
+  if(loginScreen) loginScreen.style.display='none';
+  if(registerScreen) registerScreen.style.display='none';
 }
 function authErrorMessage(err){
   const code=String(err?.code||'');
@@ -5021,12 +5074,22 @@ function authErrorMessage(err){
   return err?.message||'Authentication failed.';
 }
 function bindAuthInputHandlers(){
-  const {email,password}=authEls();
-  if(email) email.addEventListener('keydown',(event)=>{
+  const loginEmail=document.getElementById('auth-email');
+  const loginPassword=document.getElementById('auth-password');
+  const registerEmail=document.getElementById('register-email');
+  const registerPassword=document.getElementById('register-password');
+  const registerConfirm=document.getElementById('register-confirm');
+  const registerName=document.getElementById('register-name');
+  if(loginEmail) loginEmail.addEventListener('keydown',(event)=>{
     if(event.key==='Enter') authSignIn();
   });
-  if(password) password.addEventListener('keydown',(event)=>{
+  if(loginPassword) loginPassword.addEventListener('keydown',(event)=>{
     if(event.key==='Enter') authSignIn();
+  });
+  [registerEmail,registerPassword,registerConfirm,registerName].forEach((input)=>{
+    if(input) input.addEventListener('keydown',(event)=>{
+      if(event.key==='Enter') authSignUp();
+    });
   });
 }
 function initFirebaseClient(){
@@ -5047,6 +5110,9 @@ async function handleSignedInUser(user){
       CLOUD_FLUSH_TIMER=null;
     }
   }
+  if(window.location.pathname==='/register'){
+    window.history.replaceState({},'', '/');
+  }
   resetInMemoryState();
   showAuthScreen();
   CURRENT_AUTH_USER=user;
@@ -5056,6 +5122,7 @@ async function handleSignedInUser(user){
   try{
     await FB_DB.collection('users').doc(user.uid).set({
       email:user.email||'',
+      name:user.displayName||'',
       lastSeenAt:firebase.firestore.FieldValue.serverTimestamp()
     },{merge:true});
     await loadCloudDataForUser(user.uid);
@@ -5098,7 +5165,7 @@ async function handleSignedInUser(user){
       if(ob) ob.style.display='flex';
       const nm=document.getElementById('ob-nm');
       if(nm&&!nm.value){
-        const fallbackName=(user.email||'').split('@')[0]||'';
+        const fallbackName=(user.displayName||user.email||'').split('@')[0]||'';
         if(fallbackName) nm.value=fallbackName;
       }
       obGo(0);
@@ -5157,7 +5224,47 @@ async function authSignIn(){
   }
 }
 async function authSignUp(){
-  setAuthError('Account registration is disabled on this website.');
+  if(!FB_AUTH){
+    setAuthError('Firebase auth is not initialized.');
+    return;
+  }
+  const {email,password,confirm,name}=authEls();
+  const em=(email?.value||'').trim();
+  const pw=(password?.value||'').trim();
+  const cpw=(confirm?.value||'').trim();
+  const nm=(name?.value||'').trim();
+  if(!em||!pw){
+    setAuthError('Enter email and password.');
+    return;
+  }
+  if(pw!==cpw){
+    setAuthError('Passwords do not match.');
+    return;
+  }
+  setAuthError('');
+  setAuthStatus('Creating account...');
+  setAuthBusy(true);
+  try{
+    const cred=await FB_AUTH.createUserWithEmailAndPassword(em,pw);
+    if(cred?.user&&nm){
+      try{
+        await cred.user.updateProfile({displayName:nm});
+      }catch(_profileErr){}
+      if(FB_DB){
+        try{
+          await FB_DB.collection('users').doc(cred.user.uid).set({
+            email:em,
+            name:nm
+          },{merge:true});
+        }catch(_dbErr){}
+      }
+    }
+  }catch(err){
+    setAuthError(authErrorMessage(err));
+  }finally{
+    setAuthBusy(false);
+    setAuthStatus('');
+  }
 }
 async function authSignOut(){
   if(!FB_AUTH) return;
@@ -5171,6 +5278,10 @@ async function authSignOut(){
 function initAuthFlow(){
   installScopedStorageBridge();
   bindAuthInputHandlers();
+  showAuthScreen();
+  window.addEventListener('popstate',()=>{
+    if(!CURRENT_AUTH_USER) showAuthScreen();
+  });
   if(!initFirebaseClient()){
     showAuthScreen();
     setAuthError('Firebase is not configured. Set FIREBASE_* env values on the server.');
