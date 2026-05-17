@@ -76,7 +76,7 @@ const LOG_LEVEL_PRIORITY = Object.freeze({debug:10,info:20,warn:30,error:40});
 function getDefaultFrontendLogLevel(){
   const host=String(window.location?.hostname||'').toLowerCase();
   const isDev=host==='localhost'||host==='127.0.0.1'||host.endsWith('.local');
-  return isDev?'debug':'info';
+  return isDev?'warn':'error';
 }
 function resolveFrontendLogLevel(){
   try{
@@ -4452,7 +4452,7 @@ function openMilestoneCheckpointForStage(completedStageIndex,options={}){
     acknowledgedAt:''
   };
   setExecutionPendingMilestoneCheckpoint(pendingCheckpoint);
-  if(options.forceRehydrate!==false) saveAll();
+  if(options.forceRehydrate!==false) saveAll(true);
   if(options.deferRender!==true){
     renderMilestoneCheckpoint();
   }
@@ -4486,7 +4486,7 @@ function clearMilestoneCheckpointState(options={}){
       acknowledgedAt:nowIso(),
       taskGenerationStarted:Boolean(pendingCheckpoint.taskGenerationStarted)
     });
-    if(options.persist!==false) saveAll();
+    if(options.persist!==false) saveAll(true);
   }
   const overlay=document.getElementById('milestone-checkpoint-overlay');
   if(overlay) overlay.classList.remove('on');
@@ -5197,7 +5197,7 @@ async function handleSignedInUser(user){
     loadAll();
     loadRoadmapRebuildCount();
     const betaNormalized=enforceBetaOnboardingState();
-    if(betaNormalized) saveAll();
+    if(betaNormalized) saveAll(true);
     const deadlineInput=document.getElementById('ob-deadline');
     if(deadlineInput) deadlineInput.value=S.user.deadline||'';
     setObDeadlineError('');
@@ -5440,8 +5440,14 @@ function getContextSummary(){
   }
   return refreshContextSummary();
 }
-function saveAll(){
+let _saveAllTimer=null;
+function saveAll(immediate=false){
   if(!canPersistUserData()) return;
+  if(!immediate){
+    clearTimeout(_saveAllTimer);
+    _saveAllTimer=setTimeout(()=>saveAll(true),400);
+    return;
+  }
   try{
     const summary=refreshContextSummary();
     localStorage.setItem('sa_context_summary',summary);
@@ -10176,6 +10182,7 @@ async function toggleTask(id){
   }
   saveTasks();
   saveAll();
+  syncActiveTasksFromExecution();
   renderTasks();
   updTaskBadge();
   const metricTasks=document.getElementById('m-tasks');
@@ -10184,9 +10191,6 @@ async function toggleTask(id){
   if(mb)mb.style.width=Math.min(100,S.progress.tasksDone*5)+'%';
   updMilestoneBar();
   updRoadmapProgress();
-  if(S.roadmap) renderRM();
-  syncActiveTasksFromExecution();
-  renderTasks();
   if(S.roadmap) renderRM();
   if(activeTaskDetailId===Number(id)) renderTaskDetail();
 }
@@ -10964,7 +10968,7 @@ document.addEventListener('DOMContentLoaded',async ()=>{
   switchWorkTab('tasks');
   initAuthFlow();
   // Periodic auto-save safety net — catches any action that forgot to call saveAll()
-  setInterval(()=>{if(canPersistUserData()) saveAll();},90000);
+  setInterval(()=>{if(canPersistUserData()) saveAll(true);},90000);
 });
 
 /* ══ DRAGGABLE + RESIZABLE WORK PANEL ══ */
