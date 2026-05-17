@@ -1,0 +1,15 @@
+node_modules/
+.env
+.firebase/
+firebase-debug.log
+cloudflare_deploy_bundle/
+.claude/
+.claude-flow/
+.swarm/
+ruvector.db
+dev-server.err
+dev-server.log
+85%
+pruneOpenAIResponseCache()
+sendChatMsg(msg
+_design_tmp/
