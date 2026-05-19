@@ -35,6 +35,75 @@ const FIREBASE_WEB_CONFIG = {
 };
 const FIREBASE_REQUIRED_FIELDS = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId'];
 const FIREBASE_CONFIGURED = FIREBASE_REQUIRED_FIELDS.every((field) => Boolean(FIREBASE_WEB_CONFIG[field]));
+// ── Firebase Admin ────────────────────────────────────────────────────────────
+// Lazily initialised once from FIREBASE_SERVICE_ACCOUNT_JSON.
+// If the env var is absent the server still boots; protected routes return 503.
+
+let _adminApp = null;
+let _adminInitError = null;
+
+function getFirebaseAdmin() {
+  if (_adminApp) return _adminApp;
+  if (_adminInitError) return null;
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    _adminInitError = 'FIREBASE_SERVICE_ACCOUNT_JSON env var is not set';
+    return null;
+  }
+  try {
+    // Restore escaped newlines that some env providers collapse.
+    const fixed = raw.replace(/\\n/g, '\n');
+    const credential = JSON.parse(fixed);
+    const admin = require('firebase-admin');
+    _adminApp = admin.initializeApp({ credential: admin.credential.cert(credential) });
+    return _adminApp;
+  } catch (err) {
+    _adminInitError = `Firebase Admin init failed: ${err.message}`;
+    return null;
+  }
+}
+
+async function verifyFirebaseIdToken(req) {
+  const header = req.headers['authorization'] || '';
+  if (!header.startsWith('Bearer ')) {
+    throw Object.assign(new Error('Missing Bearer token'), { status: 401 });
+  }
+  const token = header.slice(7);
+  const adminApp = getFirebaseAdmin();
+  if (!adminApp) {
+    throw Object.assign(
+      new Error(_adminInitError || 'Firebase Admin not initialised'),
+      { status: 503, configError: true }
+    );
+  }
+  const admin = require('firebase-admin');
+  const decoded = await admin.auth().verifyIdToken(token);
+  return decoded;
+}
+
+async function requireFirebaseUser(req, res, next) {
+  try {
+    req.firebaseUser = await verifyFirebaseIdToken(req);
+    next();
+  } catch (err) {
+    const status = err.status || 401;
+    const body = err.configError
+      ? { error: 'Firebase Admin is not configured on this server', detail: err.message }
+      : { error: 'Unauthorized' };
+    return res.status(status).json(body);
+  }
+}
+
+// Log admin init status at startup (without printing credentials).
+(function logAdminStatus() {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    console.warn('[firebase-admin] FIREBASE_SERVICE_ACCOUNT_JSON not set — authenticated routes will return 503');
+  }
+})();
+
+// ── End Firebase Admin ────────────────────────────────────────────────────────
+
 const OPENAI_MODEL = String(process.env.OPENAI_MODEL || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
 const OPENAI_ALLOWED_RESPONSE_MIME_TYPES = new Set(['application/json', 'text/plain']);
 function usesCompletionTokenLimit(model) {
