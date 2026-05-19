@@ -2776,6 +2776,267 @@ app.post('/api/openai/generate', aiLimiter, async (req, res) => {
   }
 });
 
+// ── Telegram Integration ───────────────────────────────────────────────────
+// Deep-link token flow (webhook-based, no polling).
+// TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET must be set in env.
+// If absent, routes return 503; server still boots.
+
+const TELEGRAM_BOT_TOKEN     = process.env.TELEGRAM_BOT_TOKEN     || '';
+const TELEGRAM_BOT_USERNAME  = (process.env.TELEGRAM_BOT_USERNAME  || '').replace(/^@/, '');
+const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+const CRON_SECRET             = process.env.CRON_SECRET             || '';
+const TELEGRAM_CONFIGURED     = Boolean(TELEGRAM_BOT_TOKEN);
+
+// Link tokens live in memory (primary, fast) + Firestore (secondary, survives restarts).
+// TTL: 15 minutes. Format: 32 URL-safe chars (A-Z a-z 0-9 _ -).
+const LINK_TOKEN_TTL_MS = 15 * 60 * 1000;
+// Map<token, { uid: string, expiresAt: number }>
+const linkTokenStore = new Map();
+
+function generateLinkToken() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
+  const bytes = crypto.randomBytes(32);
+  return Array.from(bytes, (b) => chars[b % chars.length]).join('');
+}
+
+function pruneLinkTokens() {
+  const now = Date.now();
+  for (const [tok, entry] of linkTokenStore) {
+    if (now > entry.expiresAt) linkTokenStore.delete(tok);
+  }
+}
+
+function maskChatId(chatId) {
+  const s = String(chatId || '');
+  return s.length <= 4 ? '***' : `${s.slice(0, 4)}***`;
+}
+
+async function tgSend(method, body) {
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`Telegram ${method} → ${resp.status}: ${errText.slice(0, 200)}`);
+  }
+  return resp.json();
+}
+
+function getFirestoreOrNull() {
+  try {
+    const adminApp = getFirebaseAdmin();
+    if (!adminApp) return null;
+    const admin = require('firebase-admin');
+    return admin.firestore();
+  } catch (_) {
+    return null;
+  }
+}
+
+// Core webhook logic extracted so the route handler can ack 200 first.
+async function handleTelegramUpdate(update) {
+  const message = update?.message;
+  if (!message) return;
+
+  const chatId   = message.chat?.id;
+  const text     = (message.text || '').trim();
+  const username = message.from?.username  || '';
+  const firstName = message.from?.first_name || '';
+
+  if (!chatId || !text) return;
+
+  if (text === '/help' || text.startsWith('/help@')) {
+    await tgSend('sendMessage', {
+      chat_id: chatId,
+      text: 'I send your daily StriveAI execution ping.\n\nTo connect your account, open StriveAI, go to Settings → Telegram, and tap "Connect".\n\nUse /stop to pause pings.',
+    });
+    return;
+  }
+
+  if (text === '/stop' || text.startsWith('/stop@')) {
+    await tgSend('sendMessage', {
+      chat_id: chatId,
+      text: 'Pings paused. Reconnect any time in StriveAI settings.',
+    });
+    return;
+  }
+
+  if (!text.startsWith('/start')) return; // ignore all other messages
+
+  const token = text.split(' ')[1] || '';
+
+  if (!token) {
+    await tgSend('sendMessage', {
+      chat_id: chatId,
+      text: 'To connect StriveAI, open the app, go to Settings → Telegram, and tap "Connect" to get a link.',
+    });
+    return;
+  }
+
+  // Look up token: memory first, then Firestore (handles server restart).
+  let uid = null;
+  const memEntry = linkTokenStore.get(token);
+  if (memEntry && Date.now() <= memEntry.expiresAt) {
+    uid = memEntry.uid;
+    linkTokenStore.delete(token);
+  } else {
+    linkTokenStore.delete(token); // clean up expired entry
+    const db = getFirestoreOrNull();
+    if (db) {
+      const snap = await db.collection('telegram_link_tokens').doc(token).get();
+      if (snap.exists) {
+        const d = snap.data();
+        if (!d.used && d.expiresAt.toDate().getTime() > Date.now()) {
+          uid = d.uid;
+        }
+      }
+    }
+  }
+
+  if (!uid) {
+    await tgSend('sendMessage', {
+      chat_id: chatId,
+      text: 'That link has expired or is not valid. Open StriveAI and tap "Connect Telegram" again to get a fresh link.',
+    });
+    return;
+  }
+
+  // Persist connection — idempotent (merge: true overwrites same uid).
+  const db = getFirestoreOrNull();
+  if (!db) {
+    await tgSend('sendMessage', {
+      chat_id: chatId,
+      text: 'Connection could not be saved (server configuration issue). Please try again later.',
+    });
+    return;
+  }
+
+  await db.collection('telegram_connections').doc(uid).set({
+    chatId:        String(chatId),
+    username,
+    firstName,
+    connectedAt:   new Date(),
+    pingHour:      9,
+    pingEnabled:   true,
+    lastPingSentAt: null,
+    lastPingStatus: '',
+  }, { merge: true });
+
+  // Mark token used so replay is rejected.
+  db.collection('telegram_link_tokens').doc(token)
+    .set({ used: true }, { merge: true })
+    .catch(() => {});
+
+  logInfo({ area: 'telegram', module: 'backend/server.js', action: 'connected', uid, chatId: maskChatId(chatId) });
+
+  await tgSend('sendMessage', {
+    chat_id: chatId,
+    text: 'StriveAI connected. I\'ll check in with your daily action here.',
+  });
+}
+
+// POST /api/v2/telegram/link-token — authenticated; creates a deep-link token.
+app.post('/api/v2/telegram/link-token', requireFirebaseUser, async (req, res) => {
+  if (!TELEGRAM_CONFIGURED) {
+    return res.status(503).json({ error: 'Telegram is not configured on this server' });
+  }
+  const uid = req.firebaseUser.uid;
+  pruneLinkTokens();
+
+  const token     = generateLinkToken();
+  const expiresAt = Date.now() + LINK_TOKEN_TTL_MS;
+  linkTokenStore.set(token, { uid, expiresAt });
+
+  // Best-effort Firestore write so token survives a server restart.
+  const db = getFirestoreOrNull();
+  if (db) {
+    db.collection('telegram_link_tokens').doc(token).set({
+      uid,
+      expiresAt: new Date(expiresAt),
+      used:      false,
+      createdAt: new Date(),
+    }).catch((err) =>
+      logWarn({ area: 'telegram', module: 'backend/server.js', action: 'link_token_firestore_write_failed', error: err.message })
+    );
+  }
+
+  const botUser    = TELEGRAM_BOT_USERNAME || 'StriveAIBot';
+  const connectUrl = `https://t.me/${botUser}?start=${token}`;
+  return res.json({
+    botUsername: botUser,
+    connectUrl,
+    expiresAt: new Date(expiresAt).toISOString(),
+  });
+});
+
+// GET /api/v2/telegram/status — authenticated; returns connection status without exposing chatId.
+app.get('/api/v2/telegram/status', requireFirebaseUser, async (req, res) => {
+  const uid = req.firebaseUser.uid;
+  const db  = getFirestoreOrNull();
+  if (!db) {
+    return res.status(503).json({ error: 'Firebase is not configured on this server' });
+  }
+  try {
+    const snap = await db.collection('telegram_connections').doc(uid).get();
+    if (!snap.exists) {
+      return res.json({ connected: false });
+    }
+    const d = snap.data();
+    return res.json({
+      connected:   Boolean(d.chatId),
+      username:    d.username    || '',
+      firstName:   d.firstName   || '',
+      pingHour:    typeof d.pingHour === 'number' ? d.pingHour : 9,
+      pingEnabled: d.pingEnabled !== false,
+      connectedAt: d.connectedAt ? d.connectedAt.toDate().toISOString() : '',
+    });
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'status_read_failed', uid, error: err.message });
+    return res.status(500).json({ error: 'Failed to read Telegram status' });
+  }
+});
+
+// POST /api/v2/telegram/disconnect — authenticated; removes connection record.
+app.post('/api/v2/telegram/disconnect', requireFirebaseUser, async (req, res) => {
+  const uid = req.firebaseUser.uid;
+  const db  = getFirestoreOrNull();
+  if (!db) {
+    return res.status(503).json({ error: 'Firebase is not configured on this server' });
+  }
+  try {
+    await db.collection('telegram_connections').doc(uid).delete();
+    logInfo({ area: 'telegram', module: 'backend/server.js', action: 'disconnected', uid });
+    return res.json({ ok: true });
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'disconnect_failed', uid, error: err.message });
+    return res.status(500).json({ error: 'Failed to disconnect Telegram' });
+  }
+});
+
+// POST /api/telegram/webhook — receives Telegram updates; always responds 200 immediately.
+app.post('/api/telegram/webhook', async (req, res) => {
+  res.sendStatus(200); // ack before any processing; Telegram retries on non-2xx
+
+  const secret = req.headers['x-telegram-bot-api-secret-token'] || '';
+  if (!TELEGRAM_WEBHOOK_SECRET || secret !== TELEGRAM_WEBHOOK_SECRET) {
+    // Reject silently — do not reveal whether the secret is configured.
+    return;
+  }
+  if (!TELEGRAM_CONFIGURED) return;
+
+  try {
+    await handleTelegramUpdate(req.body);
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'webhook_handler_error', error: err.message });
+  }
+});
+
+// ── End Telegram Integration ───────────────────────────────────────────────
+
 app.get('*', (_req, res) => {
   res.sendFile(path.join(frontendDir, 'index.html'));
 });
