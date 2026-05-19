@@ -14,5 +14,11 @@
       "src": "/(.*)",
       "dest": "backend/server.js"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/telegram-pings",
+      "schedule": "0 * * * *"
+    }
   ]
 }

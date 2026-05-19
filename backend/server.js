@@ -3035,6 +3035,288 @@ app.post('/api/telegram/webhook', async (req, res) => {
   }
 });
 
+// ── Telegram Ping Scheduling ──────────────────────────────────────────────
+
+const APP_BASE_URL = (process.env.APP_BASE_URL || '').replace(/\/$/, '');
+
+function buildPingText(data) {
+  const day   = Number(data.dayIndex) || 1;
+  const title = String(data.actionTitle    || 'your task').slice(0, 200);
+  const done  = String(data.doneCriteria   || '').slice(0, 200);
+  const mins  = Number(data.estimatedMinutes) || 60;
+  const lines = [`Day ${day} of 7: ${title}`];
+  if (done) lines.push(`Done means: ${done}`);
+  lines.push(`Estimated time: ${mins} min.`);
+  return lines.join('\n');
+}
+
+function buildPingKeyboard() {
+  if (!APP_BASE_URL) return undefined;
+  return {
+    inline_keyboard: [
+      [
+        { text: 'Open Today',       url: `${APP_BASE_URL}/today` },
+        { text: 'Start with Agent', url: `${APP_BASE_URL}/agent` },
+      ],
+      [
+        { text: "I'm blocked",      url: `${APP_BASE_URL}/blocked?type=blocked` },
+        { text: 'Skip today',       url: `${APP_BASE_URL}/blocked?type=skipped` },
+      ],
+    ],
+  };
+}
+
+function validateTz(tz) {
+  if (!tz || typeof tz !== 'string') return 'UTC';
+  try { new Intl.DateTimeFormat(undefined, { timeZone: tz }); return tz; } catch (_) { return 'UTC'; }
+}
+
+function localDateStr(utcMs, tz) {
+  // Returns "YYYY-MM-DD" in the given timezone.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(utcMs));
+}
+
+function computeNextPingAt(timezone, localPingTime, afterMs = Date.now()) {
+  const [hStr, mStr] = String(localPingTime || '09:00').split(':');
+  const hour   = Math.max(0, Math.min(23, parseInt(hStr, 10) || 9));
+  const minute = Math.max(0, Math.min(59, parseInt(mStr, 10) || 0));
+  const tz     = validateTz(timezone);
+
+  for (let daysAhead = 0; daysAhead <= 2; daysAhead++) {
+    const ref = new Date(afterMs + daysAhead * 86400000);
+    const pd  = {};
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
+    }).formatToParts(ref).forEach((x) => { pd[x.type] = x.value; });
+
+    const yyyy = pd.year.padStart(4, '0');
+    const mm   = pd.month.padStart(2, '0');
+    const dd   = pd.day.padStart(2, '0');
+    const hh   = String(hour).padStart(2, '0');
+    const mn   = String(minute).padStart(2, '0');
+
+    // Convert local YYYY-MM-DDTHH:mm to UTC by measuring the timezone offset.
+    // Treat local as UTC ("wrongUtc"), format that back through the tz to get what
+    // the timezone reads, then compute: correctUtcMs = wrongUtc + (wrongUtc - wrongLocal).
+    const wrongUtc = new Date(`${yyyy}-${mm}-${dd}T${hh}:${mn}:00Z`);
+    const lp       = {};
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
+    }).formatToParts(wrongUtc).forEach((x) => { lp[x.type] = x.value; });
+    let lh = parseInt(lp.hour, 10) || 0;
+    if (lh === 24) lh = 0; // midnight edge in en-US hour12:false
+    const wrongLocalMs = Date.UTC(
+      parseInt(lp.year, 10), parseInt(lp.month, 10) - 1, parseInt(lp.day, 10),
+      lh, parseInt(lp.minute, 10), parseInt(lp.second, 10),
+    );
+    const correctUtcMs = wrongUtc.getTime() + (wrongUtc.getTime() - wrongLocalMs);
+    if (correctUtcMs > afterMs + 60_000) return correctUtcMs;
+  }
+  return afterMs + 86400000; // fallback: 24 h from now
+}
+
+// POST /api/v2/telegram/schedule — authenticated; upserts the ping queue record.
+// chatId is read server-side from telegram_connections — never accepted from client.
+app.post('/api/v2/telegram/schedule', requireFirebaseUser, async (req, res) => {
+  if (!TELEGRAM_CONFIGURED) {
+    return res.status(503).json({ error: 'Telegram is not configured on this server' });
+  }
+  const uid = req.firebaseUser.uid;
+  const db  = getFirestoreOrNull();
+  if (!db) return res.status(503).json({ error: 'Firebase is not configured on this server' });
+
+  const {
+    trackId, dayIndex, goalTitle, actionTitle,
+    doneCriteria, estimatedMinutes, timezone, localPingTime,
+  } = req.body || {};
+
+  if (!trackId || typeof trackId !== 'string') {
+    return res.status(400).json({ error: 'trackId is required' });
+  }
+  if (!actionTitle || typeof actionTitle !== 'string') {
+    return res.status(400).json({ error: 'actionTitle is required' });
+  }
+
+  let chatId;
+  try {
+    const connSnap = await db.collection('telegram_connections').doc(uid).get();
+    chatId = connSnap.exists ? connSnap.data()?.chatId : null;
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'schedule_conn_read_failed', uid, error: err.message });
+    return res.status(500).json({ error: 'Failed to read Telegram connection' });
+  }
+  if (!chatId) {
+    return res.status(400).json({ error: 'No Telegram connection found — connect Telegram first' });
+  }
+
+  const tz         = validateTz(timezone);
+  const pingTime   = String(localPingTime || '09:00');
+  const nextPingAt = computeNextPingAt(tz, pingTime);
+
+  try {
+    await db.collection('telegram_ping_queue').doc(uid).set({
+      uid,
+      chatId:           String(chatId),
+      enabled:          true,
+      trackId:          String(trackId),
+      goalTitle:        String(goalTitle        || '').slice(0, 200),
+      dayIndex:         Math.max(1, Math.min(7, Number(dayIndex) || 1)),
+      actionTitle:      String(actionTitle      || '').slice(0, 200),
+      doneCriteria:     String(doneCriteria     || '').slice(0, 200),
+      estimatedMinutes: Math.max(1, Number(estimatedMinutes) || 60),
+      timezone:         tz,
+      localPingTime:    pingTime,
+      nextPingAt:       new Date(nextPingAt),
+      lastPingAt:       null,
+      lastPingDate:     '',
+      missedPingCount:  0,
+      updatedAt:        new Date(),
+    });
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'schedule_write_failed', uid, error: err.message });
+    return res.status(500).json({ error: 'Failed to schedule ping' });
+  }
+
+  logInfo({ area: 'telegram', module: 'backend/server.js', action: 'ping_scheduled', uid, nextPingAt: new Date(nextPingAt).toISOString() });
+  return res.json({ ok: true, nextPingAt: new Date(nextPingAt).toISOString() });
+});
+
+// POST /api/v2/telegram/test-ping — authenticated; sends one test message now.
+app.post('/api/v2/telegram/test-ping', requireFirebaseUser, async (req, res) => {
+  if (!TELEGRAM_CONFIGURED) {
+    return res.status(503).json({ error: 'Telegram is not configured on this server' });
+  }
+  const uid = req.firebaseUser.uid;
+  const db  = getFirestoreOrNull();
+  if (!db) return res.status(503).json({ error: 'Firebase is not configured on this server' });
+
+  let chatId, qData;
+  try {
+    const [connSnap, queueSnap] = await Promise.all([
+      db.collection('telegram_connections').doc(uid).get(),
+      db.collection('telegram_ping_queue').doc(uid).get(),
+    ]);
+    chatId = connSnap.exists ? connSnap.data()?.chatId : null;
+    qData  = queueSnap.exists ? queueSnap.data() : {};
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'test_ping_read_failed', uid, error: err.message });
+    return res.status(500).json({ error: 'Failed to read ping data' });
+  }
+
+  if (!chatId) {
+    return res.status(400).json({ error: 'No Telegram connection found — connect Telegram first' });
+  }
+
+  const msgText  = buildPingText(Object.keys(qData).length ? qData : { dayIndex: 1, actionTitle: 'your next task', doneCriteria: '', estimatedMinutes: 60 });
+  const keyboard = buildPingKeyboard();
+  const payload  = { chat_id: chatId, text: `[TEST PING]\n\n${msgText}` };
+  if (keyboard) payload.reply_markup = keyboard;
+
+  try {
+    await tgSend('sendMessage', payload);
+    logInfo({ area: 'telegram', module: 'backend/server.js', action: 'test_ping_sent', uid, chatId: maskChatId(chatId) });
+    return res.json({ ok: true });
+  } catch (err) {
+    logWarn({ area: 'telegram', module: 'backend/server.js', action: 'test_ping_failed', uid, chatId: maskChatId(chatId), error: err.message });
+    return res.status(500).json({ error: 'Failed to send test ping', detail: err.message });
+  }
+});
+
+// GET /api/cron/telegram-pings — secured by CRON_SECRET (Vercel cron header).
+// Queries telegram_ping_queue for enabled records with nextPingAt <= now,
+// sends each ping, and updates lastPingAt/nextPingAt.  Idempotent per user/day.
+// Requires a Firestore composite index: (enabled ASC, nextPingAt ASC).
+app.get('/api/cron/telegram-pings', async (req, res) => {
+  const authHeader = req.headers['authorization'] || '';
+  const expected   = CRON_SECRET ? `Bearer ${CRON_SECRET}` : '';
+  if (!expected || authHeader !== expected) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!TELEGRAM_CONFIGURED) {
+    return res.status(503).json({ ok: false, reason: 'telegram_not_configured' });
+  }
+  const db = getFirestoreOrNull();
+  if (!db) {
+    return res.status(503).json({ ok: false, reason: 'firebase_not_configured' });
+  }
+
+  const now     = new Date();
+  const results = { sent: 0, skipped: 0, failed: 0, errors: [] };
+
+  let snap;
+  try {
+    snap = await db.collection('telegram_ping_queue')
+      .where('enabled', '==', true)
+      .where('nextPingAt', '<=', now)
+      .get();
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'cron_query_failed', error: err.message });
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+
+  const batch      = db.batch();
+  let   batchCount = 0;
+
+  for (const docSnap of snap.docs) {
+    const data  = docSnap.data();
+    const uid   = data.uid;
+    const tz    = validateTz(data.timezone);
+    const today = localDateStr(now.getTime(), tz);
+
+    // Idempotency: skip if already sent today in user's local timezone.
+    if (data.lastPingDate === today) {
+      results.skipped++;
+      continue;
+    }
+
+    const chatId = data.chatId;
+    if (!chatId) {
+      results.skipped++;
+      continue;
+    }
+
+    const msgText  = buildPingText(data);
+    const keyboard = buildPingKeyboard();
+    const payload  = { chat_id: chatId, text: msgText };
+    if (keyboard) payload.reply_markup = keyboard;
+
+    try {
+      await tgSend('sendMessage', payload);
+      const nextPingAt = computeNextPingAt(tz, data.localPingTime || '09:00', now.getTime() + 60_000);
+      batch.update(docSnap.ref, {
+        lastPingAt:   now,
+        lastPingDate: today,
+        nextPingAt:   new Date(nextPingAt),
+        updatedAt:    now,
+      });
+      batchCount++;
+      results.sent++;
+      logInfo({ area: 'telegram', module: 'backend/server.js', action: 'ping_sent', uid, chatId: maskChatId(chatId), today });
+    } catch (err) {
+      batch.update(docSnap.ref, {
+        missedPingCount: (data.missedPingCount || 0) + 1,
+        updatedAt:       now,
+      });
+      batchCount++;
+      results.failed++;
+      results.errors.push({ uid, error: err.message });
+      logWarn({ area: 'telegram', module: 'backend/server.js', action: 'ping_failed', uid, chatId: maskChatId(chatId), error: err.message });
+    }
+  }
+
+  if (batchCount > 0) {
+    await batch.commit().catch((err) =>
+      logError({ area: 'telegram', module: 'backend/server.js', action: 'cron_batch_commit_failed', error: err.message })
+    );
+  }
+
+  logInfo({ area: 'telegram', module: 'backend/server.js', action: 'cron_complete', sent: results.sent, skipped: results.skipped, failed: results.failed });
+  return res.json({ ok: true, ...results });
+});
+
 // ── End Telegram Integration ───────────────────────────────────────────────
 
 app.get('*', (_req, res) => {
