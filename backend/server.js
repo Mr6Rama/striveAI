@@ -55,7 +55,12 @@ const OPENAI_ALLOWED_CONFIG_KEYS = new Set([
   'responseSchema',
   'responseJsonSchema',
 ]);
-const AI_ACTIONS = new Set(['roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit', 'goals_review', 'note_process', 'session_review', 'chat', 'goal_complete']);
+const AI_ACTIONS = new Set([
+  // v1 actions — kept for compatibility
+  'roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit', 'goals_review', 'note_process', 'session_review', 'chat', 'goal_complete',
+  // v2 actions
+  'track_generate', 'track_continue', 'agent_steps', 'agent_hint', 'rescue_action', 'action_kit', 'day7_recap', 'adapt_day', 'v2_proof_check',
+]);
 const ACTION_AI_CONFIG = Object.freeze({
   default: {
     model: OPENAI_MODEL,
@@ -145,11 +150,267 @@ const ACTION_AI_CONFIG = Object.freeze({
     topP: 1,
     contextLimits: { promptChars: 2800, systemChars: 900, totalChars: 3400 },
   },
+  // ── v2 actions ────────────────────────────────────────────────────────────
+  track_generate: {
+    model: 'gpt-5-mini',
+    maxCompletionTokens: 1400,
+    reasoningEffort: 'minimal',
+    temperature: 0.9,
+    topP: 1,
+    contextLimits: { promptChars: 5000, systemChars: 1400, totalChars: 6000 },
+  },
+  track_continue: {
+    model: 'gpt-5-mini',
+    maxCompletionTokens: 1400,
+    reasoningEffort: 'minimal',
+    temperature: 0.9,
+    topP: 1,
+    contextLimits: { promptChars: 5000, systemChars: 1400, totalChars: 6000 },
+  },
+  agent_steps: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 600,
+    reasoningEffort: 'minimal',
+    temperature: 0.8,
+    topP: 1,
+    contextLimits: { promptChars: 2000, systemChars: 800, totalChars: 2600 },
+  },
+  agent_hint: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 200,
+    reasoningEffort: 'minimal',
+    temperature: 0.7,
+    topP: 1,
+    contextLimits: { promptChars: 1200, systemChars: 500, totalChars: 1600 },
+  },
+  rescue_action: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 500,
+    reasoningEffort: 'minimal',
+    temperature: 0.8,
+    topP: 1,
+    contextLimits: { promptChars: 2200, systemChars: 800, totalChars: 2800 },
+  },
+  action_kit: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 600,
+    reasoningEffort: 'minimal',
+    temperature: 0.7,
+    topP: 1,
+    contextLimits: { promptChars: 1800, systemChars: 700, totalChars: 2400 },
+  },
+  day7_recap: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 350,
+    reasoningEffort: 'minimal',
+    temperature: 0.8,
+    topP: 1,
+    contextLimits: { promptChars: 2400, systemChars: 700, totalChars: 2900 },
+  },
+  adapt_day: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 300,
+    reasoningEffort: 'minimal',
+    temperature: 0.8,
+    topP: 1,
+    contextLimits: { promptChars: 2000, systemChars: 700, totalChars: 2600 },
+  },
+  v2_proof_check: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 250,
+    reasoningEffort: 'minimal',
+    temperature: 0.4,
+    topP: 1,
+    contextLimits: { promptChars: 1500, systemChars: 600, totalChars: 2000 },
+  },
 });
 const OPENAI_RESPONSE_CACHE_TTL_MS = 15 * 60 * 1000;
 const OPENAI_RESPONSE_CACHE_MAX_SIZE = 200;
 const openAIResponseCache = new Map();
 const TASK_GENERATION_ACTIONS = new Set(['tasks', 'tasks_skeleton', 'task_detail']);
+// v2 actions that return JSON (eligible for deterministic fallback)
+const V2_JSON_ACTIONS = new Set(['track_generate', 'track_continue', 'agent_steps', 'rescue_action', 'action_kit', 'adapt_day', 'v2_proof_check']);
+// v2 actions that return plain text
+const V2_PLAINTEXT_ACTIONS = new Set(['agent_hint', 'day7_recap']);
+
+// ── v2 fallback data ───────────────────────────────────────────────────────
+// One concrete 7-day template per GoalCategory.
+// Tuple: [title, dayCategory, estimateMinutes, why, successCriteria]
+const V2_TRACK_FALLBACK_DAYS = Object.freeze({
+  project: [
+    ['Describe what you are building and who it is for in one page', 'write', 60, 'Clarity before code prevents wasted effort', 'Document exists covering problem, user, and proposed solution'],
+    ['List the 5 most important features and cut to 3', 'review', 45, 'Smaller scope ships faster', 'Exactly 3 features listed with one-line rationale each'],
+    ['Set up the project repo and write a README with problem and solution', 'build', 90, 'Foundation before building', 'Repo created, README covers problem, solution, and setup steps'],
+    ['Build the first working feature end-to-end', 'build', 120, 'A working piece proves the idea', 'Feature runs without errors and matches the README description'],
+    ['Test the feature with 2 people. Note what they get stuck on', 'test', 90, 'Real feedback before over-building', 'Two sessions done, 3+ observations noted per session'],
+    ['Fix the top 2 issues found in testing', 'build', 90, 'Tested feedback applied immediately', 'Both issues resolved and re-tested'],
+    ['Record a 2-minute demo or capture screenshots of the working feature', 'write', 60, 'Proof of work for accountability and portfolio', 'Demo or 4+ screenshots saved and shareable'],
+  ],
+  startup: [
+    ['Write your one-sentence value proposition: who, what, why now', 'write', 60, 'Forces clarity before any other work', 'Value proposition fits one sentence without jargon'],
+    ['List 10 potential users. Mark who you can reach in 48 hours', 'research', 45, 'Real users beat hypothetical ones', '10 names with contact info, 3+ marked reachable'],
+    ['Send 5 direct messages asking for a 20-minute call this week', 'outreach', 60, 'Evidence starts with conversations', '5 messages sent, personalised to each recipient'],
+    ['Do 3 user interviews. Write down the exact words they use', 'research', 120, 'Exact language reveals real problems', '3 calls completed, verbatim quotes documented'],
+    ['Sketch a prototype that addresses the top problem you heard', 'build', 120, 'Showing beats telling', 'Prototype or wireframe covers the core user flow'],
+    ['Show the prototype to 2 interviewees. Record their reactions', 'test', 90, 'You need honest reactions, not polite approval', '2 sessions done, specific objections or positive signals noted'],
+    ['Write a one-page summary: problem, evidence, solution, next step', 'write', 60, 'Forces synthesis of everything learned', 'One-pager covers all four sections in under 400 words'],
+  ],
+  content: [
+    ['Pick one platform and format. Write your first draft post or script', 'write', 60, 'First draft beats a perfect plan', 'Draft is complete — rough is fine'],
+    ['Edit the draft. Remove everything not directly useful to the reader', 'review', 45, 'Shorter content performs better', 'Edited draft is 20%+ shorter with no loss of value'],
+    ['Publish the first piece. Screenshot analytics immediately after', 'other', 30, 'Publishing starts the feedback loop', 'Post is live and initial stats are screenshotted'],
+    ['Batch-write two more pieces using the same format', 'write', 90, 'Consistency requires batching', 'Two complete drafts ready to publish'],
+    ['Study 3 top posts in your niche. Write the structure each one uses', 'research', 60, 'Model what works before reinventing', 'Structure template written for at least 2 of the 3 posts'],
+    ['Apply the best structure to one draft and publish it', 'write', 60, 'Apply the learning immediately', 'Post is live using the studied structure'],
+    ['Review 7-day numbers. Write one paragraph on what worked', 'review', 45, 'Reflection compounds improvement', 'Written analysis covers reach, engagement, and one clear lesson'],
+  ],
+  skill: [
+    ['Find one concrete project you will build to practice this skill this week', 'research', 45, 'A real project beats drills', 'Project defined with scope completable in 5 days'],
+    ['Complete the first tutorial or chapter. Write down 3 things you learned', 'practice', 90, 'Active notes beat passive reading', 'Notes cover 3 distinct concepts from the session'],
+    ['Apply what you learned: build one small exercise from scratch', 'practice', 120, 'Building reveals what you missed', 'Exercise runs without copying from the tutorial'],
+    ['Identify the specific gap that slowed you. Look up only that', 'research', 60, 'Targeted research beats random reading', 'One specific question answered and source noted'],
+    ['Complete an exercise combining two concepts you have learned', 'practice', 120, 'Combining concepts builds real understanding', 'Combined exercise works without referencing prior work'],
+    ['Teach back: write a 200-word explanation of the core concept', 'write', 45, 'Teaching reveals exactly what you do not know', '200-word explanation written in plain language'],
+    ['Build a small demo or write a summary of everything learned this week', 'build', 90, 'A tangible output closes the loop', 'Demo or summary covers every major concept from the week'],
+  ],
+  career: [
+    ['Write a one-paragraph summary of your target role and top qualification', 'write', 60, 'Clarity about what you want sharpens your pitch', 'Paragraph covers target role, company type, and one key qualification'],
+    ['Update your resume. Cut every bullet to one line', 'write', 90, 'Concise beats comprehensive', 'Resume updated with every bullet trimmed to one line'],
+    ['Find 5 matching job postings. Save ones where you meet 70%+ of requirements', 'research', 60, 'Apply where you are actually qualified', '5 postings found, at least 2 saved for application'],
+    ['Write a cold outreach message to one person at a target company', 'outreach', 60, 'Warm connections beat cold applications', 'One personalised message written and sent'],
+    ['Apply to 2 saved postings with a customised cover note each', 'outreach', 90, 'Two applications beats zero', 'Applications submitted with tailored notes'],
+    ['Prepare written answers to the 3 most common interview questions', 'practice', 90, 'Preparation changes how you perform', '3 answers written out in full'],
+    ['Do a mock interview. Record yourself answering 3 questions and review it', 'practice', 60, 'Reviewing recordings improves answers faster than repetition', 'Recording done, 2+ specific improvements noted'],
+  ],
+  study: [
+    ['Identify the 3 most important concepts you need to understand this week', 'research', 45, 'Focus prevents spreading thin', '3 concepts listed with a reason why each matters'],
+    ['Study the first concept. Write a one-page summary in your own words', 'practice', 90, 'Your own words beat copying', 'Summary written without referencing source material'],
+    ['Find and complete 3 practice problems on the first concept', 'practice', 90, 'Problems reveal gaps faster than re-reading', '3 problems attempted, errors noted'],
+    ['Study the second concept. Connect it to the first in writing', 'practice', 90, 'Connections build durable understanding', 'Notes show explicit links between concept 1 and concept 2'],
+    ['Complete 5 practice problems mixing both concepts', 'practice', 120, 'Mixed practice beats blocked practice', '5 problems completed, at least 3 correct'],
+    ['Study the third concept. Write a summary connecting all three', 'write', 90, 'Synthesis is the goal of study', 'Summary shows how all three concepts relate'],
+    ['Timed review: explain all three concepts in 15 minutes without notes', 'practice', 60, 'Timed recall tests real retention', 'Explanation recorded or written, weak spots identified'],
+  ],
+  habit: [
+    ['Define the habit exactly: trigger, action, and duration', 'write', 45, 'Vague habits fail; precise habits stick', 'Habit written as: when X happens I will do Y for Z minutes'],
+    ['Do the habit today. Set a timer. Record start and end time', 'other', 30, 'Day 1 removes the mental block', 'Habit done once, time recorded'],
+    ['Set a specific daily time and add it to your calendar', 'other', 15, 'A default time prevents negotiation', 'Calendar block created with exact time for the next 7 days'],
+    ['Do the habit again. Rate difficulty 1–5. Note what made it hard', 'other', 30, 'Friction data lets you reduce it', 'Habit done, difficulty score and one friction note recorded'],
+    ['Remove one friction from Day 4. Prepare your environment in advance', 'other', 30, 'Environment design beats willpower', 'One specific preparation completed before tomorrow'],
+    ['Do the habit. Note whether the preparation helped', 'other', 30, 'Testing your own adjustments builds self-knowledge', 'Habit done, note on whether preparation made it easier'],
+    ['Write a one-paragraph reflection on what made this habit easier or harder', 'write', 30, 'Reflection turns experience into strategy', 'Reflection covers 3 factors that helped or hurt the habit'],
+  ],
+  fitness: [
+    ['Define your workout plan: type, duration, and how many sessions this week', 'write', 30, 'A specific plan beats vague intention', 'Plan covers type, time of day, and number of sessions'],
+    ['Complete the first workout. Record time, reps, or distance', 'other', 60, 'First session removes the start barrier', 'Workout done, key metric recorded'],
+    ['Note what felt difficult. Find one technique fix for that part', 'research', 30, 'Technique prevents injury and improves results', 'One specific form adjustment identified and noted'],
+    ['Complete second workout applying the technique change', 'other', 60, 'Apply before you forget', 'Workout done, technique change applied and result noted'],
+    ['Add one small progressive overload: 5% more weight, 1 more rep, or 2 more minutes', 'other', 60, 'Small increases compound over time', 'Workout done with one measurable increase recorded'],
+    ['Rest or do light movement. Prepare gear and plan for the final session', 'other', 30, 'Recovery is part of training', 'Rest or light activity done, plan ready for Day 7'],
+    ['Final workout. Measure one key metric and compare it to Day 2', 'other', 60, 'Measurement closes the feedback loop', 'Workout complete, Day 2 vs Day 7 metric recorded'],
+  ],
+  other: [
+    ['Write a clear one-paragraph description of what you want to accomplish this week', 'write', 45, 'Clarity first, action second', 'Paragraph covers the goal and a definition of done'],
+    ['Break the goal into 5 concrete sub-tasks. Pick the most important one', 'review', 45, 'Smaller tasks beat vague goals', '5 sub-tasks listed, top priority selected'],
+    ['Complete the first sub-task. Record exactly what you did', 'other', 90, 'Progress builds momentum', 'First sub-task done, notes on what was completed'],
+    ['Review what you completed. Identify the next most important sub-task', 'review', 30, 'Frequent reviews prevent wasted effort', 'Review done, next priority selected'],
+    ['Complete the second sub-task', 'other', 90, 'Consistency beats intensity', 'Second sub-task done, notes recorded'],
+    ['Review progress. Adjust scope if needed to make Day 7 achievable', 'review', 30, 'Realistic scope matters more than ambition', 'Scope reviewed, Day 7 deliverable is specific and achievable'],
+    ['Complete the week with one tangible output you can show or share', 'other', 90, 'Tangible outputs create accountability', 'One concrete artifact created and ready to share'],
+  ],
+});
+
+function parseV2PromptField(prompt, fieldName) {
+  const pattern = new RegExp(`^${fieldName}:\\s*(.+)`, 'm');
+  const match = pattern.exec(String(prompt || ''));
+  return match ? match[1].trim() : '';
+}
+
+function buildV2Fallback(action, prompt) {
+  const safePrompt = String(prompt || '');
+
+  if (action === 'track_generate' || action === 'track_continue') {
+    const goal = parseV2PromptField(safePrompt, 'Goal') || 'your goal';
+    const rawCat = parseV2PromptField(safePrompt, 'Category').toLowerCase();
+    const cat = Object.prototype.hasOwnProperty.call(V2_TRACK_FALLBACK_DAYS, rawCat) ? rawCat : 'other';
+    const template = V2_TRACK_FALLBACK_DAYS[cat];
+    return {
+      goal,
+      days: template.map(([title, category, estimateMinutes, why, successCriteria], i) => ({
+        dayNumber: i + 1,
+        title,
+        why,
+        successCriteria,
+        estimateMinutes,
+        category,
+        status: 'pending',
+        date: '',
+      })),
+    };
+  }
+
+  if (action === 'agent_steps') {
+    const title = parseV2PromptField(safePrompt, "Today's task") || 'your task';
+    const short = title.slice(0, 60);
+    return {
+      steps: [
+        { index: 0, text: `Open your workspace and re-read the task: "${short}"` },
+        { index: 1, text: 'Write down the single most important sub-task you need to complete first.' },
+        { index: 2, text: 'Complete that sub-task and record the output before stopping.' },
+      ],
+    };
+  }
+
+  if (action === 'rescue_action') {
+    const title = parseV2PromptField(safePrompt, 'Original task') || 'your task';
+    return {
+      rescueTitle: `Smallest step toward: ${title.slice(0, 60)}`,
+      steps: [
+        'Set a 20-minute timer.',
+        'Complete the first concrete sub-part of this task, even if incomplete.',
+        'Write one sentence describing what you did.',
+      ],
+      reframeNote: '',
+      source: 'fallback',
+    };
+  }
+
+  if (action === 'action_kit') {
+    const title = parseV2PromptField(safePrompt, 'Task') || 'your task';
+    return {
+      items: [
+        { type: 'question', label: 'Focus question', content: `What is the smallest concrete thing I can produce in 30 minutes that proves progress on: "${title.slice(0, 60)}"?` },
+        { type: 'template', label: 'Progress log', content: 'Time started:\nWhat I did:\nOutput produced:\nBlocker (if any):\nNext step:' },
+        { type: 'tip', label: 'Getting unstuck', content: 'If stuck, reduce scope to 25% of the original task. A smaller done beats a full not-started.' },
+      ],
+    };
+  }
+
+  if (action === 'adapt_day') {
+    const tomorrowTitle = parseV2PromptField(safePrompt, "Tomorrow's planned task") || '';
+    return { changed: false, title: tomorrowTitle, why: '' };
+  }
+
+  if (action === 'v2_proof_check') {
+    return {
+      verdict: 'partial',
+      note: 'Automatic verification unavailable. Check your work against the success criteria manually.',
+    };
+  }
+
+  return {};
+}
+
+function buildV2PlaintextFallback(action, prompt) {
+  if (action === 'agent_hint') {
+    return 'Try a smaller version of this step. What is the minimum you could complete in 10 minutes?';
+  }
+  if (action === 'day7_recap') {
+    const goal = parseV2PromptField(String(prompt || ''), 'Goal') || 'your goal';
+    return `This week you worked on: ${goal.slice(0, 80)}. Review your outcomes and identify the one pattern that most affected your progress. Use that as the starting point for your next run.`;
+  }
+  return '';
+}
 app.post('/api/goals/:id/complete', async (req, res) => {
   const { id } = req.params;
   const trace = createRequestTrace();
@@ -2330,6 +2591,40 @@ app.post('/api/openai/generate', aiLimiter, async (req, res) => {
         code: 'task_detail_generation_failed',
         retryable: true,
         requestId,
+      });
+    }
+
+    // v2 deterministic fallback — returned when all AI attempts are exhausted
+    if (V2_JSON_ACTIONS.has(safeAction) || V2_PLAINTEXT_ACTIONS.has(safeAction)) {
+      const fallbackText = V2_JSON_ACTIONS.has(safeAction)
+        ? JSON.stringify(buildV2Fallback(safeAction, trimmedCtx.prompt))
+        : buildV2PlaintextFallback(safeAction, trimmedCtx.prompt);
+      logAIRequest({
+        ...baseLog,
+        logType: 'fallback_used',
+        upstreamStatus: lastFailure?.timedOut ? 'TIMEOUT' : (lastFailure?.upstreamStatus || 0),
+        upstreamErrorCode: lastFailure?.upstreamErrorCode || lastFailure?.code || 'V2_FALLBACK',
+        finishReason: '',
+        attempt: providerAttempt,
+        chainAttempt: lastChainAttempt,
+        retryAttempt: lastRetryAttempt,
+        latencyMs: Date.now() - startedAt,
+        fallbackUsed: true,
+      });
+      baseLog.logType = 'success';
+      baseLog.latencyMs = Date.now() - startedAt;
+      baseLog.attempt = providerAttempt;
+      baseLog.chainAttempt = lastChainAttempt;
+      baseLog.retryAttempt = lastRetryAttempt;
+      logAIRequest(baseLog);
+      return res.json({
+        text: fallbackText,
+        finishReason: '',
+        requestId,
+        model: actionRuntimeConfig.model,
+        status: 'fallback',
+        fallbackUsed: true,
+        degraded: true,
       });
     }
 
