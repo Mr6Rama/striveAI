@@ -2572,6 +2572,10 @@ app.post('/api/notify/reminder', async (req, res) => {
   }
 });
 
+// module.exports lets @vercel/node use this as a serverless request handler.
+// app.listen is still called for local dev (node ignores the export).
+module.exports = app;
+
 app.listen(PORT, () => {
   logInfo({
     area: 'backend',
