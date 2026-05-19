@@ -1,6 +1,18 @@
-import { migrateFromLegacy } from '../core/migrations.js';
-import { STORAGE_KEYS, createDefaultHistory, createDefaultPlan, createDefaultToday, createDefaultUser, isoDateNow } from '../core/state-model.js';
-import { normalizePlan } from '../domain/plan-engine.js';
+import {
+  STORAGE_KEYS_V2,
+  createDefaultUserV2,
+  createDefaultTrackV2,
+  createDefaultTodayV2,
+  createDefaultHistoryV2,
+  createDefaultTelegramV2,
+  isoDateNow,
+  normalizeDayStatus,
+  normalizeTrackStatus,
+  normalizeGoalCategory,
+  BLOCKER_CATEGORIES,
+} from '../core/state-model.js';
+
+const K = STORAGE_KEYS_V2;
 
 export async function loadPersistedDomains({ userId, db }) {
   const local = readLocalDomains();
@@ -9,15 +21,7 @@ export async function loadPersistedDomains({ userId, db }) {
     cloud = await readCloudDomains({ userId, db });
   }
   const source = cloud && Object.keys(cloud).length ? cloud : local;
-  let domains = validateDomains(source);
-  if (!hasCoreData(domains)) {
-    const migration = migrateFromLegacy((key) => localStorage.getItem(key));
-    if (migration) {
-      domains = validateDomains(migration);
-      await saveDomains(domains, { userId, db });
-    }
-  }
-  return domains;
+  return validateDomains(source);
 }
 
 export async function saveDomains(domains, { userId, db }) {
@@ -27,28 +31,38 @@ export async function saveDomains(domains, { userId, db }) {
 }
 
 export async function saveDomain(name, value, { userId, db }) {
-  if (!Object.prototype.hasOwnProperty.call(STORAGE_KEYS, name)) return;
-  const key = STORAGE_KEYS[name];
+  if (!Object.prototype.hasOwnProperty.call(K, name)) return;
+  const key = K[name];
   localStorage.setItem(key, JSON.stringify(value));
   if (!userId || !db) return;
   const ref = db.collection('users').doc(userId).collection('kv').doc(key);
   await ref.set(
-    {
-      value: JSON.stringify(value),
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    },
+    { value: JSON.stringify(value), updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
     { merge: true }
   );
 }
 
+// ── Local I/O ──────────────────────────────────────────────────────────────
+
 function readLocalDomains() {
   return {
-    user: parse(localStorage.getItem(STORAGE_KEYS.user)),
-    plan: parse(localStorage.getItem(STORAGE_KEYS.plan)),
-    today: parse(localStorage.getItem(STORAGE_KEYS.today)),
-    history: parse(localStorage.getItem(STORAGE_KEYS.history)),
+    user:     parse(localStorage.getItem(K.user)),
+    track:    parse(localStorage.getItem(K.track)),
+    today:    parse(localStorage.getItem(K.today)),
+    history:  parse(localStorage.getItem(K.history)),
+    telegram: parse(localStorage.getItem(K.telegram)),
   };
 }
+
+function writeLocalDomains(domains) {
+  localStorage.setItem(K.user,     JSON.stringify(domains.user));
+  localStorage.setItem(K.track,    JSON.stringify(domains.track));
+  localStorage.setItem(K.today,    JSON.stringify(domains.today));
+  localStorage.setItem(K.history,  JSON.stringify(domains.history));
+  localStorage.setItem(K.telegram, JSON.stringify(domains.telegram));
+}
+
+// ── Cloud I/O ──────────────────────────────────────────────────────────────
 
 async function readCloudDomains({ userId, db }) {
   try {
@@ -58,10 +72,11 @@ async function readCloudDomains({ userId, db }) {
       const key = docSnap.id;
       const val = docSnap.data()?.value;
       if (!val || typeof val !== 'string') return;
-      if (key === STORAGE_KEYS.user) result.user = parse(val);
-      if (key === STORAGE_KEYS.plan) result.plan = parse(val);
-      if (key === STORAGE_KEYS.today) result.today = parse(val);
-      if (key === STORAGE_KEYS.history) result.history = parse(val);
+      if (key === K.user)     result.user     = parse(val);
+      if (key === K.track)    result.track    = parse(val);
+      if (key === K.today)    result.today    = parse(val);
+      if (key === K.history)  result.history  = parse(val);
+      if (key === K.telegram) result.telegram = parse(val);
     });
     return result;
   } catch (error) {
@@ -70,140 +85,206 @@ async function readCloudDomains({ userId, db }) {
   }
 }
 
-function writeLocalDomains(domains) {
-  localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(domains.user));
-  localStorage.setItem(STORAGE_KEYS.plan, JSON.stringify(domains.plan));
-  localStorage.setItem(STORAGE_KEYS.today, JSON.stringify(domains.today));
-  localStorage.setItem(STORAGE_KEYS.history, JSON.stringify(domains.history));
-}
-
 async function writeCloudDomains(domains, { userId, db }) {
   try {
     const batch = db.batch();
     const kvRef = db.collection('users').doc(userId).collection('kv');
-    batch.set(
-      kvRef.doc(STORAGE_KEYS.user),
-      {
-        value: JSON.stringify(domains.user),
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-    batch.set(
-      kvRef.doc(STORAGE_KEYS.plan),
-      {
-        value: JSON.stringify(domains.plan),
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-    batch.set(
-      kvRef.doc(STORAGE_KEYS.today),
-      {
-        value: JSON.stringify(domains.today),
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-    batch.set(
-      kvRef.doc(STORAGE_KEYS.history),
-      {
-        value: JSON.stringify(domains.history),
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+    const ts = firebase.firestore.FieldValue.serverTimestamp();
+    const set = (key, val) =>
+      batch.set(kvRef.doc(key), { value: JSON.stringify(val), updatedAt: ts }, { merge: true });
+    set(K.user,     domains.user);
+    set(K.track,    domains.track);
+    set(K.today,    domains.today);
+    set(K.history,  domains.history);
+    set(K.telegram, domains.telegram);
     await batch.commit();
   } catch (error) {
     console.warn('Cloud write failed, local save preserved', error);
   }
 }
 
-function validateDomains(raw) {
-  const user = validateUser(raw?.user);
-  const plan = validatePlan(raw?.plan, user);
-  const today = validateToday(raw?.today);
-  const history = validateHistory(raw?.history);
-  return { user, plan, today, history };
-}
+// ── Validation / normalization ─────────────────────────────────────────────
 
-function validateUser(raw) {
+function validateDomains(raw) {
   return {
-    ...createDefaultUser(),
-    ...(raw && typeof raw === 'object' ? raw : {}),
-    id: String(raw?.id || ''),
-    email: String(raw?.email || ''),
-    name: String(raw?.name || ''),
-    goal: String(raw?.goal || ''),
-    deadline: String(raw?.deadline || ''),
-    niche: String(raw?.niche || ''),         
-    executionStyle: String(raw?.executionStyle || ''), 
+    user:     validateUser(raw?.user),
+    track:    validateTrack(raw?.track),
+    today:    validateToday(raw?.today),
+    history:  validateHistory(raw?.history),
+    telegram: validateTelegram(raw?.telegram),
   };
 }
 
-function validatePlan(raw, user) {
-  if (!raw || typeof raw !== 'object') return createDefaultPlan();
-  return normalizePlan(raw, {
-    goal: String(raw.goal || user.goal || ''),
-    deadline: String(raw.deadline || user.deadline || ''),
-  });
-}
-
-function validateToday(raw) {
-  const base = createDefaultToday();
+function validateUser(raw) {
+  const base = createDefaultUserV2();
   if (!raw || typeof raw !== 'object') return base;
   return {
     ...base,
     ...raw,
-    date: String(raw.date || isoDateNow()),
-    primaryTaskId: String(raw.primaryTaskId || ''),
-    primaryTaskText: String(raw.primaryTaskText || ''),
-    reason: String(raw.reason || ''),
-    stageProgressHint: String(raw.stageProgressHint || ''),
-    status: normalizeTodayStatus(raw.status),
-    attemptCount: Number(raw.attemptCount || 0),
-    adjustmentLevel: Number(raw.adjustmentLevel || 0),
-    skippedTaskIds: Array.isArray(raw.skippedTaskIds) ? raw.skippedTaskIds.map(String) : [],
-    forceTaskId: String(raw.forceTaskId || ''),
-    lastOutcomeAt: String(raw.lastOutcomeAt || ''),
+    id:              String(raw.id           || ''),
+    email:           String(raw.email        || ''),
+    name:            String(raw.name         || ''),
+    goalCategory:    normalizeGoalCategory(raw.goalCategory),
+    createdAt:       String(raw.createdAt    || base.createdAt),
+    experienceLevel: ['beginner', 'intermediate', 'advanced'].includes(raw.experienceLevel)
+                       ? raw.experienceLevel : 'intermediate',
+    dailyHours:      ['1-2', '2-4', '4-6', '6-8', '8+'].includes(raw.dailyHours)
+                       ? raw.dailyHours : '2-4',
+  };
+}
+
+function validateTrack(raw) {
+  const base = createDefaultTrackV2();
+  if (!raw || typeof raw !== 'object') return base;
+  return {
+    ...base,
+    ...raw,
+    id:               String(raw.id           || ''),
+    goal:             String(raw.goal         || ''),
+    goalCategory:     normalizeGoalCategory(raw.goalCategory),
+    blockerHint:      String(raw.blockerHint  || ''),
+    generatedAt:      String(raw.generatedAt  || ''),
+    startDate:        String(raw.startDate    || ''),
+    status:           normalizeTrackStatus(raw.status),
+    currentDayNumber: Math.max(1, Math.min(7, Number(raw.currentDayNumber) || 1)),
+    days:             Array.isArray(raw.days) ? raw.days.map(validateDayPlan) : [],
+    continuationOf:   raw.continuationOf ? String(raw.continuationOf) : null,
+  };
+}
+
+function validateDayPlan(raw) {
+  const empty = { dayNumber: 1, title: '', why: '', successCriteria: '', estimateMinutes: 60, category: '', status: 'pending', date: '' };
+  if (!raw || typeof raw !== 'object') return empty;
+  return {
+    dayNumber:       Math.max(1, Math.min(7, Number(raw.dayNumber) || 1)),
+    title:           String(raw.title           || ''),
+    why:             String(raw.why             || ''),
+    successCriteria: String(raw.successCriteria || ''),
+    estimateMinutes: Number(raw.estimateMinutes) || 60,
+    category:        String(raw.category        || ''),
+    status:          normalizeDayStatus(raw.status),
+    date:            String(raw.date            || '').slice(0, 10),
+  };
+}
+
+function validateToday(raw) {
+  const base = createDefaultTodayV2();
+  if (!raw || typeof raw !== 'object') return base;
+  return {
+    ...base,
+    ...raw,
+    date:           String(raw.date           || isoDateNow()).slice(0, 10),
+    dayNumber:      Math.max(1, Math.min(7, Number(raw.dayNumber) || 1)),
+    status:         normalizeDayStatus(raw.status),
+    proof:          validateProof(raw.proof),
+    agentSession:   validateAgentSession(raw.agentSession),
+    rescueAction:   raw.rescueAction && typeof raw.rescueAction === 'object' ? raw.rescueAction : null,
+    blockerText:    String(raw.blockerText    || ''),
+    skipReason:     String(raw.skipReason     || ''),
+    outcomeAt:      String(raw.outcomeAt      || ''),
+    adaptationNote: String(raw.adaptationNote || ''),
+  };
+}
+
+function validateProof(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    type:        ['text', 'link', 'statement'].includes(raw.type) ? raw.type : 'text',
+    value:       String(raw.value       || ''),
+    submittedAt: String(raw.submittedAt || ''),
+  };
+}
+
+function validateAgentSession(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    steps:            Array.isArray(raw.steps) ? raw.steps.map(validateAgentStep) : [],
+    currentStepIndex: Number(raw.currentStepIndex) || 0,
+    startedAt:        String(raw.startedAt  || ''),
+    closedAt:         String(raw.closedAt   || ''),
+    outcome:          ['done', 'blocked', 'partial', ''].includes(raw.outcome) ? raw.outcome : '',
+  };
+}
+
+function validateAgentStep(raw) {
+  const empty = { index: 0, text: '', status: 'pending', stuckNote: '', completedAt: '' };
+  if (!raw || typeof raw !== 'object') return empty;
+  return {
+    index:       Number(raw.index)  || 0,
+    text:        String(raw.text        || ''),
+    status:      ['pending', 'done', 'skipped'].includes(raw.status) ? raw.status : 'pending',
+    stuckNote:   String(raw.stuckNote   || ''),
+    completedAt: String(raw.completedAt || ''),
   };
 }
 
 function validateHistory(raw) {
-  const base = createDefaultHistory();
+  const base = createDefaultHistoryV2();
   if (!raw || typeof raw !== 'object') return base;
-  const entries = Array.isArray(raw.entries) ? raw.entries : [];
   return {
-    entries: entries
-      .map((entry) => ({
-        date: String(entry?.date || '').slice(0, 10),
-        outcome: normalizeOutcome(entry?.outcome),
-        taskId: String(entry?.taskId || ''),
-        taskTitle: String(entry?.taskTitle || ''),
-        stageId: String(entry?.stageId || ''),
-        source: String(entry?.source || 'system'),
-        createdAt: String(entry?.createdAt || ''),
-      }))
-      .filter((entry) => entry.date && entry.outcome),
-    successStreak: Number(raw.successStreak || 0),
-    missStreak: Number(raw.missStreak || 0),
+    entries:          Array.isArray(raw.entries)
+                        ? raw.entries.map(validateHistoryEntry).filter(Boolean) : [],
+    successStreak:    Math.max(0, Number(raw.successStreak)    || 0),
+    currentDayStreak: Math.max(0, Number(raw.currentDayStreak) || 0),
+    failurePatterns:  Array.isArray(raw.failurePatterns)
+                        ? raw.failurePatterns.map(validateFailurePattern).filter(Boolean) : [],
+    archivedTracks:   Array.isArray(raw.archivedTracks) ? raw.archivedTracks : [],
   };
 }
 
-function hasCoreData(domains) {
-  return Boolean(domains?.plan?.goal && domains?.plan?.stages?.length);
+function validateHistoryEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const outcome = raw.outcome;
+  if (!['done', 'blocked', 'skipped', 'missed', 'rescued'].includes(outcome)) return null;
+  const date = String(raw.date || '').slice(0, 10);
+  if (!date) return null;
+  return {
+    date,
+    dayNumber:       Number(raw.dayNumber)    || 1,
+    trackId:         String(raw.trackId       || ''),
+    outcome,
+    taskTitle:       String(raw.taskTitle     || ''),
+    proofType:       ['text', 'link', 'statement', ''].includes(raw.proofType) ? raw.proofType : '',
+    agentUsed:       Boolean(raw.agentUsed),
+    rescueOffered:   Boolean(raw.rescueOffered),
+    rescueCompleted: Boolean(raw.rescueCompleted),
+    createdAt:       String(raw.createdAt     || ''),
+  };
 }
 
-function normalizeOutcome(value) {
-  const str = String(value || '').toLowerCase();
-  if (str === 'done' || str === 'missed' || str === 'blocked') return str;
-  return '';
+function validateFailurePattern(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const date = String(raw.date || '').slice(0, 10);
+  if (!date) return null;
+  return {
+    id:              String(raw.id           || `fp-${Date.now()}`),
+    date,
+    dayNumber:       Number(raw.dayNumber)   || 1,
+    trackId:         String(raw.trackId      || ''),
+    taskTitle:       String(raw.taskTitle    || ''),
+    blockerText:     String(raw.blockerText  || ''),
+    blockerCategory: BLOCKER_CATEGORIES.includes(raw.blockerCategory) ? raw.blockerCategory : 'other',
+    rescueOffered:   Boolean(raw.rescueOffered),
+    rescueCompleted: Boolean(raw.rescueCompleted),
+  };
 }
 
-function normalizeTodayStatus(value) {
-  const str = String(value || '').toLowerCase();
-  if (str === 'done' || str === 'missed' || str === 'blocked' || str === 'pending') return str;
-  return 'pending';
+function validateTelegram(raw) {
+  const base = createDefaultTelegramV2();
+  if (!raw || typeof raw !== 'object') return base;
+  return {
+    ...base,
+    ...raw,
+    connected:      Boolean(raw.connected),
+    chatId:         String(raw.chatId         || ''),
+    username:       String(raw.username       || ''),
+    connectedAt:    String(raw.connectedAt    || ''),
+    pingHour:       Math.max(0, Math.min(23, Number(raw.pingHour) || 9)),
+    pingEnabled:    raw.pingEnabled !== false,
+    lastPingSentAt: String(raw.lastPingSentAt || ''),
+    lastPingStatus: ['sent', 'failed', 'skipped', ''].includes(raw.lastPingStatus)
+                      ? raw.lastPingStatus : '',
+  };
 }
 
 function parse(value) {

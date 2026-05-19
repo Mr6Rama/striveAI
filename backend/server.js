@@ -35,6 +35,75 @@ const FIREBASE_WEB_CONFIG = {
 };
 const FIREBASE_REQUIRED_FIELDS = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId'];
 const FIREBASE_CONFIGURED = FIREBASE_REQUIRED_FIELDS.every((field) => Boolean(FIREBASE_WEB_CONFIG[field]));
+// ── Firebase Admin ────────────────────────────────────────────────────────────
+// Lazily initialised once from FIREBASE_SERVICE_ACCOUNT_JSON.
+// If the env var is absent the server still boots; protected routes return 503.
+
+let _adminApp = null;
+let _adminInitError = null;
+
+function getFirebaseAdmin() {
+  if (_adminApp) return _adminApp;
+  if (_adminInitError) return null;
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    _adminInitError = 'FIREBASE_SERVICE_ACCOUNT_JSON env var is not set';
+    return null;
+  }
+  try {
+    // Restore escaped newlines that some env providers collapse.
+    const fixed = raw.replace(/\\n/g, '\n');
+    const credential = JSON.parse(fixed);
+    const admin = require('firebase-admin');
+    _adminApp = admin.initializeApp({ credential: admin.credential.cert(credential) });
+    return _adminApp;
+  } catch (err) {
+    _adminInitError = `Firebase Admin init failed: ${err.message}`;
+    return null;
+  }
+}
+
+async function verifyFirebaseIdToken(req) {
+  const header = req.headers['authorization'] || '';
+  if (!header.startsWith('Bearer ')) {
+    throw Object.assign(new Error('Missing Bearer token'), { status: 401 });
+  }
+  const token = header.slice(7);
+  const adminApp = getFirebaseAdmin();
+  if (!adminApp) {
+    throw Object.assign(
+      new Error(_adminInitError || 'Firebase Admin not initialised'),
+      { status: 503, configError: true }
+    );
+  }
+  const admin = require('firebase-admin');
+  const decoded = await admin.auth().verifyIdToken(token);
+  return decoded;
+}
+
+async function requireFirebaseUser(req, res, next) {
+  try {
+    req.firebaseUser = await verifyFirebaseIdToken(req);
+    next();
+  } catch (err) {
+    const status = err.status || 401;
+    const body = err.configError
+      ? { error: 'Firebase Admin is not configured on this server', detail: err.message }
+      : { error: 'Unauthorized' };
+    return res.status(status).json(body);
+  }
+}
+
+// Log admin init status at startup (without printing credentials).
+(function logAdminStatus() {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    console.warn('[firebase-admin] FIREBASE_SERVICE_ACCOUNT_JSON not set — authenticated routes will return 503');
+  }
+})();
+
+// ── End Firebase Admin ────────────────────────────────────────────────────────
+
 const OPENAI_MODEL = String(process.env.OPENAI_MODEL || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
 const OPENAI_ALLOWED_RESPONSE_MIME_TYPES = new Set(['application/json', 'text/plain']);
 function usesCompletionTokenLimit(model) {
@@ -55,7 +124,12 @@ const OPENAI_ALLOWED_CONFIG_KEYS = new Set([
   'responseSchema',
   'responseJsonSchema',
 ]);
-const AI_ACTIONS = new Set(['roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit', 'goals_review', 'note_process', 'session_review', 'chat', 'goal_complete']);
+const AI_ACTIONS = new Set([
+  // v1 actions — kept for compatibility
+  'roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit', 'goals_review', 'note_process', 'session_review', 'chat', 'goal_complete',
+  // v2 actions
+  'track_generate', 'track_continue', 'agent_steps', 'agent_hint', 'rescue_action', 'action_kit', 'day7_recap', 'adapt_day', 'v2_proof_check',
+]);
 const ACTION_AI_CONFIG = Object.freeze({
   default: {
     model: OPENAI_MODEL,
@@ -145,11 +219,267 @@ const ACTION_AI_CONFIG = Object.freeze({
     topP: 1,
     contextLimits: { promptChars: 2800, systemChars: 900, totalChars: 3400 },
   },
+  // ── v2 actions ────────────────────────────────────────────────────────────
+  track_generate: {
+    model: 'gpt-5-mini',
+    maxCompletionTokens: 1400,
+    reasoningEffort: 'minimal',
+    temperature: 0.9,
+    topP: 1,
+    contextLimits: { promptChars: 5000, systemChars: 1400, totalChars: 6000 },
+  },
+  track_continue: {
+    model: 'gpt-5-mini',
+    maxCompletionTokens: 1400,
+    reasoningEffort: 'minimal',
+    temperature: 0.9,
+    topP: 1,
+    contextLimits: { promptChars: 5000, systemChars: 1400, totalChars: 6000 },
+  },
+  agent_steps: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 600,
+    reasoningEffort: 'minimal',
+    temperature: 0.8,
+    topP: 1,
+    contextLimits: { promptChars: 2000, systemChars: 800, totalChars: 2600 },
+  },
+  agent_hint: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 200,
+    reasoningEffort: 'minimal',
+    temperature: 0.7,
+    topP: 1,
+    contextLimits: { promptChars: 1200, systemChars: 500, totalChars: 1600 },
+  },
+  rescue_action: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 500,
+    reasoningEffort: 'minimal',
+    temperature: 0.8,
+    topP: 1,
+    contextLimits: { promptChars: 2200, systemChars: 800, totalChars: 2800 },
+  },
+  action_kit: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 600,
+    reasoningEffort: 'minimal',
+    temperature: 0.7,
+    topP: 1,
+    contextLimits: { promptChars: 1800, systemChars: 700, totalChars: 2400 },
+  },
+  day7_recap: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 350,
+    reasoningEffort: 'minimal',
+    temperature: 0.8,
+    topP: 1,
+    contextLimits: { promptChars: 2400, systemChars: 700, totalChars: 2900 },
+  },
+  adapt_day: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 300,
+    reasoningEffort: 'minimal',
+    temperature: 0.8,
+    topP: 1,
+    contextLimits: { promptChars: 2000, systemChars: 700, totalChars: 2600 },
+  },
+  v2_proof_check: {
+    model: 'gpt-5-nano',
+    maxCompletionTokens: 250,
+    reasoningEffort: 'minimal',
+    temperature: 0.4,
+    topP: 1,
+    contextLimits: { promptChars: 1500, systemChars: 600, totalChars: 2000 },
+  },
 });
 const OPENAI_RESPONSE_CACHE_TTL_MS = 15 * 60 * 1000;
 const OPENAI_RESPONSE_CACHE_MAX_SIZE = 200;
 const openAIResponseCache = new Map();
 const TASK_GENERATION_ACTIONS = new Set(['tasks', 'tasks_skeleton', 'task_detail']);
+// v2 actions that return JSON (eligible for deterministic fallback)
+const V2_JSON_ACTIONS = new Set(['track_generate', 'track_continue', 'agent_steps', 'rescue_action', 'action_kit', 'adapt_day', 'v2_proof_check']);
+// v2 actions that return plain text
+const V2_PLAINTEXT_ACTIONS = new Set(['agent_hint', 'day7_recap']);
+
+// ── v2 fallback data ───────────────────────────────────────────────────────
+// One concrete 7-day template per GoalCategory.
+// Tuple: [title, dayCategory, estimateMinutes, why, successCriteria]
+const V2_TRACK_FALLBACK_DAYS = Object.freeze({
+  project: [
+    ['Describe what you are building and who it is for in one page', 'write', 60, 'Clarity before code prevents wasted effort', 'Document exists covering problem, user, and proposed solution'],
+    ['List the 5 most important features and cut to 3', 'review', 45, 'Smaller scope ships faster', 'Exactly 3 features listed with one-line rationale each'],
+    ['Set up the project repo and write a README with problem and solution', 'build', 90, 'Foundation before building', 'Repo created, README covers problem, solution, and setup steps'],
+    ['Build the first working feature end-to-end', 'build', 120, 'A working piece proves the idea', 'Feature runs without errors and matches the README description'],
+    ['Test the feature with 2 people. Note what they get stuck on', 'test', 90, 'Real feedback before over-building', 'Two sessions done, 3+ observations noted per session'],
+    ['Fix the top 2 issues found in testing', 'build', 90, 'Tested feedback applied immediately', 'Both issues resolved and re-tested'],
+    ['Record a 2-minute demo or capture screenshots of the working feature', 'write', 60, 'Proof of work for accountability and portfolio', 'Demo or 4+ screenshots saved and shareable'],
+  ],
+  startup: [
+    ['Write your one-sentence value proposition: who, what, why now', 'write', 60, 'Forces clarity before any other work', 'Value proposition fits one sentence without jargon'],
+    ['List 10 potential users. Mark who you can reach in 48 hours', 'research', 45, 'Real users beat hypothetical ones', '10 names with contact info, 3+ marked reachable'],
+    ['Send 5 direct messages asking for a 20-minute call this week', 'outreach', 60, 'Evidence starts with conversations', '5 messages sent, personalised to each recipient'],
+    ['Do 3 user interviews. Write down the exact words they use', 'research', 120, 'Exact language reveals real problems', '3 calls completed, verbatim quotes documented'],
+    ['Sketch a prototype that addresses the top problem you heard', 'build', 120, 'Showing beats telling', 'Prototype or wireframe covers the core user flow'],
+    ['Show the prototype to 2 interviewees. Record their reactions', 'test', 90, 'You need honest reactions, not polite approval', '2 sessions done, specific objections or positive signals noted'],
+    ['Write a one-page summary: problem, evidence, solution, next step', 'write', 60, 'Forces synthesis of everything learned', 'One-pager covers all four sections in under 400 words'],
+  ],
+  content: [
+    ['Pick one platform and format. Write your first draft post or script', 'write', 60, 'First draft beats a perfect plan', 'Draft is complete — rough is fine'],
+    ['Edit the draft. Remove everything not directly useful to the reader', 'review', 45, 'Shorter content performs better', 'Edited draft is 20%+ shorter with no loss of value'],
+    ['Publish the first piece. Screenshot analytics immediately after', 'other', 30, 'Publishing starts the feedback loop', 'Post is live and initial stats are screenshotted'],
+    ['Batch-write two more pieces using the same format', 'write', 90, 'Consistency requires batching', 'Two complete drafts ready to publish'],
+    ['Study 3 top posts in your niche. Write the structure each one uses', 'research', 60, 'Model what works before reinventing', 'Structure template written for at least 2 of the 3 posts'],
+    ['Apply the best structure to one draft and publish it', 'write', 60, 'Apply the learning immediately', 'Post is live using the studied structure'],
+    ['Review 7-day numbers. Write one paragraph on what worked', 'review', 45, 'Reflection compounds improvement', 'Written analysis covers reach, engagement, and one clear lesson'],
+  ],
+  skill: [
+    ['Find one concrete project you will build to practice this skill this week', 'research', 45, 'A real project beats drills', 'Project defined with scope completable in 5 days'],
+    ['Complete the first tutorial or chapter. Write down 3 things you learned', 'practice', 90, 'Active notes beat passive reading', 'Notes cover 3 distinct concepts from the session'],
+    ['Apply what you learned: build one small exercise from scratch', 'practice', 120, 'Building reveals what you missed', 'Exercise runs without copying from the tutorial'],
+    ['Identify the specific gap that slowed you. Look up only that', 'research', 60, 'Targeted research beats random reading', 'One specific question answered and source noted'],
+    ['Complete an exercise combining two concepts you have learned', 'practice', 120, 'Combining concepts builds real understanding', 'Combined exercise works without referencing prior work'],
+    ['Teach back: write a 200-word explanation of the core concept', 'write', 45, 'Teaching reveals exactly what you do not know', '200-word explanation written in plain language'],
+    ['Build a small demo or write a summary of everything learned this week', 'build', 90, 'A tangible output closes the loop', 'Demo or summary covers every major concept from the week'],
+  ],
+  career: [
+    ['Write a one-paragraph summary of your target role and top qualification', 'write', 60, 'Clarity about what you want sharpens your pitch', 'Paragraph covers target role, company type, and one key qualification'],
+    ['Update your resume. Cut every bullet to one line', 'write', 90, 'Concise beats comprehensive', 'Resume updated with every bullet trimmed to one line'],
+    ['Find 5 matching job postings. Save ones where you meet 70%+ of requirements', 'research', 60, 'Apply where you are actually qualified', '5 postings found, at least 2 saved for application'],
+    ['Write a cold outreach message to one person at a target company', 'outreach', 60, 'Warm connections beat cold applications', 'One personalised message written and sent'],
+    ['Apply to 2 saved postings with a customised cover note each', 'outreach', 90, 'Two applications beats zero', 'Applications submitted with tailored notes'],
+    ['Prepare written answers to the 3 most common interview questions', 'practice', 90, 'Preparation changes how you perform', '3 answers written out in full'],
+    ['Do a mock interview. Record yourself answering 3 questions and review it', 'practice', 60, 'Reviewing recordings improves answers faster than repetition', 'Recording done, 2+ specific improvements noted'],
+  ],
+  study: [
+    ['Identify the 3 most important concepts you need to understand this week', 'research', 45, 'Focus prevents spreading thin', '3 concepts listed with a reason why each matters'],
+    ['Study the first concept. Write a one-page summary in your own words', 'practice', 90, 'Your own words beat copying', 'Summary written without referencing source material'],
+    ['Find and complete 3 practice problems on the first concept', 'practice', 90, 'Problems reveal gaps faster than re-reading', '3 problems attempted, errors noted'],
+    ['Study the second concept. Connect it to the first in writing', 'practice', 90, 'Connections build durable understanding', 'Notes show explicit links between concept 1 and concept 2'],
+    ['Complete 5 practice problems mixing both concepts', 'practice', 120, 'Mixed practice beats blocked practice', '5 problems completed, at least 3 correct'],
+    ['Study the third concept. Write a summary connecting all three', 'write', 90, 'Synthesis is the goal of study', 'Summary shows how all three concepts relate'],
+    ['Timed review: explain all three concepts in 15 minutes without notes', 'practice', 60, 'Timed recall tests real retention', 'Explanation recorded or written, weak spots identified'],
+  ],
+  habit: [
+    ['Define the habit exactly: trigger, action, and duration', 'write', 45, 'Vague habits fail; precise habits stick', 'Habit written as: when X happens I will do Y for Z minutes'],
+    ['Do the habit today. Set a timer. Record start and end time', 'other', 30, 'Day 1 removes the mental block', 'Habit done once, time recorded'],
+    ['Set a specific daily time and add it to your calendar', 'other', 15, 'A default time prevents negotiation', 'Calendar block created with exact time for the next 7 days'],
+    ['Do the habit again. Rate difficulty 1–5. Note what made it hard', 'other', 30, 'Friction data lets you reduce it', 'Habit done, difficulty score and one friction note recorded'],
+    ['Remove one friction from Day 4. Prepare your environment in advance', 'other', 30, 'Environment design beats willpower', 'One specific preparation completed before tomorrow'],
+    ['Do the habit. Note whether the preparation helped', 'other', 30, 'Testing your own adjustments builds self-knowledge', 'Habit done, note on whether preparation made it easier'],
+    ['Write a one-paragraph reflection on what made this habit easier or harder', 'write', 30, 'Reflection turns experience into strategy', 'Reflection covers 3 factors that helped or hurt the habit'],
+  ],
+  fitness: [
+    ['Define your workout plan: type, duration, and how many sessions this week', 'write', 30, 'A specific plan beats vague intention', 'Plan covers type, time of day, and number of sessions'],
+    ['Complete the first workout. Record time, reps, or distance', 'other', 60, 'First session removes the start barrier', 'Workout done, key metric recorded'],
+    ['Note what felt difficult. Find one technique fix for that part', 'research', 30, 'Technique prevents injury and improves results', 'One specific form adjustment identified and noted'],
+    ['Complete second workout applying the technique change', 'other', 60, 'Apply before you forget', 'Workout done, technique change applied and result noted'],
+    ['Add one small progressive overload: 5% more weight, 1 more rep, or 2 more minutes', 'other', 60, 'Small increases compound over time', 'Workout done with one measurable increase recorded'],
+    ['Rest or do light movement. Prepare gear and plan for the final session', 'other', 30, 'Recovery is part of training', 'Rest or light activity done, plan ready for Day 7'],
+    ['Final workout. Measure one key metric and compare it to Day 2', 'other', 60, 'Measurement closes the feedback loop', 'Workout complete, Day 2 vs Day 7 metric recorded'],
+  ],
+  other: [
+    ['Write a clear one-paragraph description of what you want to accomplish this week', 'write', 45, 'Clarity first, action second', 'Paragraph covers the goal and a definition of done'],
+    ['Break the goal into 5 concrete sub-tasks. Pick the most important one', 'review', 45, 'Smaller tasks beat vague goals', '5 sub-tasks listed, top priority selected'],
+    ['Complete the first sub-task. Record exactly what you did', 'other', 90, 'Progress builds momentum', 'First sub-task done, notes on what was completed'],
+    ['Review what you completed. Identify the next most important sub-task', 'review', 30, 'Frequent reviews prevent wasted effort', 'Review done, next priority selected'],
+    ['Complete the second sub-task', 'other', 90, 'Consistency beats intensity', 'Second sub-task done, notes recorded'],
+    ['Review progress. Adjust scope if needed to make Day 7 achievable', 'review', 30, 'Realistic scope matters more than ambition', 'Scope reviewed, Day 7 deliverable is specific and achievable'],
+    ['Complete the week with one tangible output you can show or share', 'other', 90, 'Tangible outputs create accountability', 'One concrete artifact created and ready to share'],
+  ],
+});
+
+function parseV2PromptField(prompt, fieldName) {
+  const pattern = new RegExp(`^${fieldName}:\\s*(.+)`, 'm');
+  const match = pattern.exec(String(prompt || ''));
+  return match ? match[1].trim() : '';
+}
+
+function buildV2Fallback(action, prompt) {
+  const safePrompt = String(prompt || '');
+
+  if (action === 'track_generate' || action === 'track_continue') {
+    const goal = parseV2PromptField(safePrompt, 'Goal') || 'your goal';
+    const rawCat = parseV2PromptField(safePrompt, 'Category').toLowerCase();
+    const cat = Object.prototype.hasOwnProperty.call(V2_TRACK_FALLBACK_DAYS, rawCat) ? rawCat : 'other';
+    const template = V2_TRACK_FALLBACK_DAYS[cat];
+    return {
+      goal,
+      days: template.map(([title, category, estimateMinutes, why, successCriteria], i) => ({
+        dayNumber: i + 1,
+        title,
+        why,
+        successCriteria,
+        estimateMinutes,
+        category,
+        status: 'pending',
+        date: '',
+      })),
+    };
+  }
+
+  if (action === 'agent_steps') {
+    const title = parseV2PromptField(safePrompt, "Today's task") || 'your task';
+    const short = title.slice(0, 60);
+    return {
+      steps: [
+        { index: 0, text: `Open your workspace and re-read the task: "${short}"` },
+        { index: 1, text: 'Write down the single most important sub-task you need to complete first.' },
+        { index: 2, text: 'Complete that sub-task and record the output before stopping.' },
+      ],
+    };
+  }
+
+  if (action === 'rescue_action') {
+    const title = parseV2PromptField(safePrompt, 'Original task') || 'your task';
+    return {
+      rescueTitle: `Smallest step toward: ${title.slice(0, 60)}`,
+      steps: [
+        'Set a 20-minute timer.',
+        'Complete the first concrete sub-part of this task, even if incomplete.',
+        'Write one sentence describing what you did.',
+      ],
+      reframeNote: '',
+      source: 'fallback',
+    };
+  }
+
+  if (action === 'action_kit') {
+    const title = parseV2PromptField(safePrompt, 'Task') || 'your task';
+    return {
+      items: [
+        { type: 'question', label: 'Focus question', content: `What is the smallest concrete thing I can produce in 30 minutes that proves progress on: "${title.slice(0, 60)}"?` },
+        { type: 'template', label: 'Progress log', content: 'Time started:\nWhat I did:\nOutput produced:\nBlocker (if any):\nNext step:' },
+        { type: 'tip', label: 'Getting unstuck', content: 'If stuck, reduce scope to 25% of the original task. A smaller done beats a full not-started.' },
+      ],
+    };
+  }
+
+  if (action === 'adapt_day') {
+    const tomorrowTitle = parseV2PromptField(safePrompt, "Tomorrow's planned task") || '';
+    return { changed: false, title: tomorrowTitle, why: '' };
+  }
+
+  if (action === 'v2_proof_check') {
+    return {
+      verdict: 'partial',
+      note: 'Automatic verification unavailable. Check your work against the success criteria manually.',
+    };
+  }
+
+  return {};
+}
+
+function buildV2PlaintextFallback(action, prompt) {
+  if (action === 'agent_hint') {
+    return 'Try a smaller version of this step. What is the minimum you could complete in 10 minutes?';
+  }
+  if (action === 'day7_recap') {
+    const goal = parseV2PromptField(String(prompt || ''), 'Goal') || 'your goal';
+    return `This week you worked on: ${goal.slice(0, 80)}. Review your outcomes and identify the one pattern that most affected your progress. Use that as the starting point for your next run.`;
+  }
+  return '';
+}
 app.post('/api/goals/:id/complete', async (req, res) => {
   const { id } = req.params;
   const trace = createRequestTrace();
@@ -2333,6 +2663,40 @@ app.post('/api/openai/generate', aiLimiter, async (req, res) => {
       });
     }
 
+    // v2 deterministic fallback — returned when all AI attempts are exhausted
+    if (V2_JSON_ACTIONS.has(safeAction) || V2_PLAINTEXT_ACTIONS.has(safeAction)) {
+      const fallbackText = V2_JSON_ACTIONS.has(safeAction)
+        ? JSON.stringify(buildV2Fallback(safeAction, trimmedCtx.prompt))
+        : buildV2PlaintextFallback(safeAction, trimmedCtx.prompt);
+      logAIRequest({
+        ...baseLog,
+        logType: 'fallback_used',
+        upstreamStatus: lastFailure?.timedOut ? 'TIMEOUT' : (lastFailure?.upstreamStatus || 0),
+        upstreamErrorCode: lastFailure?.upstreamErrorCode || lastFailure?.code || 'V2_FALLBACK',
+        finishReason: '',
+        attempt: providerAttempt,
+        chainAttempt: lastChainAttempt,
+        retryAttempt: lastRetryAttempt,
+        latencyMs: Date.now() - startedAt,
+        fallbackUsed: true,
+      });
+      baseLog.logType = 'success';
+      baseLog.latencyMs = Date.now() - startedAt;
+      baseLog.attempt = providerAttempt;
+      baseLog.chainAttempt = lastChainAttempt;
+      baseLog.retryAttempt = lastRetryAttempt;
+      logAIRequest(baseLog);
+      return res.json({
+        text: fallbackText,
+        finishReason: '',
+        requestId,
+        model: actionRuntimeConfig.model,
+        status: 'fallback',
+        fallbackUsed: true,
+        degraded: true,
+      });
+    }
+
     const safeFailure = lastFailure || { code: 'UPSTREAM_5XX', httpStatus: 502, upstreamStatus: 0 };
     if (safeAction === 'chat' && safeFailure.code === 'RESPONSE_TRUNCATED' && String(lastChatSalvage?.repairedText || '').trim()) {
       return res.json({
@@ -2411,6 +2775,549 @@ app.post('/api/openai/generate', aiLimiter, async (req, res) => {
     }
   }
 });
+
+// ── Telegram Integration ───────────────────────────────────────────────────
+// Deep-link token flow (webhook-based, no polling).
+// TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET must be set in env.
+// If absent, routes return 503; server still boots.
+
+const TELEGRAM_BOT_TOKEN     = process.env.TELEGRAM_BOT_TOKEN     || '';
+const TELEGRAM_BOT_USERNAME  = (process.env.TELEGRAM_BOT_USERNAME  || '').replace(/^@/, '');
+const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+const CRON_SECRET             = process.env.CRON_SECRET             || '';
+const TELEGRAM_CONFIGURED     = Boolean(TELEGRAM_BOT_TOKEN);
+
+// Link tokens live in memory (primary, fast) + Firestore (secondary, survives restarts).
+// TTL: 15 minutes. Format: 32 URL-safe chars (A-Z a-z 0-9 _ -).
+const LINK_TOKEN_TTL_MS = 15 * 60 * 1000;
+// Map<token, { uid: string, expiresAt: number }>
+const linkTokenStore = new Map();
+
+function generateLinkToken() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
+  const bytes = crypto.randomBytes(32);
+  return Array.from(bytes, (b) => chars[b % chars.length]).join('');
+}
+
+function pruneLinkTokens() {
+  const now = Date.now();
+  for (const [tok, entry] of linkTokenStore) {
+    if (now > entry.expiresAt) linkTokenStore.delete(tok);
+  }
+}
+
+function maskChatId(chatId) {
+  const s = String(chatId || '');
+  return s.length <= 4 ? '***' : `${s.slice(0, 4)}***`;
+}
+
+async function tgSend(method, body) {
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`Telegram ${method} → ${resp.status}: ${errText.slice(0, 200)}`);
+  }
+  return resp.json();
+}
+
+function getFirestoreOrNull() {
+  try {
+    const adminApp = getFirebaseAdmin();
+    if (!adminApp) return null;
+    const admin = require('firebase-admin');
+    return admin.firestore();
+  } catch (_) {
+    return null;
+  }
+}
+
+// Core webhook logic extracted so the route handler can ack 200 first.
+async function handleTelegramUpdate(update) {
+  const message = update?.message;
+  if (!message) return;
+
+  const chatId   = message.chat?.id;
+  const text     = (message.text || '').trim();
+  const username = message.from?.username  || '';
+  const firstName = message.from?.first_name || '';
+
+  if (!chatId || !text) return;
+
+  if (text === '/help' || text.startsWith('/help@')) {
+    await tgSend('sendMessage', {
+      chat_id: chatId,
+      text: 'I send your daily StriveAI execution ping.\n\nTo connect your account, open StriveAI, go to Settings → Telegram, and tap "Connect".\n\nUse /stop to pause pings.',
+    });
+    return;
+  }
+
+  if (text === '/stop' || text.startsWith('/stop@')) {
+    await tgSend('sendMessage', {
+      chat_id: chatId,
+      text: 'Pings paused. Reconnect any time in StriveAI settings.',
+    });
+    return;
+  }
+
+  if (!text.startsWith('/start')) return; // ignore all other messages
+
+  const token = text.split(' ')[1] || '';
+
+  if (!token) {
+    await tgSend('sendMessage', {
+      chat_id: chatId,
+      text: 'To connect StriveAI, open the app, go to Settings → Telegram, and tap "Connect" to get a link.',
+    });
+    return;
+  }
+
+  // Look up token: memory first, then Firestore (handles server restart).
+  let uid = null;
+  const memEntry = linkTokenStore.get(token);
+  if (memEntry && Date.now() <= memEntry.expiresAt) {
+    uid = memEntry.uid;
+    linkTokenStore.delete(token);
+  } else {
+    linkTokenStore.delete(token); // clean up expired entry
+    const db = getFirestoreOrNull();
+    if (db) {
+      const snap = await db.collection('telegram_link_tokens').doc(token).get();
+      if (snap.exists) {
+        const d = snap.data();
+        if (!d.used && d.expiresAt.toDate().getTime() > Date.now()) {
+          uid = d.uid;
+        }
+      }
+    }
+  }
+
+  if (!uid) {
+    await tgSend('sendMessage', {
+      chat_id: chatId,
+      text: 'That link has expired or is not valid. Open StriveAI and tap "Connect Telegram" again to get a fresh link.',
+    });
+    return;
+  }
+
+  // Persist connection — idempotent (merge: true overwrites same uid).
+  const db = getFirestoreOrNull();
+  if (!db) {
+    await tgSend('sendMessage', {
+      chat_id: chatId,
+      text: 'Connection could not be saved (server configuration issue). Please try again later.',
+    });
+    return;
+  }
+
+  await db.collection('telegram_connections').doc(uid).set({
+    chatId:        String(chatId),
+    username,
+    firstName,
+    connectedAt:   new Date(),
+    pingHour:      9,
+    pingEnabled:   true,
+    lastPingSentAt: null,
+    lastPingStatus: '',
+  }, { merge: true });
+
+  // Mark token used so replay is rejected.
+  db.collection('telegram_link_tokens').doc(token)
+    .set({ used: true }, { merge: true })
+    .catch(() => {});
+
+  logInfo({ area: 'telegram', module: 'backend/server.js', action: 'connected', uid, chatId: maskChatId(chatId) });
+
+  await tgSend('sendMessage', {
+    chat_id: chatId,
+    text: 'StriveAI connected. I\'ll check in with your daily action here.',
+  });
+}
+
+// POST /api/v2/telegram/link-token — authenticated; creates a deep-link token.
+app.post('/api/v2/telegram/link-token', requireFirebaseUser, async (req, res) => {
+  if (!TELEGRAM_CONFIGURED) {
+    return res.status(503).json({ error: 'Telegram is not configured on this server' });
+  }
+  const uid = req.firebaseUser.uid;
+  pruneLinkTokens();
+
+  const token     = generateLinkToken();
+  const expiresAt = Date.now() + LINK_TOKEN_TTL_MS;
+  linkTokenStore.set(token, { uid, expiresAt });
+
+  // Best-effort Firestore write so token survives a server restart.
+  const db = getFirestoreOrNull();
+  if (db) {
+    db.collection('telegram_link_tokens').doc(token).set({
+      uid,
+      expiresAt: new Date(expiresAt),
+      used:      false,
+      createdAt: new Date(),
+    }).catch((err) =>
+      logWarn({ area: 'telegram', module: 'backend/server.js', action: 'link_token_firestore_write_failed', error: err.message })
+    );
+  }
+
+  const botUser    = TELEGRAM_BOT_USERNAME || 'StriveAIBot';
+  const connectUrl = `https://t.me/${botUser}?start=${token}`;
+  return res.json({
+    botUsername: botUser,
+    connectUrl,
+    expiresAt: new Date(expiresAt).toISOString(),
+  });
+});
+
+// GET /api/v2/telegram/status — authenticated; returns connection status without exposing chatId.
+app.get('/api/v2/telegram/status', requireFirebaseUser, async (req, res) => {
+  const uid = req.firebaseUser.uid;
+  const db  = getFirestoreOrNull();
+  if (!db) {
+    return res.status(503).json({ error: 'Firebase is not configured on this server' });
+  }
+  try {
+    const snap = await db.collection('telegram_connections').doc(uid).get();
+    if (!snap.exists) {
+      return res.json({ connected: false });
+    }
+    const d = snap.data();
+    return res.json({
+      connected:   Boolean(d.chatId),
+      username:    d.username    || '',
+      firstName:   d.firstName   || '',
+      pingHour:    typeof d.pingHour === 'number' ? d.pingHour : 9,
+      pingEnabled: d.pingEnabled !== false,
+      connectedAt: d.connectedAt ? d.connectedAt.toDate().toISOString() : '',
+    });
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'status_read_failed', uid, error: err.message });
+    return res.status(500).json({ error: 'Failed to read Telegram status' });
+  }
+});
+
+// POST /api/v2/telegram/disconnect — authenticated; removes connection record.
+app.post('/api/v2/telegram/disconnect', requireFirebaseUser, async (req, res) => {
+  const uid = req.firebaseUser.uid;
+  const db  = getFirestoreOrNull();
+  if (!db) {
+    return res.status(503).json({ error: 'Firebase is not configured on this server' });
+  }
+  try {
+    await db.collection('telegram_connections').doc(uid).delete();
+    logInfo({ area: 'telegram', module: 'backend/server.js', action: 'disconnected', uid });
+    return res.json({ ok: true });
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'disconnect_failed', uid, error: err.message });
+    return res.status(500).json({ error: 'Failed to disconnect Telegram' });
+  }
+});
+
+// POST /api/telegram/webhook — receives Telegram updates; always responds 200 immediately.
+app.post('/api/telegram/webhook', async (req, res) => {
+  res.sendStatus(200); // ack before any processing; Telegram retries on non-2xx
+
+  const secret = req.headers['x-telegram-bot-api-secret-token'] || '';
+  if (!TELEGRAM_WEBHOOK_SECRET || secret !== TELEGRAM_WEBHOOK_SECRET) {
+    // Reject silently — do not reveal whether the secret is configured.
+    return;
+  }
+  if (!TELEGRAM_CONFIGURED) return;
+
+  try {
+    await handleTelegramUpdate(req.body);
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'webhook_handler_error', error: err.message });
+  }
+});
+
+// ── Telegram Ping Scheduling ──────────────────────────────────────────────
+
+const APP_BASE_URL = (process.env.APP_BASE_URL || '').replace(/\/$/, '');
+
+function buildPingText(data) {
+  const day   = Number(data.dayIndex) || 1;
+  const title = String(data.actionTitle    || 'your task').slice(0, 200);
+  const done  = String(data.doneCriteria   || '').slice(0, 200);
+  const mins  = Number(data.estimatedMinutes) || 60;
+  const lines = [`Day ${day} of 7: ${title}`];
+  if (done) lines.push(`Done means: ${done}`);
+  lines.push(`Estimated time: ${mins} min.`);
+  return lines.join('\n');
+}
+
+function buildPingKeyboard() {
+  if (!APP_BASE_URL) return undefined;
+  return {
+    inline_keyboard: [
+      [
+        { text: 'Open Today',       url: `${APP_BASE_URL}/today` },
+        { text: 'Start with Agent', url: `${APP_BASE_URL}/agent` },
+      ],
+      [
+        { text: "I'm blocked",      url: `${APP_BASE_URL}/blocked?type=blocked` },
+        { text: 'Skip today',       url: `${APP_BASE_URL}/blocked?type=skipped` },
+      ],
+    ],
+  };
+}
+
+function validateTz(tz) {
+  if (!tz || typeof tz !== 'string') return 'UTC';
+  try { new Intl.DateTimeFormat(undefined, { timeZone: tz }); return tz; } catch (_) { return 'UTC'; }
+}
+
+function localDateStr(utcMs, tz) {
+  // Returns "YYYY-MM-DD" in the given timezone.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(utcMs));
+}
+
+function computeNextPingAt(timezone, localPingTime, afterMs = Date.now()) {
+  const [hStr, mStr] = String(localPingTime || '09:00').split(':');
+  const hour   = Math.max(0, Math.min(23, parseInt(hStr, 10) || 9));
+  const minute = Math.max(0, Math.min(59, parseInt(mStr, 10) || 0));
+  const tz     = validateTz(timezone);
+
+  for (let daysAhead = 0; daysAhead <= 2; daysAhead++) {
+    const ref = new Date(afterMs + daysAhead * 86400000);
+    const pd  = {};
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
+    }).formatToParts(ref).forEach((x) => { pd[x.type] = x.value; });
+
+    const yyyy = pd.year.padStart(4, '0');
+    const mm   = pd.month.padStart(2, '0');
+    const dd   = pd.day.padStart(2, '0');
+    const hh   = String(hour).padStart(2, '0');
+    const mn   = String(minute).padStart(2, '0');
+
+    // Convert local YYYY-MM-DDTHH:mm to UTC by measuring the timezone offset.
+    // Treat local as UTC ("wrongUtc"), format that back through the tz to get what
+    // the timezone reads, then compute: correctUtcMs = wrongUtc + (wrongUtc - wrongLocal).
+    const wrongUtc = new Date(`${yyyy}-${mm}-${dd}T${hh}:${mn}:00Z`);
+    const lp       = {};
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
+    }).formatToParts(wrongUtc).forEach((x) => { lp[x.type] = x.value; });
+    let lh = parseInt(lp.hour, 10) || 0;
+    if (lh === 24) lh = 0; // midnight edge in en-US hour12:false
+    const wrongLocalMs = Date.UTC(
+      parseInt(lp.year, 10), parseInt(lp.month, 10) - 1, parseInt(lp.day, 10),
+      lh, parseInt(lp.minute, 10), parseInt(lp.second, 10),
+    );
+    const correctUtcMs = wrongUtc.getTime() + (wrongUtc.getTime() - wrongLocalMs);
+    if (correctUtcMs > afterMs + 60_000) return correctUtcMs;
+  }
+  return afterMs + 86400000; // fallback: 24 h from now
+}
+
+// POST /api/v2/telegram/schedule — authenticated; upserts the ping queue record.
+// chatId is read server-side from telegram_connections — never accepted from client.
+app.post('/api/v2/telegram/schedule', requireFirebaseUser, async (req, res) => {
+  if (!TELEGRAM_CONFIGURED) {
+    return res.status(503).json({ error: 'Telegram is not configured on this server' });
+  }
+  const uid = req.firebaseUser.uid;
+  const db  = getFirestoreOrNull();
+  if (!db) return res.status(503).json({ error: 'Firebase is not configured on this server' });
+
+  const {
+    trackId, dayIndex, goalTitle, actionTitle,
+    doneCriteria, estimatedMinutes, timezone, localPingTime,
+  } = req.body || {};
+
+  if (!trackId || typeof trackId !== 'string') {
+    return res.status(400).json({ error: 'trackId is required' });
+  }
+  if (!actionTitle || typeof actionTitle !== 'string') {
+    return res.status(400).json({ error: 'actionTitle is required' });
+  }
+
+  let chatId;
+  try {
+    const connSnap = await db.collection('telegram_connections').doc(uid).get();
+    chatId = connSnap.exists ? connSnap.data()?.chatId : null;
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'schedule_conn_read_failed', uid, error: err.message });
+    return res.status(500).json({ error: 'Failed to read Telegram connection' });
+  }
+  if (!chatId) {
+    return res.status(400).json({ error: 'No Telegram connection found — connect Telegram first' });
+  }
+
+  const tz         = validateTz(timezone);
+  const pingTime   = String(localPingTime || '09:00');
+  const nextPingAt = computeNextPingAt(tz, pingTime);
+
+  try {
+    await db.collection('telegram_ping_queue').doc(uid).set({
+      uid,
+      chatId:           String(chatId),
+      enabled:          true,
+      trackId:          String(trackId),
+      goalTitle:        String(goalTitle        || '').slice(0, 200),
+      dayIndex:         Math.max(1, Math.min(7, Number(dayIndex) || 1)),
+      actionTitle:      String(actionTitle      || '').slice(0, 200),
+      doneCriteria:     String(doneCriteria     || '').slice(0, 200),
+      estimatedMinutes: Math.max(1, Number(estimatedMinutes) || 60),
+      timezone:         tz,
+      localPingTime:    pingTime,
+      nextPingAt:       new Date(nextPingAt),
+      lastPingAt:       null,
+      lastPingDate:     '',
+      missedPingCount:  0,
+      updatedAt:        new Date(),
+    });
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'schedule_write_failed', uid, error: err.message });
+    return res.status(500).json({ error: 'Failed to schedule ping' });
+  }
+
+  logInfo({ area: 'telegram', module: 'backend/server.js', action: 'ping_scheduled', uid, nextPingAt: new Date(nextPingAt).toISOString() });
+  return res.json({ ok: true, nextPingAt: new Date(nextPingAt).toISOString() });
+});
+
+// POST /api/v2/telegram/test-ping — authenticated; sends one test message now.
+app.post('/api/v2/telegram/test-ping', requireFirebaseUser, async (req, res) => {
+  if (!TELEGRAM_CONFIGURED) {
+    return res.status(503).json({ error: 'Telegram is not configured on this server' });
+  }
+  const uid = req.firebaseUser.uid;
+  const db  = getFirestoreOrNull();
+  if (!db) return res.status(503).json({ error: 'Firebase is not configured on this server' });
+
+  let chatId, qData;
+  try {
+    const [connSnap, queueSnap] = await Promise.all([
+      db.collection('telegram_connections').doc(uid).get(),
+      db.collection('telegram_ping_queue').doc(uid).get(),
+    ]);
+    chatId = connSnap.exists ? connSnap.data()?.chatId : null;
+    qData  = queueSnap.exists ? queueSnap.data() : {};
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'test_ping_read_failed', uid, error: err.message });
+    return res.status(500).json({ error: 'Failed to read ping data' });
+  }
+
+  if (!chatId) {
+    return res.status(400).json({ error: 'No Telegram connection found — connect Telegram first' });
+  }
+
+  const msgText  = buildPingText(Object.keys(qData).length ? qData : { dayIndex: 1, actionTitle: 'your next task', doneCriteria: '', estimatedMinutes: 60 });
+  const keyboard = buildPingKeyboard();
+  const payload  = { chat_id: chatId, text: `[TEST PING]\n\n${msgText}` };
+  if (keyboard) payload.reply_markup = keyboard;
+
+  try {
+    await tgSend('sendMessage', payload);
+    logInfo({ area: 'telegram', module: 'backend/server.js', action: 'test_ping_sent', uid, chatId: maskChatId(chatId) });
+    return res.json({ ok: true });
+  } catch (err) {
+    logWarn({ area: 'telegram', module: 'backend/server.js', action: 'test_ping_failed', uid, chatId: maskChatId(chatId), error: err.message });
+    return res.status(500).json({ error: 'Failed to send test ping', detail: err.message });
+  }
+});
+
+// GET /api/cron/telegram-pings — secured by CRON_SECRET (Vercel cron header).
+// Queries telegram_ping_queue for enabled records with nextPingAt <= now,
+// sends each ping, and updates lastPingAt/nextPingAt.  Idempotent per user/day.
+// Requires a Firestore composite index: (enabled ASC, nextPingAt ASC).
+app.get('/api/cron/telegram-pings', async (req, res) => {
+  const authHeader = req.headers['authorization'] || '';
+  const expected   = CRON_SECRET ? `Bearer ${CRON_SECRET}` : '';
+  if (!expected || authHeader !== expected) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!TELEGRAM_CONFIGURED) {
+    return res.status(503).json({ ok: false, reason: 'telegram_not_configured' });
+  }
+  const db = getFirestoreOrNull();
+  if (!db) {
+    return res.status(503).json({ ok: false, reason: 'firebase_not_configured' });
+  }
+
+  const now     = new Date();
+  const results = { sent: 0, skipped: 0, failed: 0, errors: [] };
+
+  let snap;
+  try {
+    snap = await db.collection('telegram_ping_queue')
+      .where('enabled', '==', true)
+      .where('nextPingAt', '<=', now)
+      .get();
+  } catch (err) {
+    logError({ area: 'telegram', module: 'backend/server.js', action: 'cron_query_failed', error: err.message });
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+
+  const batch      = db.batch();
+  let   batchCount = 0;
+
+  for (const docSnap of snap.docs) {
+    const data  = docSnap.data();
+    const uid   = data.uid;
+    const tz    = validateTz(data.timezone);
+    const today = localDateStr(now.getTime(), tz);
+
+    // Idempotency: skip if already sent today in user's local timezone.
+    if (data.lastPingDate === today) {
+      results.skipped++;
+      continue;
+    }
+
+    const chatId = data.chatId;
+    if (!chatId) {
+      results.skipped++;
+      continue;
+    }
+
+    const msgText  = buildPingText(data);
+    const keyboard = buildPingKeyboard();
+    const payload  = { chat_id: chatId, text: msgText };
+    if (keyboard) payload.reply_markup = keyboard;
+
+    try {
+      await tgSend('sendMessage', payload);
+      const nextPingAt = computeNextPingAt(tz, data.localPingTime || '09:00', now.getTime() + 60_000);
+      batch.update(docSnap.ref, {
+        lastPingAt:   now,
+        lastPingDate: today,
+        nextPingAt:   new Date(nextPingAt),
+        updatedAt:    now,
+      });
+      batchCount++;
+      results.sent++;
+      logInfo({ area: 'telegram', module: 'backend/server.js', action: 'ping_sent', uid, chatId: maskChatId(chatId), today });
+    } catch (err) {
+      batch.update(docSnap.ref, {
+        missedPingCount: (data.missedPingCount || 0) + 1,
+        updatedAt:       now,
+      });
+      batchCount++;
+      results.failed++;
+      results.errors.push({ uid, error: err.message });
+      logWarn({ area: 'telegram', module: 'backend/server.js', action: 'ping_failed', uid, chatId: maskChatId(chatId), error: err.message });
+    }
+  }
+
+  if (batchCount > 0) {
+    await batch.commit().catch((err) =>
+      logError({ area: 'telegram', module: 'backend/server.js', action: 'cron_batch_commit_failed', error: err.message })
+    );
+  }
+
+  logInfo({ area: 'telegram', module: 'backend/server.js', action: 'cron_complete', sent: results.sent, skipped: results.skipped, failed: results.failed });
+  return res.json({ ok: true, ...results });
+});
+
+// ── End Telegram Integration ───────────────────────────────────────────────
 
 app.get('*', (_req, res) => {
   res.sendFile(path.join(frontendDir, 'index.html'));
@@ -2571,6 +3478,10 @@ app.post('/api/notify/reminder', async (req, res) => {
     return res.status(500).json({ error: 'Failed to send reminder' });
   }
 });
+
+// module.exports lets @vercel/node use this as a serverless request handler.
+// app.listen is still called for local dev (node ignores the export).
+module.exports = app;
 
 app.listen(PORT, () => {
   logInfo({
