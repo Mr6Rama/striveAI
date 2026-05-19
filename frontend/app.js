@@ -1,382 +1,114 @@
+// v2 boot — mounts into #app-v2 (not yet in index.html; exits silently until HTML is updated).
+// No v1 dependencies: no plan-engine, no ai.js v1 actions, no today-engine.
+
 import { createInitialState } from './core/state-model.js';
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
-import { initAuth, onAuthChanged, signIn, signOut, authErrorMessage, getDb } from './services/auth.js';
-import { loadPersistedDomains, saveDomains } from './services/persistence.js';
-import { generatePlan, rebuildPlanPartially, adjustTodayTask } from './services/ai.js';
-import { bindOnboardingHandlers, renderOnboarding } from './ui/pages/onboarding.js';
-import { bindTodayHandlers, renderToday } from './ui/pages/today.js';
-import { bindSettingsHandlers, renderSettings } from './ui/pages/settings.js';
-import { renderRoadmap } from './ui/pages/roadmap.js';
+import { initAuth, onAuthChanged, signOut, getDb } from './services/auth.js';
+import { loadPersistedDomains } from './services/persistence.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
-import { getActiveStage, isPlanReady, normalizePlan } from './domain/plan-engine.js';
-import { markOutcome, rolloverAndAssign, skipToNextBest } from './domain/today-engine.js';
+import { renderRoute } from './ui/pages/index.js';
 
-let runtimeConfig = null;
+const ROOT_ID = 'app-v2';
+
 let currentUser = null;
-let rolloverTimer = null;
 
-boot().catch((error) => {
-  console.error(error);
-  showAuthError('Failed to initialize app.');
+boot().catch((err) => {
+  console.error('[striveai v2] boot failed:', err);
+  const root = document.getElementById(ROOT_ID);
+  if (root) {
+    root.innerHTML = '<div style="padding:2rem;font-family:monospace;color:#f87171">Boot failed — please refresh.</div>';
+  }
 });
 
 async function boot() {
-  runtimeConfig = await loadRuntimeConfig();
-  initAuth(runtimeConfig);
+  const root = document.getElementById(ROOT_ID);
+  if (!root) {
+    // index.html not yet updated for v2; script.js handles the v1 boot. Exit silently.
+    return;
+  }
 
-  bindStaticHandlers();
-  bindOnboardingHandlers({ onGenerate: handleGeneratePlan });
-  bindTodayHandlers({
-    onDone: () => handleTodayOutcome('done'),
-    onMissed: () => handleTodayOutcome('missed'),
-    onBlocked: () => handleTodayOutcome('blocked'),
-    onSkip: handleSkipTodayTask,
-  });
-  bindSettingsHandlers({
-    onSave: handleSaveSettings,
-    onRebuild: handleRebuildCurrentStage,
+  const config = await fetch('/api/config').then((r) => {
+    if (!r.ok) throw new Error(`Config fetch ${r.status}`);
+    return r.json();
   });
 
+  initAuth(config);
   initRouter(handleRouteChange);
-  subscribe(renderApp);
+  subscribe(() => renderApp(getState()));
 
   onAuthChanged(async (user) => {
     if (!user) {
       currentUser = null;
-      clearRolloverTimer();
       replaceState(createInitialState());
-      showAuth();
+      navigate('/landing', handleRouteChange, true);
       return;
     }
     await handleSignedIn(user);
   });
 }
 
-function bindStaticHandlers() {
-  document.getElementById('auth-signin-btn')?.addEventListener('click', async () => {
-    const email = String(document.getElementById('auth-email')?.value || '').trim();
-    const password = String(document.getElementById('auth-password')?.value || '').trim();
-    if (!email || !password) {
-      showAuthError('Enter email and password.');
-      return;
-    }
-    setAuthStatus('Signing in...');
-    try {
-      await signIn(email, password);
-      showAuthError('');
-    } catch (error) {
-      showAuthError(authErrorMessage(error));
-    } finally {
-      setAuthStatus('');
-    }
-  });
-
-  document.getElementById('auth-signout-btn')?.addEventListener('click', async () => {
-    await signOut();
-  });
-
-  document.getElementById('btn-complete-goal')?.addEventListener('click', handleGoalCompletion);
-}
-
 async function handleSignedIn(user) {
   currentUser = user;
-  hideAuth();
-  updateState((draft) => {
-    draft.ui.loading = true;
-    draft.ui.error = '';
-    draft.ui.message = 'Loading workspace...';
-    return draft;
-  });
+  updateState((s) => { s.ui.loading = true; return s; });
 
   const domains = await loadPersistedDomains({ userId: user.uid, db: getDb() });
+  const initial = createInitialState();
   replaceState({
-    ...createInitialState(),
+    ...initial,
     ...domains,
-    user: {
-      ...domains.user,
-      id: user.uid,
-      email: user.email || '',
-      goal: domains.user.goal || domains.plan.goal || '',
-      deadline: domains.user.deadline || domains.plan.deadline || '',
-    },
-    ui: {
-      ...createInitialState().ui,
-      loading: false,
-      message: '',
-      error: '',
-      activeRoute: '/',
-    },
+    user: { ...domains.user, id: user.uid, email: user.email || '' },
+    ui:   { ...initial.ui, authReady: true },
   });
 
-  await ensureTodayAssignedAndPersist();
+  navigate(resolveEntryRoute(getState()), handleRouteChange, true);
+}
 
-  const state = getState();
-  const initialRoute = isPlanReady(state.plan) ? normalizeRoute(window.location.pathname) : '/onboarding';
-  navigate(initialRoute, handleRouteChange, true);
+// Determine where to send an authenticated user on load.
+function resolveEntryRoute(state) {
+  const { track } = state;
+  if (track.status === 'complete') return '/recap';
+  if (!track.id || !track.days.length) return '/onboarding';
+  // Honor the current URL if it is a valid authenticated route.
+  const current = normalizeRoute(window.location.pathname);
+  const anonOnly = new Set(['/landing', '/auth', '/', '/not-found']);
+  return !anonOnly.has(current) ? current : '/today';
+}
 
-  startRolloverTimer();
+// Apply auth and track guards before committing a route change.
+function guardRoute(route, state) {
+  // Root redirect.
+  if (route === '/') return currentUser ? resolveEntryRoute(state) : '/landing';
+
+  // Unauthenticated: only landing and auth are accessible.
+  if (!currentUser) {
+    return new Set(['/landing', '/auth']).has(route) ? route : '/landing';
+  }
+
+  const { track } = state;
+  const noTrack   = !track.id || !track.days.length;
+
+  // Routes that don't require an active track.
+  const freeRoutes = new Set(['/onboarding', '/confirm-track', '/plan-preview', '/settings', '/not-found']);
+
+  if (noTrack && !freeRoutes.has(route)) return '/onboarding';
+  if (track.status === 'complete' && route !== '/recap' && !freeRoutes.has(route)) return '/recap';
+  return route;
 }
 
 function handleRouteChange(route) {
-  updateState((draft) => {
-    const nextRoute = shouldForceOnboarding(draft) ? '/onboarding' : route;
-    draft.ui.activeRoute = nextRoute;
-    draft.ui.error = '';
-    draft.ui.message = '';
-    return draft;
+  updateState((s) => {
+    s.ui.activeRoute = guardRoute(route, s);
+    return s;
   });
-}
-
-async function handleGeneratePlan(payload) {
-  const goal = String(payload.goal || '').trim();
-  const deadline = String(payload.deadline || '').trim();
-  const niche = String(payload.niche || '').trim();                  
-  const executionStyle = String(payload.executionStyle || '').trim(); 
-
-  if (!goal || !deadline) {
-    updateState((draft) => {
-      draft.ui.error = 'Goal and deadline are required.';
-      return draft;
-    });
-    return;
-  }
-
-  updateState((draft) => {
-    draft.ui.loading = true;
-    draft.ui.message = 'Generating plan...';
-    draft.ui.error = '';
-    return draft;
-  });
-
-  // Pass new fields to the AI
-  const plan = await generatePlan({ goal, deadline, niche, executionStyle }); 
-
-  updateState((draft) => {
-    draft.user.name = String(payload.name || draft.user.name || '').trim();
-    draft.user.goal = goal;
-    draft.user.deadline = deadline;
-    draft.user.niche = niche;                  
-    draft.user.executionStyle = executionStyle;
-    draft.user.email = draft.user.email || '';
-    if (payload.project) draft.user.project = String(payload.project).trim();
-    
-
-    draft.plan = normalizePlan(plan, { goal, deadline, niche, executionStyle }); 
-    
-    draft.history.entries = [];
-    draft.history.successStreak = 0;
-    draft.history.missStreak = 0;
-    draft.ui.loading = false;
-    draft.ui.message = '';
-    draft.ui.error = '';
-    return draft;
-  });
-
-  await ensureTodayAssignedAndPersist();
-  navigate('/', handleRouteChange);
-}
-
-async function handleTodayOutcome(outcome) {
-  const state = getState();
-  const next = await markOutcome(state, outcome, {
-    aiAdjustTodayTask: adjustTodayTask,
-    aiRebuildPlanPartially: rebuildPlanPartially,
-  });
-  replaceState(next);
-  await persistCurrentDomains();
-}
-
-function handleSkipTodayTask() {
-  const next = skipToNextBest(getState());
-  replaceState(next);
-  persistCurrentDomains().catch(console.error);
-}
-
-async function handleSaveSettings(payload) {
-  updateState((draft) => {
-    draft.user.name = String(payload.name || draft.user.name || '').trim();
-    draft.user.goal = String(payload.goal || draft.user.goal || '').trim();
-    draft.user.deadline = String(payload.deadline || draft.user.deadline || '').trim();
-    draft.user.niche = String(payload.niche || draft.user.niche || '').trim();                   
-    draft.user.executionStyle = String(payload.executionStyle || draft.user.executionStyle || '').trim(); 
-    draft.plan.goal = draft.user.goal || draft.plan.goal;
-    draft.plan.deadline = draft.user.deadline || draft.plan.deadline;
-    draft.ui.message = 'Settings saved.';
-    draft.ui.error = '';
-    draft.plan.niche = draft.user.niche; 
-    draft.plan.executionStyle = draft.user.executionStyle;
-    return draft;
-  });
-  await persistCurrentDomains();
-  await ensureTodayAssignedAndPersist();
-}
-async function handleRebuildCurrentStage() {
-  const state = getState();
-  const active = getActiveStage(state.plan);
-  if (!active) {
-    updateState((draft) => {
-      draft.ui.error = 'No active stage to rebuild.';
-      return draft;
-    });
-    return;
-  }
-  updateState((draft) => {
-    draft.ui.loading = true;
-    draft.ui.message = 'Rebuilding current stage...';
-    draft.ui.error = '';
-    return draft;
-  });
-
-  const rebuilt = await rebuildPlanPartially({
-    plan: state.plan,
-    stageId: active.id,
-    reason: 'manual_rebuild',
-  });
-  updateState((draft) => {
-    draft.plan = rebuilt;
-    draft.ui.loading = false;
-    draft.ui.message = 'Current stage rebuilt.';
-    draft.ui.error = '';
-    return draft;
-  });
-  await ensureTodayAssignedAndPersist();
-}
-
-async function ensureTodayAssignedAndPersist() {
-  const next = await rolloverAndAssign(getState(), {
-    aiAdjustTodayTask: adjustTodayTask,
-    aiRebuildPlanPartially: rebuildPlanPartially,
-  });
-  replaceState(next);
-  await persistCurrentDomains();
-}
-
-async function persistCurrentDomains() {
-  const state = getState();
-  await saveDomains(
-    {
-      user: state.user,
-      plan: state.plan,
-      today: state.today,
-      history: state.history,
-    },
-    { userId: currentUser?.uid || '', db: getDb() }
-  );
-}
-
-function startRolloverTimer() {
-  clearRolloverTimer();
-  rolloverTimer = setInterval(() => {
-    ensureTodayAssignedAndPersist().catch((error) => console.error('Rollover check failed', error));
-  }, 60 * 1000);
-}
-
-function clearRolloverTimer() {
-  if (rolloverTimer) {
-    clearInterval(rolloverTimer);
-    rolloverTimer = null;
-  }
 }
 
 function renderApp(state) {
-  const route = shouldForceOnboarding(state) ? '/onboarding' : state.ui.activeRoute || '/';
-  const app = document.getElementById('app');
-  const topUser = document.getElementById('top-user');
-  if (app) app.style.display = currentUser ? 'block' : 'none';
-  if (topUser) topUser.textContent = state.user.name || state.user.email || 'User';
-
-  setActiveView(route);
-  setActiveNav(route);
-
-  renderOnboarding(state);
-  renderToday(state);
-  renderRoadmap(state);
-  renderSettings(state);
-}
-
-function setActiveView(route) {
-  const map = {
-    '/': 'view-today',
-    '/dashboard': 'view-today',
-    '/work': 'view-today',     
-    '/onboarding': 'view-onboarding',
-    '/roadmap': 'view-roadmap',
-    '/settings': 'view-settings',
-    '/goals': 'view-roadmap',   
-  };
-  const activeId = map[route] || 'view-today';
-  document.querySelectorAll('.view').forEach((view) => {
-    view.classList.remove('on');
+  const root = document.getElementById(ROOT_ID);
+  if (!root) return;
+  const route = state.ui.activeRoute || (currentUser ? '/today' : '/landing');
+  renderRoute(root, route, state, {
+    currentUser,
+    onSignOut: () => signOut(),
+    onNavigate: (path) => navigate(path, handleRouteChange),
   });
-  const active = document.getElementById(activeId);
-  if (active) active.classList.add('on');
 }
-
-function setActiveNav(route) {
-  const today = document.getElementById('nav-today');
-  const roadmap = document.getElementById('nav-roadmap');
-  const settings = document.getElementById('nav-settings');
-  [today, roadmap, settings].forEach((button) => button?.classList.remove('on'));
-  if (route === '/' || route === '/work' || route === '/dashboard') today?.classList.add('on');
-  if (route === '/roadmap') roadmap?.classList.add('on');
-  if (route === '/settings') settings?.classList.add('on');
-}
-
-function shouldForceOnboarding(state) {
-  return !isPlanReady(state.plan);
-}
-
-async function loadRuntimeConfig() {
-  const res = await fetch('/api/config');
-  if (!res.ok) throw new Error('Failed to load runtime config');
-  return res.json();
-}
-
-function showAuth() {
-  const authScreen = document.getElementById('auth-screen');
-  const app = document.getElementById('app');
-  if (authScreen) authScreen.style.display = 'flex';
-  if (app) app.style.display = 'none';
-}
-
-function hideAuth() {
-  const authScreen = document.getElementById('auth-screen');
-  if (authScreen) authScreen.style.display = 'none';
-}
-
-function showAuthError(message) {
-  const el = document.getElementById('auth-error');
-  if (el) el.textContent = message || '';
-}
-
-function setAuthStatus(message) {
-  const el = document.getElementById('auth-status');
-  if (el) el.textContent = message || '';
-}
-async function handleGoalCompletion() {
-  if (!confirm('Are you sure you have reached your goal? This will clear your current plan and save it to history.')) {
-    return;
-  }
-
-  try {
-    // FIX: corrected endpoint — was /api/goal/complete, server registers /api/goals/:id/complete
-    const userId = currentUser?.uid || 'anonymous';
-    const res = await fetch(`/api/goals/${userId}/complete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: currentUser?.uid }),
-    });
-
-    if (res.ok) {
-      alert('Congratulations! Goal completed.');
-      window.location.reload(); 
-    } else {
-      const err = await res.json();
-      alert('Error: ' + err.error);
-    }
-  } catch (error) {
-    console.error('Failed to complete goal:', error);
-  }
-}
-
-window.handleGoalCompletion = handleGoalCompletion;

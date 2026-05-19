@@ -1,31 +1,36 @@
-const ROUTES = new Set([
-  '/', 
-  '/dashboard', 
-  '/work', 
-  '/goals', 
-  '/notes', 
-  '/roadmap', 
-  '/analytics', 
-  '/settings', 
-  '/billing', 
-  '/onboarding'
+// v2 router — clean route list, no STEM/billing/notes/analytics routes.
+// Unknown paths → /not-found (never silently show Today for dead routes).
+
+export const V2_ROUTES = new Set([
+  '/landing',
+  '/auth',
+  '/onboarding',
+  '/confirm-track',
+  '/plan-preview',
+  '/today',
+  '/agent',
+  '/action-kit',
+  '/proof',
+  '/blocked',
+  '/progress',
+  '/recap',
+  '/settings',
+  '/not-found',
 ]);
+
 export function initRouter(onRouteChange) {
-  document.querySelectorAll('[data-route]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const route = button.getAttribute('data-route') || '/';
-      navigate(route, onRouteChange);
+  document.querySelectorAll('[data-route]').forEach((el) => {
+    el.addEventListener('click', () => {
+      navigate(el.getAttribute('data-route') || '/', onRouteChange);
     });
   });
   window.addEventListener('popstate', () => {
-    const route = normalizeRoute(window.location.pathname);
-    onRouteChange(route);
+    onRouteChange(normalizeRoute(window.location.pathname));
   });
-  window.gp = (path) => {
-    const cleanPath = path.startsWith('/') ? path : `/${path}`;
-    navigate(cleanPath, onRouteChange);
-  };
+  // Global helper for inline onclick attributes in the legacy HTML shell.
+  window.gp = (path) => navigate(path.startsWith('/') ? path : `/${path}`, onRouteChange);
 }
+
 export function navigate(path, onRouteChange, replace = false) {
   const route = normalizeRoute(path);
   if (replace) {
@@ -35,10 +40,12 @@ export function navigate(path, onRouteChange, replace = false) {
   }
   onRouteChange(route);
 }
+
+// Strip query string before matching; '/' is a redirect sentinel, not a view.
+// Anything not in V2_ROUTES → '/not-found'.
 export function normalizeRoute(pathname) {
-  if (pathname === '/' || pathname === '') return '/';
-  if (ROUTES.has(pathname)) return pathname;
-  const withSlash = `/${pathname}`;
-  if (ROUTES.has(withSlash)) return withSlash;
-  return '/'; 
+  const base = String(pathname || '').split('?')[0].replace(/\/+$/, '') || '/';
+  if (base === '/') return '/';
+  if (V2_ROUTES.has(base)) return base;
+  return '/not-found';
 }
