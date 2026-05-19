@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-05-10T15:12:36.893Z",
+  "projectRoot": "C:\\Users\\User\\Desktop\\Strive\\strive-original\\striveAI-main",
+  "structure": {
+    "hasPackageJson": true,
+    "hasTsConfig": false,
+    "hasClaudeConfig": true,
+    "hasClaudeFlow": true
+  },
+  "scannedAt": 1778425956893
+}

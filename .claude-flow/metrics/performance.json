@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-05-10T15:12:37.054Z",
+  "mode": "headless",
+  "workerType": "optimize",
+  "model": "sonnet",
+  "durationMs": 82,
+  "executionId": "optimize_1778425956972_5rhkif",
+  "success": false,
+  "findings": null,
+  "rawOutputPreview": "",
+  "rawOutputLength": 0
+}

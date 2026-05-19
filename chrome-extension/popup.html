@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>StriveAI Focus</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0e0e12;--bg2:#16161e;--bg3:#1e1e2a;
+    --border:#2a2a3a;--blue:#0052ff;--blue-l:#4d8bff;
+    --green:#10b981;--amber:#f59e0b;--red:#ef4444;
+    --text:#e0e0e8;--muted:#6b6b7e;--mono:'JetBrains Mono',monospace;
+  }
+  html,body{width:340px;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif}
+  .header{
+    background:linear-gradient(135deg,#1a1a2e,#16213e);
+    padding:16px 18px 14px;border-bottom:1px solid var(--border);
+    display:flex;align-items:center;gap:10px;
+  }
+  .logo-mark{
+    width:30px;height:30px;background:var(--blue);border-radius:6px;
+    display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:16px;color:#fff;flex-shrink:0;
+  }
+  .logo-name{font-weight:800;font-size:15px;letter-spacing:-.3px}
+  .logo-tag{font-size:9px;color:var(--muted);font-weight:600;letter-spacing:.08em;margin-top:1px}
+  .header-right{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+  .open-btn{
+    background:var(--blue);color:#fff;border:none;border-radius:6px;
+    padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;
+    letter-spacing:.02em;transition:opacity .15s;
+  }
+  .open-btn:hover{opacity:.85}
+
+  /* Status */
+  .status-bar{
+    padding:12px 18px;border-bottom:1px solid var(--border);
+    display:flex;align-items:center;gap:8px;
+  }
+  .status-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex-shrink:0}
+  .status-dot.running{background:var(--green);box-shadow:0 0 6px var(--green)}
+  .status-dot.warning{background:var(--amber);box-shadow:0 0 6px var(--amber)}
+  .status-label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .status-label.running{color:var(--green)}
+  .status-label.warning{color:var(--amber)}
+
+  /* Session card */
+  .session-card{padding:16px 18px;border-bottom:1px solid var(--border)}
+  .session-goal{font-size:12px;color:var(--text);font-weight:600;line-height:1.4;margin-bottom:10px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .session-goal.empty{color:var(--muted);font-style:italic;font-weight:400}
+
+  .timer-row{display:flex;gap:8px;margin-bottom:10px}
+  .timer-box{
+    flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+    padding:10px 12px;text-align:center;
+  }
+  .timer-val{font-family:var(--mono);font-size:20px;font-weight:700;letter-spacing:.05em;color:var(--text)}
+  .timer-val.countdown.urgent{color:var(--red)}
+  .timer-val.countdown.ok{color:var(--green)}
+  .timer-lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:3px}
+
+  .progress-wrap{margin-bottom:12px}
+  .progress-track{height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+  .progress-fill{height:100%;background:var(--blue);border-radius:2px;transition:width .3s}
+  .progress-pct{font-family:var(--mono);font-size:10px;color:var(--muted);text-align:right;margin-top:4px}
+
+  .action-row{display:flex;gap:6px}
+  .btn{
+    flex:1;padding:8px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;
+    border:1px solid var(--border);background:var(--bg3);color:var(--text);
+    transition:opacity .15s, border-color .15s;
+  }
+  .btn:hover{opacity:.8}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btn.danger{background:transparent;border-color:var(--red);color:var(--red)}
+
+  /* Stats */
+  .stats-row{display:flex;border-bottom:1px solid var(--border)}
+  .stat{flex:1;padding:12px 18px;border-right:1px solid var(--border);text-align:center}
+  .stat:last-child{border-right:none}
+  .stat-val{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--text)}
+  .stat-lbl{font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.06em}
+
+  /* Footer */
+  .footer{padding:12px 18px;display:flex;align-items:center;justify-content:space-between}
+  .footer-note{font-size:10px;color:var(--muted)}
+  .footer-link{font-size:10px;color:var(--blue-l);cursor:pointer;text-decoration:none}
+
+  /* Not connected */
+  .not-connected{padding:24px 18px;text-align:center}
+  .not-connected-icon{font-size:32px;margin-bottom:10px}
+  .not-connected-title{font-weight:700;font-size:14px;margin-bottom:6px}
+  .not-connected-sub{font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:16px}
+
+  .loading{padding:32px 18px;text-align:center;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo-mark">S</div>
+  <div>
+    <div class="logo-name">StriveAI</div>
+    <div class="logo-tag">FOCUS MODE</div>
+  </div>
+  <div class="header-right">
+    <button class="open-btn" id="open-btn">Open App →</button>
+  </div>
+</div>
+
+<div id="root"><div class="loading">Loading…</div></div>
+
+<script src="config.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
