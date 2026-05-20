@@ -3,7 +3,7 @@
 
 import { createInitialState } from './core/state-model.js';
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
-import { initAuth, onAuthChanged, signOut, getDb } from './services/auth.js';
+import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains } from './services/persistence.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
 import { renderRoute } from './ui/pages/index.js';
@@ -108,7 +108,19 @@ function renderApp(state) {
   const route = state.ui.activeRoute || (currentUser ? '/today' : '/landing');
   renderRoute(root, route, state, {
     currentUser,
-    onSignOut: () => signOut(),
+    onSignOut:  () => signOut(),
     onNavigate: (path) => navigate(path, handleRouteChange),
+    onSignIn:   async ({ email, password }) => {
+      try { await signIn(email, password); }
+      catch (err) { throw new Error(authErrorMessage(err)); }
+    },
+    onSignUp:   async ({ email, password }) => {
+      try { await signUp(email, password); }
+      catch (err) { throw new Error(authErrorMessage(err)); }
+    },
+    onPasswordReset: async ({ email }) => {
+      try { await sendPasswordReset(email); }
+      catch (err) { throw new Error(authErrorMessage(err)); }
+    },
   });
 }

@@ -46,6 +46,11 @@ export function authErrorMessage(error) {
   return String(error?.message || 'Authentication failed.');
 }
 
+export async function sendPasswordReset(email) {
+  if (!firebaseAuth) throw new Error('Auth not initialized');
+  return firebaseAuth.sendPasswordResetEmail(email);
+}
+
 export function getDb() {
   return firebaseDb;
 }
