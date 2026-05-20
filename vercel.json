@@ -18,7 +18,7 @@
   "crons": [
     {
       "path": "/api/cron/telegram-pings",
-      "schedule": "0 * * * *"
+      "schedule": "0 9 * * *"
     }
   ]
 }
