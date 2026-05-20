@@ -5,7 +5,7 @@ import { createInitialState, createDefaultTodayV2, isoDateNow } from './core/sta
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain } from './services/persistence.js';
-import { generateExecutionTrack } from './services/ai-v2.js';
+import { generateExecutionTrack, generateAgentSteps, checkProof } from './services/ai-v2.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
 import { renderRoute } from './ui/pages/index.js';
 
@@ -212,6 +212,117 @@ function addDays(isoDate, n) {
   return d.toISOString().slice(0, 10);
 }
 
+// ── Agent handlers ─────────────────────────────────────────────────────────
+
+async function handleAgentInit() {
+  const state  = getState();
+  const { track, today, history } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
+
+  updateState((s) => { s.ui.agentLoading = true; return s; });
+  try {
+    const rawSteps = await generateAgentSteps(dayPlan, track, history.failurePatterns);
+    const session  = {
+      steps:            rawSteps.map((s, i) => ({ index: i, text: String(s.text || ''), status: 'pending', stuckNote: '', completedAt: '' })),
+      currentStepIndex: 0,
+      startedAt:        new Date().toISOString(),
+      closedAt:         '',
+      outcome:          '',
+      proofNote:        '',
+    };
+    updateState((s) => { s.today.agentSession = session; s.ui.agentLoading = false; return s; });
+    await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
+  } catch (_e) {
+    updateState((s) => { s.ui.agentLoading = false; return s; });
+  }
+}
+
+async function handleAgentStepDone({ stepIndex, note }) {
+  updateState((s) => {
+    if (!s.today.agentSession) return s;
+    const step = s.today.agentSession.steps[stepIndex];
+    if (step) { step.status = 'done'; step.stuckNote = note || ''; step.completedAt = new Date().toISOString(); }
+    s.today.agentSession.currentStepIndex = stepIndex + 1;
+    return s;
+  });
+  await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
+}
+
+async function handleAgentProofSubmit({ type, value }) {
+  const state   = getState();
+  const { track, today } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
+
+  updateState((s) => { s.ui.agentLoading = true; return s; });
+  try {
+    const result = await checkProof(dayPlan, { type, value }, track);
+
+    if (result.verdict === 'met') {
+      await handleDayDone({ proofType: type, proofValue: value, fromAgent: true });
+    } else {
+      const outcome = result.verdict === 'not_enough' ? 'blocked' : 'partial';
+      updateState((s) => {
+        s.ui.agentLoading = false;
+        if (s.today.agentSession) { s.today.agentSession.outcome = outcome; s.today.agentSession.proofNote = result.note || ''; }
+        return s;
+      });
+      await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
+    }
+  } catch (_e) {
+    updateState((s) => { s.ui.agentLoading = false; return s; });
+  }
+}
+
+async function handleAgentRetry() {
+  updateState((s) => {
+    if (s.today.agentSession) { s.today.agentSession.outcome = ''; s.today.agentSession.proofNote = ''; }
+    return s;
+  });
+  await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
+}
+
+async function handleDayDone({ proofType, proofValue, fromAgent }) {
+  const state   = getState();
+  const { track, today, history } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? {};
+  const now     = new Date().toISOString();
+
+  const entry = {
+    date:            today.date,
+    dayNumber:       dayNum,
+    trackId:         track.id,
+    outcome:         'done',
+    taskTitle:       dayPlan.title || '',
+    proofType:       proofType || 'text',
+    agentUsed:       Boolean(fromAgent),
+    rescueOffered:   false,
+    rescueCompleted: false,
+    createdAt:       now,
+  };
+
+  updateState((s) => {
+    s.today.status    = 'done';
+    s.today.outcomeAt = now;
+    s.today.proof     = { type: proofType || 'text', value: proofValue || '', submittedAt: now };
+    if (s.today.agentSession) { s.today.agentSession.outcome = 'done'; s.today.agentSession.closedAt = now; }
+    const day = s.track.days.find((d) => d.dayNumber === dayNum);
+    if (day) day.status = 'done';
+    s.history.entries         = [entry, ...(s.history.entries || [])].slice(0, 200);
+    s.history.successStreak   = (s.history.successStreak || 0) + 1;
+    s.history.currentDayStreak = (s.history.currentDayStreak || 0) + 1;
+    s.ui.agentLoading = false;
+    return s;
+  });
+
+  const st = getState();
+  await saveDomains({ user: st.user, track: st.track, today: st.today, history: st.history, telegram: st.telegram },
+    { userId: currentUser?.uid, db: getDb() });
+  navigate('/today', handleRouteChange, true);
+}
+
 // ── Route change ───────────────────────────────────────────────────────────
 
 function handleRouteChange(route) {
@@ -241,9 +352,13 @@ function renderApp(state) {
       try { await sendPasswordReset(email); }
       catch (err) { throw new Error(authErrorMessage(err)); }
     },
-    onGenerate:        handleGenerate,
-    onStartDay1:       handleStartDay1,
-    onTelegramLink:    handleTelegramLink,
-    onTelegramRefresh: handleTelegramRefresh,
+    onGenerate:           handleGenerate,
+    onStartDay1:          handleStartDay1,
+    onTelegramLink:       handleTelegramLink,
+    onTelegramRefresh:    handleTelegramRefresh,
+    onAgentInit:          handleAgentInit,
+    onAgentStepDone:      handleAgentStepDone,
+    onAgentProofSubmit:   handleAgentProofSubmit,
+    onAgentRetry:         handleAgentRetry,
   });
 }
