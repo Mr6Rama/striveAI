@@ -178,12 +178,25 @@ function validateToday(raw) {
     status:         normalizeDayStatus(raw.status),
     proof:          validateProof(raw.proof),
     agentSession:   validateAgentSession(raw.agentSession),
+    actionKit:      validateActionKit(raw.actionKit),
     rescueAction:   raw.rescueAction && typeof raw.rescueAction === 'object' ? raw.rescueAction : null,
     blockerText:    String(raw.blockerText    || ''),
     skipReason:     String(raw.skipReason     || ''),
     outcomeAt:      String(raw.outcomeAt      || ''),
     adaptationNote: String(raw.adaptationNote || ''),
   };
+}
+
+function validateActionKit(raw) {
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const VALID_TYPES = new Set(['template', 'reference', 'question', 'tool', 'tip']);
+  return raw
+    .map((item) => ({
+      type:    VALID_TYPES.has(item?.type) ? item.type : 'tip',
+      label:   String(item?.label   || '').slice(0, 50),
+      content: String(item?.content || '').slice(0, 400),
+    }))
+    .filter((item) => item.content);
 }
 
 function validateProof(raw) {

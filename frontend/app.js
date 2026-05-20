@@ -5,7 +5,7 @@ import { createInitialState, createDefaultTodayV2, isoDateNow } from './core/sta
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain } from './services/persistence.js';
-import { generateExecutionTrack, generateAgentSteps, checkProof } from './services/ai-v2.js';
+import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit } from './services/ai-v2.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
 import { renderRoute } from './ui/pages/index.js';
 
@@ -212,6 +212,24 @@ function addDays(isoDate, n) {
   return d.toISOString().slice(0, 10);
 }
 
+// ── Action Kit handler ─────────────────────────────────────────────────────
+
+async function handleKitGenerate() {
+  const state   = getState();
+  const { track, today } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
+
+  updateState((s) => { s.ui.kitLoading = true; return s; });
+  try {
+    const items = await generateActionKit(dayPlan, track);
+    updateState((s) => { s.today.actionKit = items; s.ui.kitLoading = false; return s; });
+    await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
+  } catch (_e) {
+    updateState((s) => { s.ui.kitLoading = false; return s; });
+  }
+}
+
 // ── Agent handlers ─────────────────────────────────────────────────────────
 
 async function handleAgentInit() {
@@ -356,6 +374,7 @@ function renderApp(state) {
     onStartDay1:          handleStartDay1,
     onTelegramLink:       handleTelegramLink,
     onTelegramRefresh:    handleTelegramRefresh,
+    onKitGenerate:        handleKitGenerate,
     onAgentInit:          handleAgentInit,
     onAgentStepDone:      handleAgentStepDone,
     onAgentProofSubmit:   handleAgentProofSubmit,
