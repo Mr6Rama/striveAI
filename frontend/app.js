@@ -1,10 +1,11 @@
 // v2 boot — mounts into #app-v2 (not yet in index.html; exits silently until HTML is updated).
 // No v1 dependencies: no plan-engine, no ai.js v1 actions, no today-engine.
 
-import { createInitialState } from './core/state-model.js';
+import { createInitialState, createDefaultTodayV2, isoDateNow } from './core/state-model.js';
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
-import { loadPersistedDomains } from './services/persistence.js';
+import { loadPersistedDomains, saveDomains, saveDomain } from './services/persistence.js';
+import { generateExecutionTrack } from './services/ai-v2.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
 import { renderRoute } from './ui/pages/index.js';
 
@@ -95,6 +96,109 @@ function guardRoute(route, state) {
   return route;
 }
 
+// ── Onboarding handlers ────────────────────────────────────────────────────
+
+async function handleGenerate(draft) {
+  updateState((s) => { s.ui.trackGenerating = true; s.ui.loading = true; s.ui.error = ''; return s; });
+
+  try {
+    const state = getState();
+    const aiData = await generateExecutionTrack({
+      goal:             draft.goal,
+      goalCategory:     draft.goalCategory,
+      dailyHours:       draft.dailyHours,
+      experienceLevel:  state.user.experienceLevel || 'intermediate',
+      blockerHint:      draft.blocker,
+    });
+
+    const startDate = isoDateNow();
+    const trackId   = `track-${Date.now()}`;
+    const track = {
+      id:               trackId,
+      goal:             draft.goal,
+      goalCategory:     draft.goalCategory,
+      blockerHint:      draft.blocker,
+      generatedAt:      new Date().toISOString(),
+      startDate,
+      status:           'active',
+      currentDayNumber: 1,
+      days:             aiData.days.map((d, i) => ({
+        ...d,
+        dayNumber:  i + 1,
+        status:     'pending',
+        date:       addDays(startDate, i),
+      })),
+      continuationOf: null,
+    };
+
+    const today   = createDefaultTodayV2(startDate, 1);
+    const domains = {
+      user:     { ...state.user, goalCategory: draft.goalCategory, dailyHours: draft.dailyHours },
+      track,
+      today,
+      history:  state.history,
+      telegram: state.telegram,
+    };
+
+    await saveDomains(domains, { userId: currentUser?.uid, db: getDb() });
+    replaceState({ ...getState(), ...domains, ui: { ...getState().ui, loading: false, trackGenerating: false, error: '' } });
+
+    if (state.telegram.connected && typeof draft.pingHour === 'number') {
+      try {
+        const token = await currentUser?.getIdToken();
+        await fetch('/api/v2/telegram/schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ pingHour: draft.pingHour, timezone: 'UTC', enabled: true }),
+        });
+      } catch (_e) { /* non-fatal */ }
+    }
+
+    navigate('/plan-preview', handleRouteChange, true);
+  } catch (err) {
+    updateState((s) => { s.ui.loading = false; s.ui.trackGenerating = false; s.ui.error = 'Failed to generate your plan — please try again.'; return s; });
+  }
+}
+
+async function handleTelegramLink() {
+  const token = await currentUser?.getIdToken();
+  const res = await fetch('/api/v2/telegram/link-token', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 503) throw new Error('Telegram is not configured in this environment.');
+    throw new Error(data.error || 'Could not get link token.');
+  }
+  const { connectUrl } = await res.json();
+  window.open(connectUrl, '_blank');
+}
+
+async function handleTelegramRefresh() {
+  try {
+    const token = await currentUser?.getIdToken();
+    const res = await fetch('/api/v2/telegram/status', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    updateState((s) => {
+      s.telegram = { ...s.telegram, connected: Boolean(data.connected), username: data.username || '', chatId: data.chatId || '', connectedAt: data.connectedAt || '' };
+      return s;
+    });
+    await saveDomain('telegram', getState().telegram, { userId: currentUser?.uid, db: getDb() });
+  } catch (_e) { /* non-fatal */ }
+}
+
+function addDays(isoDate, n) {
+  const d = new Date(isoDate + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// ── Route change ───────────────────────────────────────────────────────────
+
 function handleRouteChange(route) {
   updateState((s) => {
     s.ui.activeRoute = guardRoute(route, s);
@@ -122,5 +226,8 @@ function renderApp(state) {
       try { await sendPasswordReset(email); }
       catch (err) { throw new Error(authErrorMessage(err)); }
     },
+    onGenerate: handleGenerate,
+    onTelegramLink:    handleTelegramLink,
+    onTelegramRefresh: handleTelegramRefresh,
   });
 }
