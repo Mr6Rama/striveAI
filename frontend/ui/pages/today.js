@@ -21,15 +21,6 @@ const STATUS_LABEL = Object.freeze({
   pending:     'PENDING',
 });
 
-const PATTERN_TIPS = Object.freeze({
-  time:       'Short on time? Agent can give you a 5-minute version of today\'s task.',
-  skill_gap:  'Feeling stuck on skills? Action Kit has resources and worked examples.',
-  unclear:    'Not sure where to start? Agent will surface the first visible action.',
-  motivation: 'Low energy? Start Agent — the first micro-step usually unsticks things.',
-  avoid:      'Avoiding the task? Agent gives you the safest possible first step.',
-  external:   'Waiting on something external? Agent can suggest what you can do now.',
-  other:      'Something blocking you? Agent or Action Kit can help you get unstuck.',
-});
 
 // ── v1 legacy exports (used by old HTML shell via script.js) ───────────────
 
@@ -90,7 +81,7 @@ export function render(container, state, actions) {
 function renderActive(container, track, today, dayPlan, state, actions) {
   const dayNum  = dayPlan.dayNumber || 1;
   const status  = today.status || 'pending';
-  const insight = buildInsight(state.history?.failurePatterns);
+  const insight = state.ui?.insight || '';
   const tgNote  = buildTgNote(state.telegram);
 
   container.innerHTML = `
@@ -178,7 +169,7 @@ function renderComplete(container, track, today, dayPlan, status, actions) {
 
 function renderBlocked(container, track, today, dayPlan, state, actions) {
   const dayNum  = dayPlan.dayNumber || 1;
-  const insight = buildInsight(state.history?.failurePatterns);
+  const insight = state.ui?.insight || '';
 
   container.innerHTML = `
     <div style="max-width:560px;margin:3rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif">
@@ -269,13 +260,6 @@ function actionCard(dayPlan) {
     </div>`;
 }
 
-function buildInsight(patterns) {
-  if (!Array.isArray(patterns) || !patterns.length) return '';
-  const counts = {};
-  patterns.forEach(({ blockerCategory: c }) => { if (c) counts[c] = (counts[c] || 0) + 1; });
-  const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
-  return top ? (PATTERN_TIPS[top] || '') : '';
-}
 
 function buildTgNote(telegram) {
   if (!telegram?.connected) return '';

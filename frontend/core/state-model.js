@@ -106,6 +106,10 @@ export function createInitialState() {
       day7RecapOpen:     false,
       toast:             null,
       error:             '',
+      insight:           '',
+      agentLoading:      false,
+      kitLoading:        false,
+      proofLoading:      false,
     },
   };
 }

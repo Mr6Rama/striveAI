@@ -1,11 +1,11 @@
 // v2 boot — mounts into #app-v2 (not yet in index.html; exits silently until HTML is updated).
-// No v1 dependencies: no plan-engine, no ai.js v1 actions, no today-engine.
 
 import { createInitialState, createDefaultTodayV2, isoDateNow } from './core/state-model.js';
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain } from './services/persistence.js';
-import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker } from './services/ai-v2.js';
+import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay } from './services/ai-v2.js';
+import { rolloverIfNeeded, analyzePatterns, deriveInsight, shouldTriggerAdaptation, applyAdaptResult, isTrackComplete } from './domain/today-engine.js';
 import { resetProofState } from './ui/pages/proof.js';
 import { resetBlockedState } from './ui/pages/blocked.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
@@ -56,12 +56,29 @@ async function handleSignedIn(user) {
 
   const domains = await loadPersistedDomains({ userId: user.uid, db: getDb() });
   const initial = createInitialState();
-  replaceState({
+  const loaded  = {
     ...initial,
     ...domains,
     user: { ...domains.user, id: user.uid, email: user.email || '' },
     ui:   { ...initial.ui, authReady: true },
-  });
+  };
+
+  // Daily rollover: mark overdue pending days as missed, advance currentDayNumber
+  const { state: rolledState, didRollover } = rolloverIfNeeded(loaded, isoDateNow());
+  replaceState(rolledState);
+
+  if (didRollover) {
+    const st = getState();
+    await saveDomains(
+      { user: st.user, track: st.track, today: st.today, history: st.history, telegram: st.telegram },
+      { userId: currentUser?.uid, db: getDb() }
+    );
+  }
+
+  // Check if track is now complete after rollover
+  if (isTrackComplete(getState().track)) {
+    updateState((s) => { s.track.status = 'complete'; return s; });
+  }
 
   navigate(resolveEntryRoute(getState()), handleRouteChange, true);
 }
@@ -435,6 +452,7 @@ async function handleBlockerMissed() {
     { user: st.user, track: st.track, today: st.today, history: st.history, telegram: st.telegram },
     { userId: currentUser?.uid, db: getDb() }
   );
+  await maybeAdaptNextDay('missed');
   resetBlockedState();
   navigate('/today', handleRouteChange, true);
 }
@@ -479,7 +497,39 @@ async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
   const st = getState();
   await saveDomains({ user: st.user, track: st.track, today: st.today, history: st.history, telegram: st.telegram },
     { userId: currentUser?.uid, db: getDb() });
+
+  // Trigger next-day adaptation (non-blocking, non-fatal)
+  await maybeAdaptNextDay(outcome);
+
   navigate('/today', handleRouteChange, true);
+}
+
+// ── Adaptive next day ──────────────────────────────────────────────────────
+//
+// Called after every day outcome. Checks pattern analysis + adaptation guard
+// before calling the AI. Does a single targeted saveDomain('track') if adapted.
+
+async function maybeAdaptNextDay(outcome) {
+  try {
+    const state       = getState();
+    const { track, history } = state;
+    const nextDayNum  = (track.currentDayNumber || 1) + 1;
+    if (nextDayNum > 7) return;
+
+    const nextDayPlan = track.days.find((d) => d.dayNumber === nextDayNum);
+    const analysis    = analyzePatterns(history);
+    const trigger     = shouldTriggerAdaptation(outcome, analysis, nextDayPlan);
+    if (!trigger.should) return;
+
+    const result = await adaptNextDay(track, track.days, history, history.failurePatterns);
+    if (!result) return;
+
+    const adapted = applyAdaptResult(getState(), nextDayNum, result);
+    replaceState(adapted);
+    await saveDomain('track', getState().track, { userId: currentUser?.uid, db: getDb() });
+  } catch (_e) {
+    // Adaptation is best-effort; never crash the main flow
+  }
 }
 
 // ── Route change ───────────────────────────────────────────────────────────
@@ -495,7 +545,17 @@ function renderApp(state) {
   const root = document.getElementById(ROOT_ID);
   if (!root) return;
   const route = state.ui.activeRoute || (currentUser ? '/today' : '/landing');
-  renderRoute(root, route, state, {
+
+  // Compute pattern insight once per render; injected as ui.insight so Today page
+  // can display it without importing the domain engine directly.
+  const insight = route === '/today'
+    ? (deriveInsight(state.history, state.today?.adaptationNote) || '')
+    : '';
+  const renderState = insight !== state.ui.insight
+    ? { ...state, ui: { ...state.ui, insight } }
+    : state;
+
+  renderRoute(root, route, renderState, {
     currentUser,
     onSignOut:  () => signOut(),
     onNavigate: (path) => navigate(path, handleRouteChange),
