@@ -1,326 +1,305 @@
-import { createDefaultToday, isoDateNow } from '../core/state-model.js';
-import { getActiveStage, getTask, markTaskDone, overallProgress, recalculatePlan, stageProgress, taskPriorityWeight } from './plan-engine.js';
+// v2 Daily Execution Engine — pure functions, no I/O, no AI calls.
+// All state transformations return new state; side-effects (saves, AI calls)
+// stay in app.js.
 
-const MAX_SIMPLIFICATION_LEVEL = 2;
+import { createDefaultTodayV2, isoDateNow } from '../core/state-model.js';
 
-export async function rolloverAndAssign(state, deps = {}) {
-  const now = deps.now || new Date();
-  const todayDate = isoDateNow(now);
-  let next = cloneState(state);
+// ── Rollover ───────────────────────────────────────────────────────────────
+//
+// Call once on sign-in (and only on sign-in) with the current ISO date.
+// Returns { state, didRollover, missedDayNumbers } where didRollover signals
+// whether a Firestore save is actually needed.
 
-  if (next.today?.date && next.today.date < todayDate && next.today.status === 'pending') {
-    next = await markOutcome(next, 'missed', { ...deps, source: 'auto' });
+export function rolloverIfNeeded(state, nowIso) {
+  const now = nowIso || isoDateNow();
+  const { track, today, history } = state;
+
+  if (!track?.id || !Array.isArray(track.days) || !track.days.length) {
+    return { state, didRollover: false, missedDayNumbers: [] };
+  }
+  if (track.status === 'complete' || track.status === 'abandoned') {
+    return { state, didRollover: false, missedDayNumbers: [] };
   }
 
-  if (!next.today || next.today.date !== todayDate) {
-    next.today = createDefaultToday(todayDate);
+  // Find all past-due days still pending
+  const overdue = track.days.filter((d) => d.date && d.date < now && d.status === 'pending');
+
+  // Find what today's day plan should be
+  const todayDayPlan = track.days.find((d) => d.date === now);
+
+  // Nothing to do: no overdue days and today record is already current
+  if (!overdue.length && today?.date === now) {
+    return { state, didRollover: false, missedDayNumbers: [] };
   }
 
-  next = ensureTaskAssigned(next, deps);
-  return next;
+  const next         = deepClone(state);
+  const missedNums   = [];
+  const existingKeys = new Set(
+    (next.history.entries || []).map((e) => `${e.trackId}:${e.dayNumber}`)
+  );
+
+  // Mark each overdue pending day as missed
+  for (const day of overdue) {
+    const dayRef = next.track.days.find((d) => d.dayNumber === day.dayNumber);
+    if (dayRef) dayRef.status = 'missed';
+
+    const key = `${track.id}:${day.dayNumber}`;
+    if (!existingKeys.has(key)) {
+      next.history.entries = [{
+        date:            day.date,
+        dayNumber:       day.dayNumber,
+        trackId:         track.id,
+        outcome:         'missed',
+        taskTitle:       day.title || '',
+        proofType:       '',
+        agentUsed:       false,
+        rescueOffered:   false,
+        rescueCompleted: false,
+        createdAt:       `${day.date}T23:59:00Z`,
+      }, ...next.history.entries].slice(0, 200);
+      existingKeys.add(key);
+      missedNums.push(day.dayNumber);
+    }
+  }
+
+  if (missedNums.length) {
+    next.history.successStreak    = 0;
+    next.history.currentDayStreak = 0;
+  }
+
+  // Advance currentDayNumber to today's plan (if it exists in the track)
+  if (todayDayPlan) {
+    next.track.currentDayNumber = todayDayPlan.dayNumber;
+
+    // Create fresh today if the persisted today is for a different date
+    if (next.today?.date !== now) {
+      next.today = createDefaultTodayV2(now, todayDayPlan.dayNumber);
+      // Pull adaptation note from the day plan if it was pre-adapted
+      if (todayDayPlan.adaptNote) {
+        next.today.adaptationNote = todayDayPlan.adaptNote;
+      }
+    }
+  } else {
+    // today's date is beyond the track's last day — check if track is done
+    const lastDay = next.track.days[next.track.days.length - 1];
+    if (lastDay && now > lastDay.date) {
+      const allResolved = next.track.days.every((d) => d.status !== 'pending');
+      if (allResolved) next.track.status = 'complete';
+    }
+  }
+
+  return { state: next, didRollover: true, missedDayNumbers: missedNums };
 }
 
-export async function markOutcome(state, outcome, deps = {}) {
-  const allowed = new Set(['done', 'missed', 'blocked']);
-  if (!allowed.has(outcome)) return state;
+// ── Pattern Analysis ───────────────────────────────────────────────────────
+//
+// Returns a rich analysis object used by:
+//   - deriveInsight() (Today UI chip)
+//   - shouldTriggerAdaptation() (decide whether to call AI)
+//   - app.js (pass to AI prompts for context)
 
-  let next = cloneState(state);
-  const activeToday = next.today || createDefaultToday();
-  const taskId = activeToday.primaryTaskId || '';
-  const taskText = activeToday.primaryTaskText || '';
-  const resolved = getTask(next.plan, taskId);
-  const stage = resolved.stage || getActiveStage(next.plan);
+export function analyzePatterns(history) {
+  const patterns = Array.isArray(history?.failurePatterns) ? history.failurePatterns : [];
+  const entries  = Array.isArray(history?.entries)         ? history.entries         : [];
 
-  const entry = {
-    date: activeToday.date || isoDateNow(),
-    outcome,
-    taskId,
-    taskTitle: taskText,
-    stageId: stage?.id || '',
-    source: deps.source || 'manual',
-    createdAt: new Date().toISOString(),
+  // ── Blocker category counts ──
+  const categoryCounts = {};
+  for (const p of patterns) {
+    const cat = p.blockerCategory || 'other';
+    categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+  }
+  const sortedCategories = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1]);
+  const [dominantCategory, dominantCount] = sortedCategories[0] || ['other', 0];
+
+  // ── Rescue success rate ──
+  const offeredCount   = patterns.filter((p) => p.rescueOffered).length;
+  const completedCount = patterns.filter((p) => p.rescueCompleted).length;
+  const rescueSuccessRate = offeredCount > 0 ? Math.round((completedCount / offeredCount) * 100) : null;
+
+  // ── Consecutive misses (most recent N entries) ──
+  let consecutiveMisses = 0;
+  for (const e of entries) {
+    if (e.outcome === 'missed') {
+      consecutiveMisses++;
+    } else {
+      break;
+    }
+  }
+
+  // ── Repeated blocker (same category ≥ 2) ──
+  const repeatedCategories = sortedCategories.filter(([, n]) => n >= 2).map(([cat]) => cat);
+
+  // ── Best working duration: estimateMinutes for completed days ──
+  // We can only estimate this from history entries; the dayPlan is not in history,
+  // so we leave this as a signal flag rather than exact minutes.
+  const hasCompletedWork = entries.some((e) => e.outcome === 'done' || e.outcome === 'rescued');
+
+  // ── Proof quality: what types do they submit? ──
+  const proofTypeCounts = {};
+  for (const e of entries) {
+    if (e.proofType) {
+      proofTypeCounts[e.proofType] = (proofTypeCounts[e.proofType] || 0) + 1;
+    }
+  }
+
+  // ── Task avoidance: skipped/blocked outcomes per unique taskTitle ──
+  const avoidedTitles = new Set(
+    patterns.filter((p) => ['motivation', 'other'].includes(p.blockerCategory)).map((p) => p.taskTitle)
+  );
+
+  // ── Total pattern count (for "enough data" guard) ──
+  const totalPatternCount = patterns.length;
+
+  return {
+    dominantCategory,
+    dominantCount,
+    categoryCounts,
+    sortedCategories,
+    repeatedCategories,
+    consecutiveMisses,
+    rescueSuccessRate,
+    hasCompletedWork,
+    proofTypeCounts,
+    avoidedTitles,
+    totalPatternCount,
   };
-  next.history.entries.push(entry);
-
-  if (outcome === 'done' && taskId) {
-    next.plan = markTaskDone(next.plan, taskId);
-    next.history.successStreak = (next.history.successStreak || 0) + 1;
-    next.history.missStreak = 0;
-    const overall = overallProgress(next.plan);
-    const stageRef = stage || getActiveStage(next.plan);
-    const stageProg = stageRef ? stageProgress(stageRef) : { done: 0, total: 0, pct: 0 };
-    next.ui.feedback = `Completed. Overall progress ${overall.done}/${overall.total} (${overall.pct}%). Stage progress ${stageProg.done}/${stageProg.total}.`;
-    next.today.forceTaskId = '';
-  } else if (outcome === 'missed') {
-    next.history.successStreak = 0;
-    next.history.missStreak = (next.history.missStreak || 0) + 1;
-    next = await applyMissedAdaptation(next, deps);
-  } else if (outcome === 'blocked') {
-    next.history.successStreak = 0;
-    // blocked does not count as failure streak
-    next = await applyBlockedAdaptation(next, deps);
-    next.today.forceTaskId = '';
-  }
-
-  next.today.status = outcome;
-  next.today.lastOutcomeAt = new Date().toISOString();
-  next = ensureTaskAssigned(next, deps, { allowSameDateReset: true });
-  return next;
 }
 
-export function skipToNextBest(state, deps = {}) {
-  let next = cloneState(state);
-  if (next.today?.forceTaskId) {
-    next.ui.feedback = 'Execution enforced for current task. Complete it before skipping.';
-    return next;
-  }
-  const currentTaskId = next.today?.primaryTaskId || '';
-  if (currentTaskId) {
-    next.today.skippedTaskIds = Array.isArray(next.today.skippedTaskIds) ? next.today.skippedTaskIds : [];
-    if (!next.today.skippedTaskIds.includes(currentTaskId)) next.today.skippedTaskIds.push(currentTaskId);
-  }
-  next = ensureTaskAssigned(next, deps);
-  next.ui.feedback = 'Switched to next best valid task in current stage.';
-  return next;
-}
+// ── Insight Text ───────────────────────────────────────────────────────────
+//
+// Returns a single short insight string for the Today UI chip, or null.
+// Rules:
+//   - Show only with ≥ 2 failure patterns (enough data).
+//   - Prefer today.adaptationNote if set (it's AI-specific and more accurate).
+//   - No psychological diagnosis. No creepy claims.
+//   - "Pattern found" framing only.
 
-function ensureTaskAssigned(state, deps = {}, options = {}) {
-  let next = cloneState(state);
-  next.plan = recalculatePlan(next.plan);
-  const todayDate = isoDateNow(deps.now || new Date());
-  if (!next.today) next.today = createDefaultToday(todayDate);
-  if (next.today.date !== todayDate || options.allowSameDateReset) {
-    next.today = {
-      ...createDefaultToday(todayDate),
-      skippedTaskIds: [],
-      forceTaskId: options.allowSameDateReset ? next.today.forceTaskId || '' : '',
-    };
+export function deriveInsight(history, adaptationNote) {
+  // AI-set note takes priority
+  if (adaptationNote && String(adaptationNote).trim()) {
+    return String(adaptationNote).trim();
   }
 
-  if (next.today.forceTaskId) {
-    const forced = getTask(next.plan, next.today.forceTaskId);
-    if (forced.task && forced.task.status === 'todo') {
-      const prog = stageProgress(forced.stage);
-      next.today.primaryTaskId = forced.task.id;
-      next.today.primaryTaskText = forced.task.title;
-      next.today.status = 'pending';
-      next.today.reason = 'Execution required: complete this task to recover momentum.';
-      next.today.stageProgressHint = `${prog.done}/${prog.total} tasks completed in this stage`;
-      return next;
-    }
-    next.today.forceTaskId = '';
+  const analysis = analyzePatterns(history);
+
+  // Need at least 2 data points before claiming a pattern
+  if (analysis.totalPatternCount < 2) return null;
+
+  // 3+ consecutive misses is the most urgent signal
+  if (analysis.consecutiveMisses >= 3) {
+    return 'Pattern found: several days in a row missed. Today starts with the smallest possible step.';
   }
 
-  const selected = selectTask(next.plan, next.history, next.today);
-  if (selected) {
-    const { stage, task } = selected;
-    const prog = stageProgress(stage);
-    next.today.primaryTaskId = task.id;
-    next.today.primaryTaskText = task.title;
-    next.today.status = 'pending';
-    next.today.reason = buildReason(next.plan, stage, task);
-    next.today.stageProgressHint = `${prog.done}/${prog.total} tasks completed in this stage`;
-    next.today.attemptCount = Number(next.today.attemptCount || 0);
-    next.today.adjustmentLevel = Number(next.today.adjustmentLevel || 0);
-    return next;
-  }
+  const { dominantCategory, dominantCount } = analysis;
 
-  // No task should ever be empty: assign enforced completion maintenance task.
-  next.today.primaryTaskId = 'meta-next-goal';
-  next.today.primaryTaskText = 'Define next goal and deadline for the next execution cycle';
-  next.today.status = 'pending';
-  next.today.reason = 'Current plan is complete. This keeps execution momentum alive.';
-  next.today.stageProgressHint = 'All planned stage tasks are complete';
-  return next;
-}
+  if (dominantCount < 2) return null;
 
-function selectTask(plan, history, today) {
-  const stage = getActiveStage(plan);
-  if (!stage) return null;
-  const skipped = new Set(Array.isArray(today?.skippedTaskIds) ? today.skippedTaskIds : []);
-  const blockedRecently = new Set(recentTaskOutcomes(history.entries, 'blocked', 3).map((entry) => entry.taskId));
-  const missedRecently = new Set(recentTaskOutcomes(history.entries, 'missed', 2).map((entry) => entry.taskId));
-
-  const candidates = (stage.tasks || [])
-    .filter((task) => task.status === 'todo')
-    .filter((task) => !skipped.has(task.id))
-    .filter((task) => isTaskValidForToday(task));
-
-  const ranked = candidates
-    .map((task, idx) => {
-      let score = taskPriorityWeight(task.priority) - idx;
-      if (blockedRecently.has(task.id)) score -= 14;
-      if (missedRecently.has(task.id)) score -= 10;
-      return { stage, task, score };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  return ranked[0] || null;
-}
-
-function isTaskValidForToday(task) {
-  const estimate = Number(task.estimateHours || 2);
-  if (!Number.isFinite(estimate) || estimate < 1 || estimate > 3) return false;
-  const text = String(task.title || '').trim();
-  if (!text) return false;
-  if (text.length < 6) return false;
-  return true;
-}
-
-function buildReason(plan, stage, task) {
-  const goal = plan.goal || 'your goal';
-  return `Completing "${task.title}" directly advances stage "${stage.title}" toward ${goal}.`;
-}
-
-async function applyMissedAdaptation(state, deps) {
-  let next = cloneState(state);
-  const misses = Number(next.history.missStreak || 0);
-  const todayTaskId = next.today?.primaryTaskId || '';
-  if (!todayTaskId) return next;
-
-  const lookup = getTask(next.plan, todayTaskId);
-  if (!lookup.task || !lookup.stage) return next;
-
-  const currentLevel = Number(next.today.adjustmentLevel || 0);
-  if (misses >= 3 && currentLevel >= MAX_SIMPLIFICATION_LEVEL) {
-    next.ui.feedback = 'Execution lock: complete this task before further scope changes.';
-    next.today.forceTaskId = todayTaskId;
-    return next;
-  }
-
-  if (misses === 1 || misses === 2) {
-    const adjustmentLevel = Math.min(MAX_SIMPLIFICATION_LEVEL, currentLevel + 1);
-    const adjusted = await getAdjustedTaskText(lookup.task, lookup.stage, next, deps, {
-      mode: 'missed',
-      adjustmentLevel,
-    });
-    next = replaceTaskTitle(next, lookup.task.id, adjusted.text, adjusted.estimateHours);
-    next.today.adjustmentLevel = adjustmentLevel;
-    next.ui.feedback = misses === 1
-      ? 'Task simplified after one miss. Focus on the smaller step today.'
-      : 'Repeated misses detected. Scope reduced and task tightened.';
-    if (misses >= 2) {
-      next = await maybeRebuildCurrentStage(next, deps, 'repeated_missed');
-    }
-  }
-  return next;
-}
-
-async function applyBlockedAdaptation(state, deps) {
-  let next = cloneState(state);
-  const todayTaskId = next.today?.primaryTaskId || '';
-  if (!todayTaskId) return next;
-  const lookup = getTask(next.plan, todayTaskId);
-  if (!lookup.task || !lookup.stage) return next;
-
-  const adjustmentLevel = Math.min(MAX_SIMPLIFICATION_LEVEL, Number(next.today.adjustmentLevel || 0) + 1);
-  const adjusted = await getAdjustedTaskText(lookup.task, lookup.stage, next, deps, {
-    mode: 'blocked',
-    adjustmentLevel,
-  });
-  next = replaceTaskTitle(next, lookup.task.id, adjusted.text, adjusted.estimateHours);
-  next.today.adjustmentLevel = adjustmentLevel;
-  next.ui.feedback = 'Blocked acknowledged. Task adjusted immediately.';
-  return next;
-}
-
-async function getAdjustedTaskText(task, stage, state, deps, context) {
-  const deterministic = deterministicAdjust(task.title, context.adjustmentLevel);
-  if (!deps.aiAdjustTodayTask) {
-    return deterministic;
-  }
-  try {
-    const aiResult = await deps.aiAdjustTodayTask({
-      task,
-      stage,
-      context: {
-        goal: state.plan.goal,
-        stageObjective: stage.objective,
-        mode: context.mode,
-        adjustmentLevel: context.adjustmentLevel,
-      },
-    });
-    const text = String(aiResult?.title || '').trim();
-    const hours = Number(aiResult?.estimateHours);
-    if (text && Number.isFinite(hours) && hours >= 1 && hours <= 3) {
-      return { text, estimateHours: hours };
-    }
-    if (text) return { text, estimateHours: 1 };
-  } catch (_error) {
-    // fall through to deterministic
-  }
-  return deterministic;
-}
-
-function deterministicAdjust(original, level) {
-  const base = String(original || '').replace(/\s+/g, ' ').trim();
-  if (!base) return { text: 'Prepare one concrete next step and ship it today', estimateHours: 1 };
-  if (level <= 1) return { text: `Complete first concrete part: ${truncate(base, 70)}`, estimateHours: 1 };
-  return { text: `Deliver one minimal executable output for: ${truncate(base, 60)}`, estimateHours: 1 };
-}
-
-async function maybeRebuildCurrentStage(state, deps, reason) {
-  if (!deps.aiRebuildPlanPartially) return state;
-  if ((state.history.missStreak || 0) < 2) return state;
-  const active = getActiveStage(state.plan);
-  if (!active) return state;
-  try {
-    const rebuilt = await deps.aiRebuildPlanPartially({
-      plan: state.plan,
-      stageId: active.id,
-      reason,
-    });
-    const next = cloneState(state);
-    next.plan = recalculatePlan(rebuilt);
-    next.ui.feedback = 'Current stage adjusted after repeated misses.';
-    return next;
-  } catch (_error) {
-    return state;
-  }
-}
-
-function replaceTaskTitle(state, taskId, text, estimateHours) {
-  const next = cloneState(state);
-  next.plan = {
-    ...next.plan,
-    stages: (next.plan.stages || []).map((stage) => ({
-      ...stage,
-      tasks: (stage.tasks || []).map((task) =>
-        task.id === taskId
-          ? { ...task, title: String(text || task.title), estimateHours: clamp(estimateHours, 1, 3) }
-          : task
-      ),
-    })),
+  const CATEGORY_INSIGHTS = {
+    unclear:    'Pattern: unclear starting points slow things down. Today opens with a concrete first action.',
+    time:       'Pattern: time pressure has come up before. Today\'s task is scoped to fit.',
+    motivation: 'Pattern: low-energy days happen. Today starts with the lightest possible entry point.',
+    skill_gap:  'Pattern: skill gaps have blocked progress before. Today\'s task is more accessible.',
+    no_access:  'Pattern: access issues have blocked work before. Today avoids that dependency.',
+    external:   'Pattern: external blockers have come up. Today\'s task depends only on you.',
+    other:      null,
   };
-  next.plan = recalculatePlan(next.plan);
+
+  return CATEGORY_INSIGHTS[dominantCategory] || null;
+}
+
+// ── Adaptation Trigger ─────────────────────────────────────────────────────
+//
+// Returns { should: bool, trigger: string }.
+// app.js checks nextDayPlan.adaptedAt before calling AI to prevent duplicates.
+
+export function shouldTriggerAdaptation(outcome, analysis, nextDayPlan) {
+  // No next day plan provided (Day 7 or end of track)
+  if (!nextDayPlan) return { should: false, trigger: '' };
+
+  // Already adapted for this day — do not call AI again
+  if (nextDayPlan.adaptedAt) return { should: false, trigger: 'already_adapted' };
+
+  // Direct outcome triggers
+  if (outcome === 'missed')  return { should: true, trigger: 'missed' };
+  if (outcome === 'skipped') return { should: true, trigger: 'skipped' };
+  if (outcome === 'blocked') return { should: true, trigger: 'blocked' };
+  if (outcome === 'rescued') return { should: true, trigger: 'rescued' };
+
+  // Repeated blocker pattern — even on success, adapt to prevent next occurrence
+  if (analysis.repeatedCategories.length > 0) {
+    return { should: true, trigger: `repeated_${analysis.dominantCategory}` };
+  }
+
+  // 3+ consecutive misses (already mid-track)
+  if (analysis.consecutiveMisses >= 3) {
+    return { should: true, trigger: 'consecutive_misses' };
+  }
+
+  return { should: false, trigger: '' };
+}
+
+// ── Apply Adaptation Result ────────────────────────────────────────────────
+//
+// Writes AI adaptation result back to track.days[nextDayNum] and stamps
+// adaptedAt to prevent double-calling.
+// Returns new state — does NOT save to Firestore (app.js does that).
+
+export function applyAdaptResult(state, nextDayNum, adaptResult) {
+  if (!adaptResult || !nextDayNum) return state;
+
+  const next = deepClone(state);
+  const day  = next.track.days.find((d) => d.dayNumber === nextDayNum);
+  if (!day) return state;
+
+  if (adaptResult.changed && adaptResult.title) {
+    day.title = String(adaptResult.title).slice(0, 80);
+    if (adaptResult.why) day.why = String(adaptResult.why).slice(0, 120);
+  }
+
+  day.adaptedAt = new Date().toISOString();
+  day.adaptNote  = adaptResult.changed && adaptResult.why
+    ? `Adjustment: ${String(adaptResult.why).slice(0, 120)}`
+    : '';
+
   return next;
 }
 
-function recentTaskOutcomes(entries, outcome, daysBack = 2) {
-  const recent = [];
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - daysBack);
-  for (const entry of entries || []) {
-    if (entry.outcome !== outcome) continue;
-    const date = new Date(entry.createdAt || `${entry.date}T00:00:00`);
-    if (Number.isNaN(date.getTime()) || date < cutoff) continue;
-    recent.push(entry);
+// ── Pattern Summary (for AI prompt context) ───────────────────────────────
+//
+// Returns a compact string summarising pattern data to pass to AI prompts.
+// Mirrors what ai-v2.js does internally but is available to app.js for
+// building richer context when triggering adaptations.
+
+export function buildPatternContext(history) {
+  const analysis = analyzePatterns(history);
+  if (!analysis.totalPatternCount) return 'none';
+
+  const parts = [];
+
+  if (analysis.dominantCount >= 2) {
+    parts.push(`${analysis.dominantCategory} blocker (×${analysis.dominantCount})`);
   }
-  return recent;
+  if (analysis.consecutiveMisses >= 2) {
+    parts.push(`${analysis.consecutiveMisses} consecutive missed days`);
+  }
+  if (analysis.rescueSuccessRate !== null) {
+    parts.push(`rescue success rate: ${analysis.rescueSuccessRate}%`);
+  }
+
+  return parts.join('; ') || 'none';
 }
 
-function clamp(value, min, max) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return min;
-  if (n < min) return min;
-  if (n > max) return max;
-  return n;
+// ── Track completion check ─────────────────────────────────────────────────
+
+export function isTrackComplete(track) {
+  if (!track?.days?.length) return false;
+  return track.days.every((d) =>
+    ['done', 'rescued', 'missed', 'skipped', 'blocked'].includes(d.status)
+  );
 }
 
-function truncate(value, max = 80) {
-  return String(value || '').slice(0, max);
-}
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-function cloneState(state) {
-  return JSON.parse(JSON.stringify(state));
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
 }

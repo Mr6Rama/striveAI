@@ -1,11 +1,13 @@
 // v2 boot — mounts into #app-v2 (not yet in index.html; exits silently until HTML is updated).
-// No v1 dependencies: no plan-engine, no ai.js v1 actions, no today-engine.
 
 import { createInitialState, createDefaultTodayV2, isoDateNow } from './core/state-model.js';
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain } from './services/persistence.js';
-import { generateExecutionTrack, generateAgentSteps, checkProof } from './services/ai-v2.js';
+import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay, generateDay7Recap, generateContinuationWeek } from './services/ai-v2.js';
+import { rolloverIfNeeded, analyzePatterns, deriveInsight, shouldTriggerAdaptation, applyAdaptResult, isTrackComplete } from './domain/today-engine.js';
+import { resetProofState } from './ui/pages/proof.js';
+import { resetBlockedState } from './ui/pages/blocked.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
 import { renderRoute } from './ui/pages/index.js';
 
@@ -54,12 +56,29 @@ async function handleSignedIn(user) {
 
   const domains = await loadPersistedDomains({ userId: user.uid, db: getDb() });
   const initial = createInitialState();
-  replaceState({
+  const loaded  = {
     ...initial,
     ...domains,
     user: { ...domains.user, id: user.uid, email: user.email || '' },
     ui:   { ...initial.ui, authReady: true },
-  });
+  };
+
+  // Daily rollover: mark overdue pending days as missed, advance currentDayNumber
+  const { state: rolledState, didRollover } = rolloverIfNeeded(loaded, isoDateNow());
+  replaceState(rolledState);
+
+  if (didRollover) {
+    const st = getState();
+    await saveDomains(
+      { user: st.user, track: st.track, today: st.today, history: st.history, telegram: st.telegram },
+      { userId: currentUser?.uid, db: getDb() }
+    );
+  }
+
+  // Check if track is now complete after rollover
+  if (isTrackComplete(getState().track)) {
+    updateState((s) => { s.track.status = 'complete'; return s; });
+  }
 
   navigate(resolveEntryRoute(getState()), handleRouteChange, true);
 }
@@ -89,7 +108,7 @@ function guardRoute(route, state) {
   const noTrack   = !track.id || !track.days.length;
 
   // Routes that don't require an active track.
-  const freeRoutes = new Set(['/onboarding', '/confirm-track', '/plan-preview', '/settings', '/not-found']);
+  const freeRoutes = new Set(['/onboarding', '/confirm-track', '/plan-preview', '/settings', '/progress', '/not-found']);
 
   if (noTrack && !freeRoutes.has(route)) return '/onboarding';
   if (track.status === 'complete' && route !== '/recap' && !freeRoutes.has(route)) return '/recap';
@@ -212,6 +231,24 @@ function addDays(isoDate, n) {
   return d.toISOString().slice(0, 10);
 }
 
+// ── Action Kit handler ─────────────────────────────────────────────────────
+
+async function handleKitGenerate() {
+  const state   = getState();
+  const { track, today } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
+
+  updateState((s) => { s.ui.kitLoading = true; return s; });
+  try {
+    const items = await generateActionKit(dayPlan, track);
+    updateState((s) => { s.today.actionKit = items; s.ui.kitLoading = false; return s; });
+    await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
+  } catch (_e) {
+    updateState((s) => { s.ui.kitLoading = false; return s; });
+  }
+}
+
 // ── Agent handlers ─────────────────────────────────────────────────────────
 
 async function handleAgentInit() {
@@ -283,8 +320,104 @@ async function handleAgentRetry() {
   await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
 }
 
-async function handleDayDone({ proofType, proofValue, fromAgent }) {
+// ── Standalone proof handlers (/proof route) ───────────────────────────────
+
+async function handleProofSubmit({ type, value, isRescue }) {
   const state   = getState();
+  const { track, today } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
+
+  updateState((s) => { s.ui.proofLoading = true; s.today.proofResult = null; return s; });
+  try {
+    const result = await checkProof(dayPlan, { type, value }, track);
+    if (result.verdict === 'met') {
+      resetProofState();
+      await handleDayDone({ proofType: type, proofValue: value, fromRescue: Boolean(isRescue) });
+    } else {
+      updateState((s) => {
+        s.ui.proofLoading  = false;
+        s.today.proofResult = { verdict: result.verdict, note: result.note || '' };
+        return s;
+      });
+      await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
+    }
+  } catch (_e) {
+    updateState((s) => { s.ui.proofLoading = false; return s; });
+  }
+}
+
+function handleProofReset() {
+  updateState((s) => { s.today.proofResult = null; return s; });
+}
+
+// ── Blocked / Skipped handlers ─────────────────────────────────────────────
+
+async function handleBlockerDiagnose({ reasonText, category, isSkip }) {
+  const state  = getState();
+  const { track, today, history } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
+
+  // Mark today as blocked/skipped in state so it persists
+  const todayStatus = isSkip ? 'skipped' : 'blocked';
+  updateState((s) => {
+    s.today.status      = todayStatus;
+    s.today.blockerText = reasonText;
+    s.ui.rescueLoading  = true;
+    return s;
+  });
+
+  // Check if this blocker category is repeating
+  const patterns = history.failurePatterns || [];
+  const recentSameCategory = patterns
+    .filter((p) => p.blockerCategory === category)
+    .slice(0, 5);
+  const repeating = recentSameCategory.length >= 1;
+
+  try {
+    const rescue = await diagnoseBlocker(dayPlan, reasonText, track, history.failurePatterns);
+
+    // Build and persist failure pattern entry
+    const pattern = {
+      id:              `fp-${Date.now()}`,
+      date:            today.date,
+      dayNumber:       dayNum,
+      trackId:         track.id,
+      taskTitle:       dayPlan.title || '',
+      blockerText:     reasonText,
+      blockerCategory: category,
+      rescueOffered:   true,
+      rescueCompleted: false,
+    };
+
+    updateState((s) => {
+      s.today.rescueAction    = rescue;
+      s.today.rescueRepeating = repeating;
+      s.ui.rescueLoading      = false;
+      // prepend failure pattern; keep last 50
+      s.history.failurePatterns = [pattern, ...(s.history.failurePatterns || [])].slice(0, 50);
+      return s;
+    });
+
+    const st = getState();
+    await saveDomains(
+      { user: st.user, track: st.track, today: st.today, history: st.history, telegram: st.telegram },
+      { userId: currentUser?.uid, db: getDb() }
+    );
+  } catch (_e) {
+    updateState((s) => { s.ui.rescueLoading = false; return s; });
+  }
+}
+
+async function handleBlockerRescueDone() {
+  // User completed the rescue action manually (without agent)
+  await handleDayDone({ proofType: 'statement', proofValue: 'Rescue action completed', fromRescue: true });
+  resetBlockedState();
+}
+
+async function handleBlockerMissed() {
+  const state  = getState();
   const { track, today, history } = state;
   const dayNum  = track.currentDayNumber || today.dayNumber || 1;
   const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? {};
@@ -294,33 +427,253 @@ async function handleDayDone({ proofType, proofValue, fromAgent }) {
     date:            today.date,
     dayNumber:       dayNum,
     trackId:         track.id,
-    outcome:         'done',
+    outcome:         'missed',
     taskTitle:       dayPlan.title || '',
-    proofType:       proofType || 'text',
-    agentUsed:       Boolean(fromAgent),
-    rescueOffered:   false,
+    proofType:       '',
+    agentUsed:       false,
+    rescueOffered:   Boolean(today.rescueAction),
     rescueCompleted: false,
     createdAt:       now,
   };
 
   updateState((s) => {
-    s.today.status    = 'done';
+    s.today.status    = 'missed';
+    s.today.outcomeAt = now;
+    const day = s.track.days.find((d) => d.dayNumber === dayNum);
+    if (day) day.status = 'missed';
+    s.history.entries = [entry, ...(s.history.entries || [])].slice(0, 200);
+    // Reset streak on miss
+    s.history.currentDayStreak = 0;
+    return s;
+  });
+
+  const st = getState();
+  await saveDomains(
+    { user: st.user, track: st.track, today: st.today, history: st.history, telegram: st.telegram },
+    { userId: currentUser?.uid, db: getDb() }
+  );
+  await maybeAdaptNextDay('missed');
+  resetBlockedState();
+  navigate('/today', handleRouteChange, true);
+}
+
+async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
+  const state   = getState();
+  const { track, today, history } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? {};
+  const now     = new Date().toISOString();
+  const outcome = fromRescue ? 'rescued' : 'done';
+
+  const entry = {
+    date:            today.date,
+    dayNumber:       dayNum,
+    trackId:         track.id,
+    outcome,
+    taskTitle:       dayPlan.title || '',
+    proofType:       proofType || 'text',
+    agentUsed:       Boolean(fromAgent),
+    rescueOffered:   Boolean(fromRescue),
+    rescueCompleted: Boolean(fromRescue),
+    createdAt:       now,
+  };
+
+  updateState((s) => {
+    s.today.status    = outcome;
     s.today.outcomeAt = now;
     s.today.proof     = { type: proofType || 'text', value: proofValue || '', submittedAt: now };
+    s.today.proofResult = null;
     if (s.today.agentSession) { s.today.agentSession.outcome = 'done'; s.today.agentSession.closedAt = now; }
     const day = s.track.days.find((d) => d.dayNumber === dayNum);
-    if (day) day.status = 'done';
+    if (day) day.status = outcome;
     s.history.entries         = [entry, ...(s.history.entries || [])].slice(0, 200);
     s.history.successStreak   = (s.history.successStreak || 0) + 1;
     s.history.currentDayStreak = (s.history.currentDayStreak || 0) + 1;
-    s.ui.agentLoading = false;
+    s.ui.agentLoading  = false;
+    s.ui.proofLoading  = false;
     return s;
   });
 
   const st = getState();
   await saveDomains({ user: st.user, track: st.track, today: st.today, history: st.history, telegram: st.telegram },
     { userId: currentUser?.uid, db: getDb() });
+
+  // Trigger next-day adaptation (non-blocking, non-fatal)
+  await maybeAdaptNextDay(outcome);
+
   navigate('/today', handleRouteChange, true);
+}
+
+// ── Adaptive next day ──────────────────────────────────────────────────────
+//
+// Called after every day outcome. Checks pattern analysis + adaptation guard
+// before calling the AI. Does a single targeted saveDomain('track') if adapted.
+
+async function maybeAdaptNextDay(outcome) {
+  try {
+    const state       = getState();
+    const { track, history } = state;
+    const nextDayNum  = (track.currentDayNumber || 1) + 1;
+    if (nextDayNum > 7) return;
+
+    const nextDayPlan = track.days.find((d) => d.dayNumber === nextDayNum);
+    const analysis    = analyzePatterns(history);
+    const trigger     = shouldTriggerAdaptation(outcome, analysis, nextDayPlan);
+    if (!trigger.should) return;
+
+    const result = await adaptNextDay(track, track.days, history, history.failurePatterns);
+    if (!result) return;
+
+    const adapted = applyAdaptResult(getState(), nextDayNum, result);
+    replaceState(adapted);
+    await saveDomain('track', getState().track, { userId: currentUser?.uid, db: getDb() });
+  } catch (_e) {
+    // Adaptation is best-effort; never crash the main flow
+  }
+}
+
+// ── Recap handlers ─────────────────────────────────────────────────────────
+
+async function handleRecapLoadReflection() {
+  const state = getState();
+  if (state.recapText) return; // already generated
+  updateState((s) => { s.ui.recapLoading = true; return s; });
+  try {
+    const text = await generateDay7Recap(
+      state.track,
+      state.track.days,
+      state.history,
+      state.history.failurePatterns
+    );
+    updateState((s) => { s.recapText = text; s.ui.recapLoading = false; return s; });
+  } catch (_e) {
+    updateState((s) => { s.ui.recapLoading = false; return s; });
+  }
+}
+
+async function handleRecapContinue({ recapText }) {
+  const state = getState();
+  const { track, history } = state;
+
+  updateState((s) => { s.ui.trackContinuing = true; return s; });
+  try {
+    const aiData = await generateContinuationWeek(
+      track,
+      track.days,
+      recapText || state.recapText || '',
+      'continue'
+    );
+
+    // Archive the current track
+    const archived = buildArchivedTrack(track, state.history.entries);
+    const startDate = isoDateNow();
+    const trackId   = `track-${Date.now()}`;
+
+    const newTrack = {
+      id:               trackId,
+      goal:             track.goal,
+      goalCategory:     track.goalCategory,
+      blockerHint:      track.blockerHint,
+      generatedAt:      new Date().toISOString(),
+      startDate,
+      status:           'active',
+      currentDayNumber: 1,
+      days:             aiData.days.map((d, i) => ({
+        ...d,
+        dayNumber:  i + 1,
+        status:     'pending',
+        date:       addDays(startDate, i),
+      })),
+      continuationOf: track.id,
+    };
+
+    const today    = createDefaultTodayV2(startDate, 1);
+    const newHistory = {
+      ...state.history,
+      archivedTracks: [archived, ...(state.history.archivedTracks || [])].slice(0, 20),
+    };
+
+    const domains = {
+      user:     state.user,
+      track:    newTrack,
+      today,
+      history:  newHistory,
+      telegram: state.telegram,
+    };
+
+    await saveDomains(domains, { userId: currentUser?.uid, db: getDb() });
+    replaceState({
+      ...getState(),
+      ...domains,
+      recapText: '',
+      ui: { ...getState().ui, trackContinuing: false, recapLoading: false },
+    });
+
+    // Re-schedule Telegram ping if connected
+    if (state.telegram?.connected && typeof state.telegram.pingHour === 'number') {
+      try {
+        const token = await currentUser?.getIdToken();
+        await fetch('/api/v2/telegram/schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ pingHour: state.telegram.pingHour, timezone: 'UTC', enabled: true }),
+        });
+      } catch (_e) { /* non-fatal */ }
+    }
+
+    navigate('/plan-preview', handleRouteChange, true);
+  } catch (_e) {
+    updateState((s) => { s.ui.trackContinuing = false; return s; });
+  }
+}
+
+async function handleRecapNewTrack() {
+  const state  = getState();
+  const { track, history } = state;
+
+  // Archive current track
+  const archived = buildArchivedTrack(track, history.entries);
+  const newHistory = {
+    ...history,
+    archivedTracks: [archived, ...(history.archivedTracks || [])].slice(0, 20),
+  };
+
+  // Keep failure patterns (useful context for AI on new track)
+  // Clear active track and today
+  const initial     = createInitialState();
+  const clearedState = {
+    ...initial,
+    user:     state.user,
+    history:  newHistory,
+    telegram: state.telegram,
+    ui:       { ...initial.ui, authReady: true },
+  };
+
+  await saveDomains(
+    { user: clearedState.user, track: clearedState.track, today: clearedState.today, history: clearedState.history, telegram: clearedState.telegram },
+    { userId: currentUser?.uid, db: getDb() }
+  );
+
+  replaceState({ ...clearedState, recapText: '' });
+  navigate('/onboarding', handleRouteChange, true);
+}
+
+function buildArchivedTrack(track, entries) {
+  const te = (entries || []).filter((e) => e.trackId === track.id);
+  return {
+    trackId:      track.id,
+    goal:         track.goal || '',
+    goalCategory: track.goalCategory || 'other',
+    startDate:    track.startDate || '',
+    endDate:      isoDateNow(),
+    totalDays:    (track.days || []).length,
+    doneCount:    te.filter((e) => e.outcome === 'done').length,
+    missedCount:  te.filter((e) => e.outcome === 'missed').length,
+    blockedCount: te.filter((e) => e.outcome === 'blocked').length,
+    skippedCount: te.filter((e) => e.outcome === 'skipped').length,
+    rescuedCount: te.filter((e) => e.outcome === 'rescued').length,
+    archivedAt:   new Date().toISOString(),
+  };
 }
 
 // ── Route change ───────────────────────────────────────────────────────────
@@ -336,7 +689,17 @@ function renderApp(state) {
   const root = document.getElementById(ROOT_ID);
   if (!root) return;
   const route = state.ui.activeRoute || (currentUser ? '/today' : '/landing');
-  renderRoute(root, route, state, {
+
+  // Compute pattern insight once per render; injected as ui.insight so Today page
+  // can display it without importing the domain engine directly.
+  const insight = route === '/today'
+    ? (deriveInsight(state.history, state.today?.adaptationNote) || '')
+    : '';
+  const renderState = insight !== state.ui.insight
+    ? { ...state, ui: { ...state.ui, insight } }
+    : state;
+
+  renderRoute(root, route, renderState, {
     currentUser,
     onSignOut:  () => signOut(),
     onNavigate: (path) => navigate(path, handleRouteChange),
@@ -356,9 +719,18 @@ function renderApp(state) {
     onStartDay1:          handleStartDay1,
     onTelegramLink:       handleTelegramLink,
     onTelegramRefresh:    handleTelegramRefresh,
+    onKitGenerate:        handleKitGenerate,
     onAgentInit:          handleAgentInit,
     onAgentStepDone:      handleAgentStepDone,
     onAgentProofSubmit:   handleAgentProofSubmit,
     onAgentRetry:         handleAgentRetry,
+    onProofSubmit:        handleProofSubmit,
+    onProofReset:         handleProofReset,
+    onBlockerDiagnose:        handleBlockerDiagnose,
+    onBlockerRescueDone:      handleBlockerRescueDone,
+    onBlockerMissed:          handleBlockerMissed,
+    onRecapLoadReflection:    handleRecapLoadReflection,
+    onRecapContinue:          handleRecapContinue,
+    onRecapNewTrack:          handleRecapNewTrack,
   });
 }

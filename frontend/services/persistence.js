@@ -153,7 +153,7 @@ function validateTrack(raw) {
 }
 
 function validateDayPlan(raw) {
-  const empty = { dayNumber: 1, title: '', why: '', successCriteria: '', estimateMinutes: 60, category: '', status: 'pending', date: '' };
+  const empty = { dayNumber: 1, title: '', why: '', successCriteria: '', estimateMinutes: 60, category: '', status: 'pending', date: '', adaptedAt: '', adaptNote: '' };
   if (!raw || typeof raw !== 'object') return empty;
   return {
     dayNumber:       Math.max(1, Math.min(7, Number(raw.dayNumber) || 1)),
@@ -164,6 +164,8 @@ function validateDayPlan(raw) {
     category:        String(raw.category        || ''),
     status:          normalizeDayStatus(raw.status),
     date:            String(raw.date            || '').slice(0, 10),
+    adaptedAt:       String(raw.adaptedAt       || ''),
+    adaptNote:       String(raw.adaptNote       || '').slice(0, 160),
   };
 }
 
@@ -178,12 +180,27 @@ function validateToday(raw) {
     status:         normalizeDayStatus(raw.status),
     proof:          validateProof(raw.proof),
     agentSession:   validateAgentSession(raw.agentSession),
-    rescueAction:   raw.rescueAction && typeof raw.rescueAction === 'object' ? raw.rescueAction : null,
-    blockerText:    String(raw.blockerText    || ''),
+    actionKit:      validateActionKit(raw.actionKit),
+    proofResult:    validateProofResult(raw.proofResult),
+    rescueAction:    validateRescueAction(raw.rescueAction),
+    rescueRepeating: Boolean(raw.rescueRepeating),
+    blockerText:     String(raw.blockerText    || ''),
     skipReason:     String(raw.skipReason     || ''),
     outcomeAt:      String(raw.outcomeAt      || ''),
     adaptationNote: String(raw.adaptationNote || ''),
   };
+}
+
+function validateActionKit(raw) {
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const VALID_TYPES = new Set(['template', 'reference', 'question', 'tool', 'tip']);
+  return raw
+    .map((item) => ({
+      type:    VALID_TYPES.has(item?.type) ? item.type : 'tip',
+      label:   String(item?.label   || '').slice(0, 50),
+      content: String(item?.content || '').slice(0, 400),
+    }))
+    .filter((item) => item.content);
 }
 
 function validateProof(raw) {
@@ -192,6 +209,28 @@ function validateProof(raw) {
     type:        ['text', 'link', 'statement'].includes(raw.type) ? raw.type : 'text',
     value:       String(raw.value       || ''),
     submittedAt: String(raw.submittedAt || ''),
+  };
+}
+
+function validateRescueAction(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (!raw.rescueTitle) return null;
+  return {
+    rescueTitle:      String(raw.rescueTitle      || '').slice(0, 100),
+    steps:            Array.isArray(raw.steps) ? raw.steps.map((s) => String(s).slice(0, 200)) : [],
+    reframeNote:      String(raw.reframeNote      || '').slice(0, 200),
+    estimateMinutes:  Number(raw.estimateMinutes)  || 0,
+    source:           raw.source === 'ai' ? 'ai' : 'fallback',
+  };
+}
+
+function validateProofResult(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const VERDICTS = new Set(['met', 'partial', 'not_enough']);
+  if (!VERDICTS.has(raw.verdict)) return null;
+  return {
+    verdict: raw.verdict,
+    note:    String(raw.note || ''),
   };
 }
 

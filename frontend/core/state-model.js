@@ -50,9 +50,12 @@ export function createDefaultTodayV2(date, dayNumber) {
     date:           date || isoDateNow(),
     dayNumber:      dayNumber || 1,
     status:         'pending',
-    proof:          null,
-    agentSession:   null,
-    rescueAction:   null,
+    proof:           null,
+    proofResult:     null,
+    agentSession:    null,
+    actionKit:       null,
+    rescueAction:    null,
+    rescueRepeating: false,
     blockerText:    '',
     skipReason:     '',
     outcomeAt:      '',
@@ -85,11 +88,12 @@ export function createDefaultTelegramV2() {
 
 export function createInitialState() {
   return {
-    user:     createDefaultUserV2(),
-    track:    createDefaultTrackV2(),
-    today:    createDefaultTodayV2(isoDateNow(), 1),
-    history:  createDefaultHistoryV2(),
-    telegram: createDefaultTelegramV2(),
+    user:       createDefaultUserV2(),
+    track:      createDefaultTrackV2(),
+    today:      createDefaultTodayV2(isoDateNow(), 1),
+    history:    createDefaultHistoryV2(),
+    telegram:   createDefaultTelegramV2(),
+    recapText:  '', // session-only, not persisted
     ui: {
       activeRoute:       '/',
       authReady:         false,
@@ -103,6 +107,12 @@ export function createInitialState() {
       day7RecapOpen:     false,
       toast:             null,
       error:             '',
+      insight:           '',
+      agentLoading:      false,
+      kitLoading:        false,
+      proofLoading:      false,
+      recapLoading:      false,
+      trackContinuing:   false,
     },
   };
 }
