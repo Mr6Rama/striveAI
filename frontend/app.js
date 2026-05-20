@@ -5,8 +5,9 @@ import { createInitialState, createDefaultTodayV2, isoDateNow } from './core/sta
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain } from './services/persistence.js';
-import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit } from './services/ai-v2.js';
+import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker } from './services/ai-v2.js';
 import { resetProofState } from './ui/pages/proof.js';
+import { resetBlockedState } from './ui/pages/blocked.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
 import { renderRoute } from './ui/pages/index.js';
 
@@ -333,6 +334,111 @@ function handleProofReset() {
   updateState((s) => { s.today.proofResult = null; return s; });
 }
 
+// ── Blocked / Skipped handlers ─────────────────────────────────────────────
+
+async function handleBlockerDiagnose({ reasonText, category, isSkip }) {
+  const state  = getState();
+  const { track, today, history } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
+
+  // Mark today as blocked/skipped in state so it persists
+  const todayStatus = isSkip ? 'skipped' : 'blocked';
+  updateState((s) => {
+    s.today.status      = todayStatus;
+    s.today.blockerText = reasonText;
+    s.ui.rescueLoading  = true;
+    return s;
+  });
+
+  // Check if this blocker category is repeating
+  const patterns = history.failurePatterns || [];
+  const recentSameCategory = patterns
+    .filter((p) => p.blockerCategory === category)
+    .slice(0, 5);
+  const repeating = recentSameCategory.length >= 1;
+
+  try {
+    const rescue = await diagnoseBlocker(dayPlan, reasonText, track, history.failurePatterns);
+
+    // Build and persist failure pattern entry
+    const pattern = {
+      id:              `fp-${Date.now()}`,
+      date:            today.date,
+      dayNumber:       dayNum,
+      trackId:         track.id,
+      taskTitle:       dayPlan.title || '',
+      blockerText:     reasonText,
+      blockerCategory: category,
+      rescueOffered:   true,
+      rescueCompleted: false,
+    };
+
+    updateState((s) => {
+      s.today.rescueAction    = rescue;
+      s.today.rescueRepeating = repeating;
+      s.ui.rescueLoading      = false;
+      // prepend failure pattern; keep last 50
+      s.history.failurePatterns = [pattern, ...(s.history.failurePatterns || [])].slice(0, 50);
+      return s;
+    });
+
+    const st = getState();
+    await saveDomains(
+      { user: st.user, track: st.track, today: st.today, history: st.history, telegram: st.telegram },
+      { userId: currentUser?.uid, db: getDb() }
+    );
+  } catch (_e) {
+    updateState((s) => { s.ui.rescueLoading = false; return s; });
+  }
+}
+
+async function handleBlockerRescueDone() {
+  // User completed the rescue action manually (without agent)
+  await handleDayDone({ proofType: 'statement', proofValue: 'Rescue action completed', fromRescue: true });
+  resetBlockedState();
+}
+
+async function handleBlockerMissed() {
+  const state  = getState();
+  const { track, today, history } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? {};
+  const now     = new Date().toISOString();
+
+  const entry = {
+    date:            today.date,
+    dayNumber:       dayNum,
+    trackId:         track.id,
+    outcome:         'missed',
+    taskTitle:       dayPlan.title || '',
+    proofType:       '',
+    agentUsed:       false,
+    rescueOffered:   Boolean(today.rescueAction),
+    rescueCompleted: false,
+    createdAt:       now,
+  };
+
+  updateState((s) => {
+    s.today.status    = 'missed';
+    s.today.outcomeAt = now;
+    const day = s.track.days.find((d) => d.dayNumber === dayNum);
+    if (day) day.status = 'missed';
+    s.history.entries = [entry, ...(s.history.entries || [])].slice(0, 200);
+    // Reset streak on miss
+    s.history.currentDayStreak = 0;
+    return s;
+  });
+
+  const st = getState();
+  await saveDomains(
+    { user: st.user, track: st.track, today: st.today, history: st.history, telegram: st.telegram },
+    { userId: currentUser?.uid, db: getDb() }
+  );
+  resetBlockedState();
+  navigate('/today', handleRouteChange, true);
+}
+
 async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
   const state   = getState();
   const { track, today, history } = state;
@@ -416,5 +522,8 @@ function renderApp(state) {
     onAgentRetry:         handleAgentRetry,
     onProofSubmit:        handleProofSubmit,
     onProofReset:         handleProofReset,
+    onBlockerDiagnose:    handleBlockerDiagnose,
+    onBlockerRescueDone:  handleBlockerRescueDone,
+    onBlockerMissed:      handleBlockerMissed,
   });
 }

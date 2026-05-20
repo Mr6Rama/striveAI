@@ -180,8 +180,9 @@ function validateToday(raw) {
     agentSession:   validateAgentSession(raw.agentSession),
     actionKit:      validateActionKit(raw.actionKit),
     proofResult:    validateProofResult(raw.proofResult),
-    rescueAction:   raw.rescueAction && typeof raw.rescueAction === 'object' ? raw.rescueAction : null,
-    blockerText:    String(raw.blockerText    || ''),
+    rescueAction:    validateRescueAction(raw.rescueAction),
+    rescueRepeating: Boolean(raw.rescueRepeating),
+    blockerText:     String(raw.blockerText    || ''),
     skipReason:     String(raw.skipReason     || ''),
     outcomeAt:      String(raw.outcomeAt      || ''),
     adaptationNote: String(raw.adaptationNote || ''),
@@ -206,6 +207,18 @@ function validateProof(raw) {
     type:        ['text', 'link', 'statement'].includes(raw.type) ? raw.type : 'text',
     value:       String(raw.value       || ''),
     submittedAt: String(raw.submittedAt || ''),
+  };
+}
+
+function validateRescueAction(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (!raw.rescueTitle) return null;
+  return {
+    rescueTitle:      String(raw.rescueTitle      || '').slice(0, 100),
+    steps:            Array.isArray(raw.steps) ? raw.steps.map((s) => String(s).slice(0, 200)) : [],
+    reframeNote:      String(raw.reframeNote      || '').slice(0, 200),
+    estimateMinutes:  Number(raw.estimateMinutes)  || 0,
+    source:           raw.source === 'ai' ? 'ai' : 'fallback',
   };
 }
 
