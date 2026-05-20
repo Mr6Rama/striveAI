@@ -160,6 +160,21 @@ async function handleGenerate(draft) {
   }
 }
 
+async function handleStartDay1() {
+  const state = getState();
+  if (state.telegram?.connected && typeof state.telegram.pingHour === 'number') {
+    try {
+      const token = await currentUser?.getIdToken();
+      await fetch('/api/v2/telegram/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ pingHour: state.telegram.pingHour, timezone: 'UTC', enabled: true }),
+      });
+    } catch (_e) { /* non-fatal */ }
+  }
+  navigate('/today', handleRouteChange, true);
+}
+
 async function handleTelegramLink() {
   const token = await currentUser?.getIdToken();
   const res = await fetch('/api/v2/telegram/link-token', {
@@ -226,7 +241,8 @@ function renderApp(state) {
       try { await sendPasswordReset(email); }
       catch (err) { throw new Error(authErrorMessage(err)); }
     },
-    onGenerate: handleGenerate,
+    onGenerate:        handleGenerate,
+    onStartDay1:       handleStartDay1,
     onTelegramLink:    handleTelegramLink,
     onTelegramRefresh: handleTelegramRefresh,
   });
