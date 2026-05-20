@@ -4,7 +4,7 @@ import { createInitialState, createDefaultTodayV2, isoDateNow } from './core/sta
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain } from './services/persistence.js';
-import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay } from './services/ai-v2.js';
+import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay, generateDay7Recap, generateContinuationWeek } from './services/ai-v2.js';
 import { rolloverIfNeeded, analyzePatterns, deriveInsight, shouldTriggerAdaptation, applyAdaptResult, isTrackComplete } from './domain/today-engine.js';
 import { resetProofState } from './ui/pages/proof.js';
 import { resetBlockedState } from './ui/pages/blocked.js';
@@ -108,7 +108,7 @@ function guardRoute(route, state) {
   const noTrack   = !track.id || !track.days.length;
 
   // Routes that don't require an active track.
-  const freeRoutes = new Set(['/onboarding', '/confirm-track', '/plan-preview', '/settings', '/not-found']);
+  const freeRoutes = new Set(['/onboarding', '/confirm-track', '/plan-preview', '/settings', '/progress', '/not-found']);
 
   if (noTrack && !freeRoutes.has(route)) return '/onboarding';
   if (track.status === 'complete' && route !== '/recap' && !freeRoutes.has(route)) return '/recap';
@@ -532,6 +532,150 @@ async function maybeAdaptNextDay(outcome) {
   }
 }
 
+// ── Recap handlers ─────────────────────────────────────────────────────────
+
+async function handleRecapLoadReflection() {
+  const state = getState();
+  if (state.recapText) return; // already generated
+  updateState((s) => { s.ui.recapLoading = true; return s; });
+  try {
+    const text = await generateDay7Recap(
+      state.track,
+      state.track.days,
+      state.history,
+      state.history.failurePatterns
+    );
+    updateState((s) => { s.recapText = text; s.ui.recapLoading = false; return s; });
+  } catch (_e) {
+    updateState((s) => { s.ui.recapLoading = false; return s; });
+  }
+}
+
+async function handleRecapContinue({ recapText }) {
+  const state = getState();
+  const { track, history } = state;
+
+  updateState((s) => { s.ui.trackContinuing = true; return s; });
+  try {
+    const aiData = await generateContinuationWeek(
+      track,
+      track.days,
+      recapText || state.recapText || '',
+      'continue'
+    );
+
+    // Archive the current track
+    const archived = buildArchivedTrack(track, state.history.entries);
+    const startDate = isoDateNow();
+    const trackId   = `track-${Date.now()}`;
+
+    const newTrack = {
+      id:               trackId,
+      goal:             track.goal,
+      goalCategory:     track.goalCategory,
+      blockerHint:      track.blockerHint,
+      generatedAt:      new Date().toISOString(),
+      startDate,
+      status:           'active',
+      currentDayNumber: 1,
+      days:             aiData.days.map((d, i) => ({
+        ...d,
+        dayNumber:  i + 1,
+        status:     'pending',
+        date:       addDays(startDate, i),
+      })),
+      continuationOf: track.id,
+    };
+
+    const today    = createDefaultTodayV2(startDate, 1);
+    const newHistory = {
+      ...state.history,
+      archivedTracks: [archived, ...(state.history.archivedTracks || [])].slice(0, 20),
+    };
+
+    const domains = {
+      user:     state.user,
+      track:    newTrack,
+      today,
+      history:  newHistory,
+      telegram: state.telegram,
+    };
+
+    await saveDomains(domains, { userId: currentUser?.uid, db: getDb() });
+    replaceState({
+      ...getState(),
+      ...domains,
+      recapText: '',
+      ui: { ...getState().ui, trackContinuing: false, recapLoading: false },
+    });
+
+    // Re-schedule Telegram ping if connected
+    if (state.telegram?.connected && typeof state.telegram.pingHour === 'number') {
+      try {
+        const token = await currentUser?.getIdToken();
+        await fetch('/api/v2/telegram/schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ pingHour: state.telegram.pingHour, timezone: 'UTC', enabled: true }),
+        });
+      } catch (_e) { /* non-fatal */ }
+    }
+
+    navigate('/plan-preview', handleRouteChange, true);
+  } catch (_e) {
+    updateState((s) => { s.ui.trackContinuing = false; return s; });
+  }
+}
+
+async function handleRecapNewTrack() {
+  const state  = getState();
+  const { track, history } = state;
+
+  // Archive current track
+  const archived = buildArchivedTrack(track, history.entries);
+  const newHistory = {
+    ...history,
+    archivedTracks: [archived, ...(history.archivedTracks || [])].slice(0, 20),
+  };
+
+  // Keep failure patterns (useful context for AI on new track)
+  // Clear active track and today
+  const initial     = createInitialState();
+  const clearedState = {
+    ...initial,
+    user:     state.user,
+    history:  newHistory,
+    telegram: state.telegram,
+    ui:       { ...initial.ui, authReady: true },
+  };
+
+  await saveDomains(
+    { user: clearedState.user, track: clearedState.track, today: clearedState.today, history: clearedState.history, telegram: clearedState.telegram },
+    { userId: currentUser?.uid, db: getDb() }
+  );
+
+  replaceState({ ...clearedState, recapText: '' });
+  navigate('/onboarding', handleRouteChange, true);
+}
+
+function buildArchivedTrack(track, entries) {
+  const te = (entries || []).filter((e) => e.trackId === track.id);
+  return {
+    trackId:      track.id,
+    goal:         track.goal || '',
+    goalCategory: track.goalCategory || 'other',
+    startDate:    track.startDate || '',
+    endDate:      isoDateNow(),
+    totalDays:    (track.days || []).length,
+    doneCount:    te.filter((e) => e.outcome === 'done').length,
+    missedCount:  te.filter((e) => e.outcome === 'missed').length,
+    blockedCount: te.filter((e) => e.outcome === 'blocked').length,
+    skippedCount: te.filter((e) => e.outcome === 'skipped').length,
+    rescuedCount: te.filter((e) => e.outcome === 'rescued').length,
+    archivedAt:   new Date().toISOString(),
+  };
+}
+
 // ── Route change ───────────────────────────────────────────────────────────
 
 function handleRouteChange(route) {
@@ -582,8 +726,11 @@ function renderApp(state) {
     onAgentRetry:         handleAgentRetry,
     onProofSubmit:        handleProofSubmit,
     onProofReset:         handleProofReset,
-    onBlockerDiagnose:    handleBlockerDiagnose,
-    onBlockerRescueDone:  handleBlockerRescueDone,
-    onBlockerMissed:      handleBlockerMissed,
+    onBlockerDiagnose:        handleBlockerDiagnose,
+    onBlockerRescueDone:      handleBlockerRescueDone,
+    onBlockerMissed:          handleBlockerMissed,
+    onRecapLoadReflection:    handleRecapLoadReflection,
+    onRecapContinue:          handleRecapContinue,
+    onRecapNewTrack:          handleRecapNewTrack,
   });
 }

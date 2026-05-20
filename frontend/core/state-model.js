@@ -88,11 +88,12 @@ export function createDefaultTelegramV2() {
 
 export function createInitialState() {
   return {
-    user:     createDefaultUserV2(),
-    track:    createDefaultTrackV2(),
-    today:    createDefaultTodayV2(isoDateNow(), 1),
-    history:  createDefaultHistoryV2(),
-    telegram: createDefaultTelegramV2(),
+    user:       createDefaultUserV2(),
+    track:      createDefaultTrackV2(),
+    today:      createDefaultTodayV2(isoDateNow(), 1),
+    history:    createDefaultHistoryV2(),
+    telegram:   createDefaultTelegramV2(),
+    recapText:  '', // session-only, not persisted
     ui: {
       activeRoute:       '/',
       authReady:         false,
@@ -110,6 +111,8 @@ export function createInitialState() {
       agentLoading:      false,
       kitLoading:        false,
       proofLoading:      false,
+      recapLoading:      false,
+      trackContinuing:   false,
     },
   };
 }
