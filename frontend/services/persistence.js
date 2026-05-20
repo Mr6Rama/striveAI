@@ -179,6 +179,7 @@ function validateToday(raw) {
     proof:          validateProof(raw.proof),
     agentSession:   validateAgentSession(raw.agentSession),
     actionKit:      validateActionKit(raw.actionKit),
+    proofResult:    validateProofResult(raw.proofResult),
     rescueAction:   raw.rescueAction && typeof raw.rescueAction === 'object' ? raw.rescueAction : null,
     blockerText:    String(raw.blockerText    || ''),
     skipReason:     String(raw.skipReason     || ''),
@@ -205,6 +206,16 @@ function validateProof(raw) {
     type:        ['text', 'link', 'statement'].includes(raw.type) ? raw.type : 'text',
     value:       String(raw.value       || ''),
     submittedAt: String(raw.submittedAt || ''),
+  };
+}
+
+function validateProofResult(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const VERDICTS = new Set(['met', 'partial', 'not_enough']);
+  if (!VERDICTS.has(raw.verdict)) return null;
+  return {
+    verdict: raw.verdict,
+    note:    String(raw.note || ''),
   };
 }
 

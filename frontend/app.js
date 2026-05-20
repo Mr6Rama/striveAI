@@ -6,6 +6,7 @@ import { getState, replaceState, subscribe, updateState } from './core/store.js'
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain } from './services/persistence.js';
 import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit } from './services/ai-v2.js';
+import { resetProofState } from './ui/pages/proof.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
 import { renderRoute } from './ui/pages/index.js';
 
@@ -301,37 +302,71 @@ async function handleAgentRetry() {
   await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
 }
 
-async function handleDayDone({ proofType, proofValue, fromAgent }) {
+// ── Standalone proof handlers (/proof route) ───────────────────────────────
+
+async function handleProofSubmit({ type, value, isRescue }) {
+  const state   = getState();
+  const { track, today } = state;
+  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
+
+  updateState((s) => { s.ui.proofLoading = true; s.today.proofResult = null; return s; });
+  try {
+    const result = await checkProof(dayPlan, { type, value }, track);
+    if (result.verdict === 'met') {
+      resetProofState();
+      await handleDayDone({ proofType: type, proofValue: value, fromRescue: Boolean(isRescue) });
+    } else {
+      updateState((s) => {
+        s.ui.proofLoading  = false;
+        s.today.proofResult = { verdict: result.verdict, note: result.note || '' };
+        return s;
+      });
+      await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
+    }
+  } catch (_e) {
+    updateState((s) => { s.ui.proofLoading = false; return s; });
+  }
+}
+
+function handleProofReset() {
+  updateState((s) => { s.today.proofResult = null; return s; });
+}
+
+async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
   const state   = getState();
   const { track, today, history } = state;
   const dayNum  = track.currentDayNumber || today.dayNumber || 1;
   const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? {};
   const now     = new Date().toISOString();
+  const outcome = fromRescue ? 'rescued' : 'done';
 
   const entry = {
     date:            today.date,
     dayNumber:       dayNum,
     trackId:         track.id,
-    outcome:         'done',
+    outcome,
     taskTitle:       dayPlan.title || '',
     proofType:       proofType || 'text',
     agentUsed:       Boolean(fromAgent),
-    rescueOffered:   false,
-    rescueCompleted: false,
+    rescueOffered:   Boolean(fromRescue),
+    rescueCompleted: Boolean(fromRescue),
     createdAt:       now,
   };
 
   updateState((s) => {
-    s.today.status    = 'done';
+    s.today.status    = outcome;
     s.today.outcomeAt = now;
     s.today.proof     = { type: proofType || 'text', value: proofValue || '', submittedAt: now };
+    s.today.proofResult = null;
     if (s.today.agentSession) { s.today.agentSession.outcome = 'done'; s.today.agentSession.closedAt = now; }
     const day = s.track.days.find((d) => d.dayNumber === dayNum);
-    if (day) day.status = 'done';
+    if (day) day.status = outcome;
     s.history.entries         = [entry, ...(s.history.entries || [])].slice(0, 200);
     s.history.successStreak   = (s.history.successStreak || 0) + 1;
     s.history.currentDayStreak = (s.history.currentDayStreak || 0) + 1;
-    s.ui.agentLoading = false;
+    s.ui.agentLoading  = false;
+    s.ui.proofLoading  = false;
     return s;
   });
 
@@ -379,5 +414,7 @@ function renderApp(state) {
     onAgentStepDone:      handleAgentStepDone,
     onAgentProofSubmit:   handleAgentProofSubmit,
     onAgentRetry:         handleAgentRetry,
+    onProofSubmit:        handleProofSubmit,
+    onProofReset:         handleProofReset,
   });
 }
