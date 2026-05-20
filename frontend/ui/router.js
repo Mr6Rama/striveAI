@@ -33,10 +33,13 @@ export function initRouter(onRouteChange) {
 
 export function navigate(path, onRouteChange, replace = false) {
   const route = normalizeRoute(path);
+  // Preserve query string when the base path is a valid route.
+  const hasQuery    = String(path).includes('?');
+  const historyPath = (hasQuery && route !== '/not-found') ? path : route;
   if (replace) {
-    window.history.replaceState({}, '', route);
+    window.history.replaceState({}, '', historyPath);
   } else if (window.location.pathname !== route) {
-    window.history.pushState({}, '', route);
+    window.history.pushState({}, '', historyPath);
   }
   onRouteChange(route);
 }

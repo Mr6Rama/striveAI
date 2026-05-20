@@ -203,6 +203,7 @@ function validateAgentSession(raw) {
     startedAt:        String(raw.startedAt  || ''),
     closedAt:         String(raw.closedAt   || ''),
     outcome:          ['done', 'blocked', 'partial', ''].includes(raw.outcome) ? raw.outcome : '',
+    proofNote:        String(raw.proofNote  || ''),
   };
 }
 
