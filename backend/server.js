@@ -20,10 +20,6 @@ const MAX_EXECUTION_STYLE_CHARS = 300;
 const frontendDir = path.join(__dirname, '..', 'frontend');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || 'YOUR_PAYPAL_CLIENT_ID_HERE';
-const PLAN_PRO = process.env.PAYPAL_PLAN_PRO || 'YOUR_PAYPAL_PLAN_ID_PRO_HERE';
-const PLAN_TEAM = process.env.PAYPAL_PLAN_TEAM || 'YOUR_PAYPAL_PLAN_ID_TEAM_HERE';
-const PAYPAL_SDK_URL = process.env.PAYPAL_SDK_URL || 'https://www.paypal.com/sdk/js';
 const FIREBASE_WEB_CONFIG = {
   apiKey: process.env.FIREBASE_API_KEY || '',
   authDomain: process.env.FIREBASE_AUTH_DOMAIN || '',
@@ -1773,10 +1769,6 @@ app.get('/health', (_req, res) => {
 app.get('/api/config', (_req, res) => {
   res.json({
     openaiConfigured: Boolean(OPENAI_API_KEY),
-    paypalClientId: PAYPAL_CLIENT_ID,
-    planPro: PLAN_PRO,
-    planTeam: PLAN_TEAM,
-    paypalSdkUrl: PAYPAL_SDK_URL,
     firebaseConfigured: FIREBASE_CONFIGURED,
     firebaseConfig: FIREBASE_CONFIGURED ? FIREBASE_WEB_CONFIG : null,
   });
