@@ -59,10 +59,10 @@ const PING_OPTIONS = [
 ];
 
 const ESCALATIONS = [
-  { id: 'stricter',  label: 'Make reminders stricter' },
+  { id: 'stricter',  label: 'Send me a stricter message' },
   { id: 'message',   label: 'Generate a message I can send to a friend' },
+  { id: 'promise',   label: 'Make me write a restart promise' },
   { id: 'tiny_mode', label: 'Switch me to Tiny Mode' },
-  { id: 'rescue',    label: 'Restart with a rescue action' },
   { id: 'none',      label: 'No escalation' },
 ];
 
