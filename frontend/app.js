@@ -685,10 +685,55 @@ function handleRouteChange(route) {
   });
 }
 
+// ── v2 App Shell helpers ───────────────────────────────────────────────────
+
+let _lastShellRoute = null;
+
+function _esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function buildShellNav(state, route) {
+  const email    = state.user?.email || '';
+  const initial  = _esc(email[0]?.toUpperCase() || 'U');
+  const day      = state.track?.currentDayNumber;
+  const hasTrack = Boolean(state.track?.id);
+
+  const todayActive = ['/today', '/agent', '/action-kit', '/proof', '/blocked', '/recap'].includes(route);
+  const trackActive = route === '/progress';
+  const setActive   = route === '/settings';
+  const obActive    = ['/onboarding', '/confirm-track', '/plan-preview'].includes(route);
+
+  const items = [
+    { path: '/today',    label: 'Today',    active: todayActive || obActive },
+    { path: '/progress', label: 'Track',    active: trackActive },
+    { path: '/settings', label: 'Settings', active: setActive   },
+  ];
+
+  const links = items.map(({ path, label, active }) =>
+    `<button class="v2-nav-link${active ? ' v2-nav-link--active' : ''}" data-route="${path}">${label}</button>`
+  ).join('');
+
+  const dayChip = hasTrack && day
+    ? `<span class="v2-badge v2-badge--today">Day ${day} of 7</span>`
+    : '';
+
+  return `<header class="v2-nav">
+    <button class="v2-nav-logo" data-route="/today">
+      <div class="v2-nav-logo-mark">S</div>
+      <span class="v2-nav-logo-name">StriveAI</span>
+    </button>
+    <nav class="v2-nav-links">${links}</nav>
+    <div class="v2-nav-right">${dayChip}<div class="v2-nav-user">${initial}</div></div>
+  </header>`;
+}
+
 function renderApp(state) {
   const root = document.getElementById(ROOT_ID);
   if (!root) return;
   const route = state.ui.activeRoute || (currentUser ? '/today' : '/landing');
+
+  document.body.classList.add('v2-body');
 
   // Compute pattern insight once per render; injected as ui.insight so Today page
   // can display it without importing the domain engine directly.
@@ -699,7 +744,7 @@ function renderApp(state) {
     ? { ...state, ui: { ...state.ui, insight } }
     : state;
 
-  renderRoute(root, route, renderState, {
+  const actions = {
     currentUser,
     onSignOut:  () => signOut(),
     onNavigate: (path) => navigate(path, handleRouteChange),
@@ -715,22 +760,50 @@ function renderApp(state) {
       try { await sendPasswordReset(email); }
       catch (err) { throw new Error(authErrorMessage(err)); }
     },
-    onGenerate:           handleGenerate,
-    onStartDay1:          handleStartDay1,
-    onTelegramLink:       handleTelegramLink,
-    onTelegramRefresh:    handleTelegramRefresh,
-    onKitGenerate:        handleKitGenerate,
-    onAgentInit:          handleAgentInit,
-    onAgentStepDone:      handleAgentStepDone,
-    onAgentProofSubmit:   handleAgentProofSubmit,
-    onAgentRetry:         handleAgentRetry,
-    onProofSubmit:        handleProofSubmit,
-    onProofReset:         handleProofReset,
+    onGenerate:               handleGenerate,
+    onStartDay1:              handleStartDay1,
+    onTelegramLink:           handleTelegramLink,
+    onTelegramRefresh:        handleTelegramRefresh,
+    onKitGenerate:            handleKitGenerate,
+    onAgentInit:              handleAgentInit,
+    onAgentStepDone:          handleAgentStepDone,
+    onAgentProofSubmit:       handleAgentProofSubmit,
+    onAgentRetry:             handleAgentRetry,
+    onProofSubmit:            handleProofSubmit,
+    onProofReset:             handleProofReset,
     onBlockerDiagnose:        handleBlockerDiagnose,
     onBlockerRescueDone:      handleBlockerRescueDone,
     onBlockerMissed:          handleBlockerMissed,
     onRecapLoadReflection:    handleRecapLoadReflection,
     onRecapContinue:          handleRecapContinue,
     onRecapNewTrack:          handleRecapNewTrack,
-  });
+  };
+
+  const publicRoutes = new Set(['/', '/landing', '/auth']);
+  if (publicRoutes.has(route)) {
+    root.innerHTML = '<div class="v2-public"></div>';
+    renderRoute(root.querySelector('.v2-public'), route, renderState, actions);
+    return;
+  }
+
+  // Authenticated: inject app shell with nav
+  let content = root.querySelector('#v2-content');
+  if (!content || _lastShellRoute !== route) {
+    const navHtml = buildShellNav(renderState, route);
+    if (!content) {
+      root.innerHTML = `<div class="v2-shell">${navHtml}<main class="v2-content" id="v2-content"></main></div>`;
+    } else {
+      // Replace just the nav to update active states
+      const oldNav = root.querySelector('.v2-nav');
+      if (oldNav) oldNav.outerHTML = navHtml;
+    }
+    _lastShellRoute = route;
+    content = root.querySelector('#v2-content');
+    // Wire nav click handlers
+    root.querySelectorAll('[data-route]').forEach((el) => {
+      el.addEventListener('click', () => navigate(el.getAttribute('data-route'), handleRouteChange));
+    });
+  }
+
+  if (content) renderRoute(content, route, renderState, actions);
 }

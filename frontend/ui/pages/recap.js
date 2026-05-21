@@ -1,27 +1,19 @@
 // Day 7 Recap — /recap
 // Shown when track.status === 'complete'.
-// AI recap text is generated once and stored in state.today.recapText (or state.recap.text).
-// Two continuation flows: continue same goal, or start a new track.
 
-// Module state for the "Export pattern" clipboard interaction
 let exportCopied = false;
 
 export function render(container, state, actions) {
   const { track, history, telegram, ui } = state;
 
-  if (!track?.id) {
-    actions.onNavigate?.('/onboarding');
-    return;
-  }
+  if (!track?.id) { actions.onNavigate?.('/onboarding'); return; }
 
-  const entries  = Array.isArray(history?.entries) ? history.entries : [];
-  const patterns = Array.isArray(history?.failurePatterns) ? history.failurePatterns : [];
-  const days     = Array.isArray(track.days) ? track.days : [];
-
-  const stats    = computeStats(track, entries, days);
+  const entries        = Array.isArray(history?.entries)        ? history.entries        : [];
+  const patterns       = Array.isArray(history?.failurePatterns)? history.failurePatterns: [];
+  const days           = Array.isArray(track.days)              ? track.days              : [];
+  const stats          = computeStats(track, entries, days);
   const patternSummary = topPattern(patterns);
   const bestFormat     = bestWorkingFormat(entries);
-
   const recapText      = state.recapText || '';
   const recapLoading   = Boolean(ui?.recapLoading);
   const continuing     = Boolean(ui?.trackContinuing);
@@ -34,13 +26,13 @@ export function render(container, state, actions) {
 
 function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram) {
   return `
-    <div style="max-width:560px;margin:3rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif">
+    <div class="v2-page">
 
-      <div style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#6b7280;text-transform:uppercase;margin-bottom:8px">
-        Week complete
+      <div class="v2-kicker" style="margin-bottom:8px">
+        <span class="v2-badge v2-badge--done">Week complete</span>
       </div>
-      <h1 style="font-size:1.4rem;font-weight:900;color:#f9fafb;margin:0 0 6px">Your 7-day track is complete.</h1>
-      <p style="color:#9ca3af;font-size:.85rem;margin:0 0 24px;line-height:1.5">${esc(track.goal || '')}</p>
+      <h1 class="v2-h1" style="margin-bottom:6px">Your 7-day track is complete.</h1>
+      <p class="v2-sub">${esc(track.goal || '')}</p>
 
       ${renderResultGrid(stats)}
       ${patternSummary ? renderPatternCard(patternSummary) : ''}
@@ -64,26 +56,26 @@ function computeStats(track, entries, days) {
     skipped:       te.filter((e) => e.outcome === 'skipped').length,
     unanswered:    days.filter((d) => d.status === 'pending').length,
     agentSessions: te.filter((e) => e.agentUsed).length,
-    actionKits:    0, // reserved; not yet tracked per-entry
   };
 }
 
 function renderResultGrid(s) {
   const cells = [
-    { label: 'Days returned', value: s.daysReturned, color: '#f9fafb' },
-    { label: 'Done',          value: s.done,          color: '#22c55e' },
-    { label: 'Rescued',       value: s.rescued,       color: '#3b82f6' },
-    { label: 'Missed',        value: s.missed,        color: '#ef4444' },
-    { label: 'Unanswered',    value: s.unanswered,    color: '#6b7280' },
-    { label: 'Agent sessions',value: s.agentSessions, color: '#a78bfa' },
+    { label: 'Days returned',  value: s.daysReturned, color: 'var(--v2-text)'   },
+    { label: 'Done',           value: s.done,          color: 'var(--v2-green)'  },
+    { label: 'Rescued',        value: s.rescued,       color: 'var(--v2-blue-l)' },
+    { label: 'Missed',         value: s.missed,        color: 'var(--v2-red)'    },
+    { label: 'Unanswered',     value: s.unanswered,    color: 'var(--v2-muted)'  },
+    { label: 'Agent sessions', value: s.agentSessions, color: 'var(--v2-violet)' },
   ];
   return `
-    <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;padding:16px;margin-bottom:16px">
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+    <div class="v2-card" style="margin-bottom:16px">
+      <div class="v2-section-label" style="margin-bottom:14px">Results</div>
+      <div class="v2-stats-grid">
         ${cells.map((c) => `
-          <div>
-            <div style="font-size:1.4rem;font-weight:800;color:${c.color}">${c.value}</div>
-            <div style="font-size:.7rem;color:#4b5563;margin-top:2px">${esc(c.label)}</div>
+          <div class="v2-stat-cell">
+            <div style="font-family:var(--v2-fhead);font-size:1.5rem;font-weight:800;color:${c.color};line-height:1">${c.value}</div>
+            <div class="v2-muted-text" style="margin-top:4px">${esc(c.label)}</div>
           </div>`).join('')}
       </div>
     </div>`;
@@ -102,23 +94,19 @@ function topPattern(patterns) {
   if (!cat || count < 1) return null;
 
   const LABELS = {
-    time:       'Not enough time',
-    unclear:    'Unclear how to start',
-    motivation: 'Low energy or avoidance',
-    skill_gap:  'Skill gap',
-    no_access:  'Access or tool issues',
-    external:   'External dependency',
-    other:      'General friction',
+    time: 'Not enough time', unclear: 'Unclear how to start',
+    motivation: 'Low energy or avoidance', skill_gap: 'Skill gap',
+    no_access: 'Access or tool issues', external: 'External dependency', other: 'General friction',
   };
   return { category: cat, count, label: LABELS[cat] || cat };
 }
 
 function renderPatternCard(p) {
   return `
-    <div style="background:#1a1200;border:1px solid #92400e;border-radius:10px;padding:14px 16px;margin-bottom:12px">
-      <div style="font-size:.68rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Main friction pattern</div>
-      <div style="color:#fbbf24;font-weight:700;font-size:.9rem">${esc(p.label)}</div>
-      <div style="color:#92400e;font-size:.78rem;margin-top:2px">Came up ${p.count}× across the week</div>
+    <div class="v2-card v2-card--amber" style="margin-bottom:12px">
+      <div class="v2-section-label" style="margin-bottom:6px">Main friction pattern</div>
+      <p style="color:var(--v2-amber);font-weight:700;font-size:.875rem;margin:0">${esc(p.label)}</p>
+      <p class="v2-muted-text" style="margin-top:4px">Came up ${p.count}× across the week</p>
     </div>`;
 }
 
@@ -138,9 +126,9 @@ function bestWorkingFormat(entries) {
 
 function renderFormatCard(text) {
   return `
-    <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;padding:14px 16px;margin-bottom:12px">
-      <div style="font-size:.68rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Best working format</div>
-      <div style="color:#d1d5db;font-size:.87rem;line-height:1.5">${esc(text)}</div>
+    <div class="v2-card" style="margin-bottom:12px">
+      <div class="v2-section-label" style="margin-bottom:6px">Best working format</div>
+      <p class="v2-body-text" style="margin:0">${esc(text)}</p>
     </div>`;
 }
 
@@ -149,63 +137,54 @@ function renderFormatCard(text) {
 function renderAIReflection(text, loading) {
   if (loading) {
     return `
-      <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;padding:16px;margin-bottom:20px;text-align:center">
-        <div style="color:#6b7280;font-size:.85rem;margin-bottom:12px">Generating reflection…</div>
-        <div style="display:inline-block;width:16px;height:16px;border:2px solid #1f2937;border-top-color:#3b82f6;border-radius:50%;animation:spin .8s linear infinite"></div>
-        <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+      <div class="v2-card" style="margin-bottom:20px">
+        <div class="v2-loading-center" style="padding:24px">
+          <div class="v2-spin"></div>
+          <p class="v2-muted-text">Generating reflection…</p>
+        </div>
       </div>`;
   }
   if (!text) {
     return `
-      <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;padding:16px;margin-bottom:20px">
-        <div style="font-size:.68rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Reflection</div>
-        <div id="recap-load-reflection"
-          style="color:#3b82f6;font-size:.85rem;cursor:pointer;font-weight:600">
+      <div class="v2-card" style="margin-bottom:20px">
+        <div class="v2-section-label" style="margin-bottom:8px">Reflection</div>
+        <button id="recap-load-reflection" class="v2-btn v2-btn--ghost v2-btn--sm" style="color:var(--v2-blue);padding:0">
           Generate reflection →
-        </div>
+        </button>
       </div>`;
   }
   return `
-    <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;padding:16px;margin-bottom:20px">
-      <div style="font-size:.68rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">Reflection</div>
-      <div style="color:#d1d5db;font-size:.87rem;line-height:1.7">${esc(text)}</div>
+    <div class="v2-card" style="margin-bottom:20px">
+      <div class="v2-section-label" style="margin-bottom:10px">Reflection</div>
+      <p class="v2-body-text" style="margin:0;line-height:1.7">${esc(text)}</p>
     </div>`;
 }
 
 // ── CTAs ──────────────────────────────────────────────────────────────────────
 
 function renderCTAs(continuing, telegram) {
-  const continueLabel = continuing ? 'Generating next week…' : 'Continue this goal — next 7 days →';
-
   return `
-    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px">
-      <button id="recap-continue" ${continuing ? 'disabled' : ''}
-        style="padding:13px;background:${continuing ? '#1f2937' : '#3b82f6'};color:${continuing ? '#4b5563' : '#fff'};border:none;border-radius:8px;font-weight:700;font-size:.9rem;cursor:${continuing ? 'default' : 'pointer'}">
-        ${esc(continueLabel)}
+    <div class="v2-row v2-row--col" style="gap:10px;margin-bottom:12px">
+      <button id="recap-continue" ${continuing ? 'disabled' : ''} class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full">
+        ${esc(continuing ? 'Generating next week…' : 'Continue this goal — next 7 days →')}
       </button>
-      <button id="recap-new"
-        style="padding:12px;background:transparent;color:#9ca3af;border:1px solid #374151;border-radius:8px;font-weight:600;font-size:.88rem;cursor:pointer">
+      <button id="recap-new" class="v2-btn v2-btn--secondary v2-btn--full">
         Start a new 7-day track
       </button>
     </div>
 
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px">
-      <button id="recap-export"
-        style="flex:1;min-width:140px;padding:10px;background:transparent;color:#6b7280;border:1px solid #374151;border-radius:8px;font-weight:600;font-size:.8rem;cursor:pointer">
+    <div class="v2-row" style="margin-bottom:24px">
+      <button id="recap-export" class="v2-btn v2-btn--ghost" style="flex:1">
         Export my pattern
       </button>
       ${telegram?.connected
-        ? `<button id="recap-telegram"
-             style="flex:1;min-width:140px;padding:10px;background:transparent;color:#6b7280;border:1px solid #374151;border-radius:8px;font-weight:600;font-size:.8rem;cursor:pointer">
+        ? `<button id="recap-telegram" class="v2-btn v2-btn--ghost" style="flex:1">
              Adjust Telegram ping
            </button>`
         : ''}
     </div>
 
-    <button data-route="/progress"
-      style="padding:8px 0;background:transparent;color:#4b5563;border:none;font-size:.78rem;cursor:pointer">
-      View full progress →
-    </button>`;
+    <button data-route="/progress" class="v2-btn v2-btn--ghost">View full progress →</button>`;
 }
 
 // ── Event wiring ──────────────────────────────────────────────────────────────
@@ -220,13 +199,8 @@ function wireEvents(container, state, actions, track, recapText, patterns) {
     actions.onRecapContinue?.({ recapText });
   });
 
-  container.querySelector('#recap-new')?.addEventListener('click', () => {
-    actions.onRecapNewTrack?.();
-  });
-
-  container.querySelector('#recap-load-reflection')?.addEventListener('click', () => {
-    actions.onRecapLoadReflection?.();
-  });
+  container.querySelector('#recap-new')?.addEventListener('click', () => actions.onRecapNewTrack?.());
+  container.querySelector('#recap-load-reflection')?.addEventListener('click', () => actions.onRecapLoadReflection?.());
 
   container.querySelector('#recap-export')?.addEventListener('click', () => {
     const text = buildExportText(track, state.history);
@@ -239,15 +213,13 @@ function wireEvents(container, state, actions, track, recapText, patterns) {
     }).catch(() => {});
   });
 
-  container.querySelector('#recap-telegram')?.addEventListener('click', () => {
-    actions.onNavigate?.('/settings');
-  });
+  container.querySelector('#recap-telegram')?.addEventListener('click', () => actions.onNavigate?.('/settings'));
 }
 
 // ── Export text builder ───────────────────────────────────────────────────────
 
 function buildExportText(track, history) {
-  const entries  = Array.isArray(history?.entries) ? history.entries : [];
+  const entries  = Array.isArray(history?.entries)         ? history.entries         : [];
   const patterns = Array.isArray(history?.failurePatterns) ? history.failurePatterns : [];
   const te       = entries.filter((e) => e.trackId === track.id);
 
@@ -258,26 +230,20 @@ function buildExportText(track, history) {
   const patternSummary = (() => {
     if (!patterns.length) return 'None recorded.';
     const counts = {};
-    patterns.forEach((p) => {
-      const c = p.blockerCategory || 'other';
-      counts[c] = (counts[c] || 0) + 1;
-    });
-    return Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .map(([c, n]) => `${c} (×${n})`)
-      .join(', ');
+    patterns.forEach((p) => { const c = p.blockerCategory || 'other'; counts[c] = (counts[c] || 0) + 1; });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} (×${n})`).join(', ');
   })();
 
   return [
-    `StriveAI — 7-Day Pattern Export`,
+    'StriveAI — 7-Day Pattern Export',
     `Goal: ${track.goal || '—'}`,
     `Category: ${track.goalCategory || '—'}`,
     `Start: ${track.startDate || '—'}`,
-    ``,
+    '',
     `Results: ${done} done, ${rescued} rescued, ${missed} missed`,
     `Friction patterns: ${patternSummary}`,
-    ``,
-    `Generated by StriveAI`,
+    '',
+    'Generated by StriveAI',
   ].join('\n');
 }
 

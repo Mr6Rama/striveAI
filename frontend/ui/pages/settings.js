@@ -5,68 +5,67 @@ export function bindSettingsHandlers({ onSave, onRebuild }) {
   bound = true;
 
   document.getElementById('set-save-btn')?.addEventListener('click', () => {
-    const name = String(document.getElementById('set-name-in')?.value || '').trim();
-    const goal = String(document.getElementById('set-goal-in')?.value || '').trim();
-    const deadline = String(document.getElementById('set-deadline-in')?.value || '').trim();
-    const niche = String(document.getElementById('set-niche-in')?.value || '').trim();
+    const name          = String(document.getElementById('set-name-in')?.value || '').trim();
+    const goal          = String(document.getElementById('set-goal-in')?.value || '').trim();
+    const deadline      = String(document.getElementById('set-deadline-in')?.value || '').trim();
+    const niche         = String(document.getElementById('set-niche-in')?.value || '').trim();
     const executionStyle = String(document.getElementById('set-style-in')?.value || '').trim();
-
     onSave({ name, goal, deadline, niche, executionStyle });
   });
 
   document.getElementById('set-rebuild-btn')?.addEventListener('click', onRebuild);
 }
 
-// v2 render — used by pages/index.js when #app-v2 is the root.
+// v2 render
 export function render(container, state, actions) {
   const user     = state.user;
   const telegram = state.telegram;
 
   container.innerHTML = `
-    <div style="max-width:540px;margin:3rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif">
-      <div style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#6b7280;text-transform:uppercase;margin-bottom:8px">Settings</div>
-      <h1 style="font-size:1.5rem;font-weight:800;color:#f9fafb;margin:0 0 24px">Your account</h1>
+    <div class="v2-page">
+
+      <div class="v2-kicker v2-kicker--muted" style="margin-bottom:8px">Settings</div>
+      <h1 class="v2-h1" style="margin-bottom:24px">Your account</h1>
 
       <section style="margin-bottom:28px">
-        <div style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Profile</div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #111827">
-            <span style="color:#9ca3af;font-size:.85rem">Email</span>
-            <span style="color:#e5e7eb;font-size:.85rem;font-family:monospace">${escHtml(user.email || '—')}</span>
+        <div class="v2-section-label" style="margin-bottom:12px">Profile</div>
+        <div class="v2-card">
+          <div class="v2-meta-row">
+            <span class="v2-muted-text">Email</span>
+            <span class="v2-body-text" style="font-family:var(--v2-fmono);font-size:.82rem">${escHtml(user.email || '—')}</span>
           </div>
-          <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #111827">
-            <span style="color:#9ca3af;font-size:.85rem">Experience level</span>
-            <span style="color:#e5e7eb;font-size:.85rem;text-transform:capitalize">${escHtml(user.experienceLevel || 'intermediate')}</span>
+          <div class="v2-meta-row">
+            <span class="v2-muted-text">Experience level</span>
+            <span class="v2-body-text" style="text-transform:capitalize">${escHtml(user.experienceLevel || 'intermediate')}</span>
           </div>
         </div>
       </section>
 
       <section style="margin-bottom:28px">
-        <div style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Telegram</div>
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #111827">
-          <div>
-            <div style="color:#e5e7eb;font-size:.85rem">${telegram.connected ? `Connected as @${escHtml(telegram.username || 'unknown')}` : 'Not connected'}</div>
-            <div style="color:#6b7280;font-size:.75rem;margin-top:2px">Daily pings at ${telegram.pingHour ?? 9}:00 UTC</div>
+        <div class="v2-section-label" style="margin-bottom:12px">Telegram</div>
+        <div class="v2-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:16px">
+            <div>
+              <p class="v2-body-text">${telegram.connected ? `Connected as @${escHtml(telegram.username || 'unknown')}` : 'Not connected'}</p>
+              <p class="v2-muted-text" style="margin-top:3px">Daily pings at ${telegram.pingHour ?? 9}:00 UTC</p>
+            </div>
+            ${telegram.connected
+              ? `<button id="v2-tg-disconnect" class="v2-btn v2-btn--ghost v2-btn--sm">Disconnect</button>`
+              : `<button id="v2-tg-connect"    class="v2-btn v2-btn--primary v2-btn--sm">Connect</button>`}
           </div>
-          ${telegram.connected
-            ? `<button id="v2-tg-disconnect" style="padding:6px 12px;background:transparent;color:#6b7280;border:1px solid #374151;border-radius:6px;font-size:.78rem;cursor:pointer">Disconnect</button>`
-            : `<button id="v2-tg-connect" style="padding:6px 12px;background:#3b82f6;color:#fff;border:none;border-radius:6px;font-size:.78rem;cursor:pointer">Connect</button>`}
         </div>
       </section>
 
-      <section>
-        <button id="v2-signout"
-          style="padding:10px 20px;background:transparent;color:#f87171;border:1px solid #374151;border-radius:8px;font-weight:600;cursor:pointer;font-size:.85rem">
-          Sign out
-        </button>
+      <section style="margin-bottom:24px">
+        <div class="v2-section-label" style="margin-bottom:12px">Account</div>
+        <div class="v2-card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <p class="v2-muted-text">Sign out of StriveAI</p>
+            <button id="v2-signout" class="v2-btn v2-btn--danger v2-btn--sm">Sign out</button>
+          </div>
+        </div>
       </section>
 
-      <div style="margin-top:24px">
-        <button data-route="/today"
-          style="padding:8px 14px;background:transparent;color:#6b7280;border:none;font-size:.8rem;cursor:pointer">
-          ← Back to Today
-        </button>
-      </div>
     </div>`;
 
   container.querySelectorAll('[data-route]').forEach((el) => {
@@ -86,19 +85,20 @@ export function renderSettings(state) {
   setInput('set-deadline-in', state.plan.deadline || '');
   setInput('set-niche-in', state.plan.niche || '');
   setInput('set-style-in', state.plan.executionStyle || '');
-
   setText('set-status', state.ui.message || '');
   setText('set-error', state.ui.error || '');
 }
 
 function setText(id, value) {
-  const element = document.getElementById(id);
-  if (element) element.textContent = value || '';
+  const el = document.getElementById(id);
+  if (el) el.textContent = value || '';
 }
 
 function setInput(id, value) {
-  const element = document.getElementById(id);
-  if (element && document.activeElement !== element) {
-    element.value = value || '';
-  }
+  const el = document.getElementById(id);
+  if (el && document.activeElement !== el) el.value = value || '';
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
