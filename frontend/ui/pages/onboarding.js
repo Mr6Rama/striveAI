@@ -59,20 +59,47 @@ const PING_OPTIONS = [
 ];
 
 const ESCALATIONS = [
-  { id: 'stricter',  label: 'Make reminders stricter' },
+  { id: 'stricter',  label: 'Send me a stricter message' },
   { id: 'message',   label: 'Generate a message I can send to a friend' },
+  { id: 'promise',   label: 'Make me write a restart promise' },
   { id: 'tiny_mode', label: 'Switch me to Tiny Mode' },
-  { id: 'rescue',    label: 'Restart with a rescue action' },
   { id: 'none',      label: 'No escalation' },
 ];
 
 // ── Module state ───────────────────────────────────────────────────────────
 
-let draft = {
-  goalCategory: '', goalTemplate: '', specificGoal: '',
-  blocker: '', dailyHours: '2-4', ifThenRules: [],
-  pingSelection: 'morning', pingHour: 9, escalationRule: '',
-};
+const DRAFT_KEY = 'sv2_onboarding_draft';
+
+function defaultDraft() {
+  return {
+    goalCategory: '', goalTemplate: '', specificGoal: '',
+    blocker: '', dailyHours: '2-4', ifThenRules: [],
+    pingSelection: 'morning', pingHour: 9, escalationRule: '',
+  };
+}
+
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return defaultDraft();
+    const parsed = JSON.parse(raw);
+    return { ...defaultDraft(), ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+  } catch (_e) {
+    return defaultDraft();
+  }
+}
+
+function saveDraft() {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch (_e) { /* quota / disabled */ }
+}
+
+export function clearOnboardingDraft() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch (_e) { /* noop */ }
+  draft = defaultDraft();
+  currentStep = 1;
+}
+
+let draft = loadDraft();
 let currentStep = 1;
 let lastState   = null;
 let lastActions = null;
@@ -96,7 +123,7 @@ function renderStep(container) {
   }
 }
 
-function go(n, container) { currentStep = n; renderStep(container); }
+function go(n, container) { currentStep = n; saveDraft(); renderStep(container); }
 
 // ── Layout helpers ─────────────────────────────────────────────────────────
 
@@ -157,6 +184,7 @@ function bindCards(container, attr, getVal, setVal, multi = false) {
       } else {
         setVal(id);
       }
+      saveDraft();
       refreshCards(container, attr, getVal());
     });
   });
@@ -201,7 +229,7 @@ function renderTemplate(container) {
     ${errDiv()}${nextBtn()}${backBtn()}`);
 
   bindCards(container, 'data-tpl', () => draft.goalTemplate, (v) => { draft.goalTemplate = v; });
-  container.querySelector('#ob-specific')?.addEventListener('input', (e) => { draft.specificGoal = e.target.value; });
+  container.querySelector('#ob-specific')?.addEventListener('input', (e) => { draft.specificGoal = e.target.value; saveDraft(); });
 
   container.querySelector('#ob-next')?.addEventListener('click', () => {
     if (!draft.goalTemplate && !draft.specificGoal.trim()) {
@@ -314,12 +342,14 @@ function renderTelegram(container) {
       draft.pingSelection = btn.getAttribute('data-ping');
       const opt = PING_OPTIONS.find((p) => p.id === draft.pingSelection);
       if (opt?.hour !== null) draft.pingHour = opt.hour;
+      saveDraft();
       renderTelegram(container);
     });
   });
 
   container.querySelector('#ob-custom-hour')?.addEventListener('input', (e) => {
     draft.pingHour = Math.max(0, Math.min(23, parseInt(e.target.value, 10) || 0));
+    saveDraft();
   });
 
   container.querySelector('#ob-tg-connect')?.addEventListener('click', async () => {
@@ -399,7 +429,10 @@ function renderConfirm(container) {
     if (!goal.trim()) return;
     const btn = container.querySelector('#ob-next');
     if (btn) { btn.disabled = true; btn.textContent = 'Building your track…'; }
-    await lastActions?.onGenerate?.({ ...draft, goal: goal.trim() });
+    try {
+      await lastActions?.onGenerate?.({ ...draft, goal: goal.trim() });
+      clearOnboardingDraft();
+    } catch (_e) { /* error state already surfaced via ui.error */ }
   });
   container.querySelector('#ob-back')?.addEventListener('click', () => go(7, container));
 }
