@@ -26,7 +26,7 @@ export function render(container, _state, actions) {
         </p>
 
         <div class="v2-land-btns">
-          <button data-route="/register" class="v2-btn v2-btn--primary v2-btn--lg">
+          <button data-route="/auth?mode=signup" class="v2-btn v2-btn--primary v2-btn--lg">
             Start 7-day track →
           </button>
           <button data-route="/auth" class="v2-btn v2-btn--ghost v2-btn--lg">
