@@ -78,11 +78,13 @@ function buildDayRows(track, entries) {
 
 function renderDayCard({ day, status, isToday }) {
   const meta = STATUS_META[status] || STATUS_META.pending;
-  const todayCls = isToday ? ' v2-day-card--today' : '';
+  const todayCls  = isToday ? ' v2-day-card--today' : '';
   const statusCls = meta.cardCls ? ` ${meta.cardCls}` : '';
+  const bracketEl = isToday ? '<span class="v2-br-tr"></span><span class="v2-br-bl"></span>' : '';
 
   return `
-    <div class="v2-day-card${todayCls}${statusCls}">
+    <div class="v2-day-card${todayCls}${statusCls}${isToday ? ' v2-bracketed' : ''}" style="overflow:visible">
+      ${bracketEl}
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px">
         <div style="display:flex;align-items:center;gap:8px">
           <span class="v2-section-label" style="margin:0">Day ${day.dayNumber}</span>
@@ -90,7 +92,7 @@ function renderDayCard({ day, status, isToday }) {
         </div>
         ${isToday ? `<span class="v2-badge v2-badge--today">Today</span>` : ''}
       </div>
-      <p class="v2-body-text" style="margin:0;padding-right:${isToday ? '0' : '0'}">${esc(day.title || '—')}</p>
+      <p class="v2-body-text" style="margin:0">${esc(day.title || '—')}</p>
       ${day.date ? `<p class="v2-muted-text" style="margin:4px 0 0">${esc(day.date)}</p>` : ''}
     </div>`;
 }
@@ -114,7 +116,7 @@ function renderStats(s) {
   const items = [
     { label: 'Days returned',  value: s.daysReturned,  color: 'var(--v2-text)'   },
     { label: 'Done',           value: s.done,           color: 'var(--v2-green)'  },
-    { label: 'Rescued',        value: s.rescued,        color: 'var(--v2-blue-l)' },
+    { label: 'Rescued',        value: s.rescued,        color: 'var(--v2-blue)'   },
     { label: 'Missed',         value: s.missed,         color: 'var(--v2-red)'    },
     { label: 'Skipped',        value: s.skipped,        color: 'var(--v2-muted)'  },
     { label: 'Agent sessions', value: s.agentSessions,  color: 'var(--v2-violet)' },

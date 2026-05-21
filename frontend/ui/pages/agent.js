@@ -276,7 +276,8 @@ function contextPanel(dayPlan, track, today, insight) {
 function progressPills(steps, currentIndex) {
   const pills = steps.map((_, i) => {
     const cls = i < currentIndex ? 'v2-step-pill--done' : i === currentIndex ? 'v2-step-pill--active' : '';
-    return `<div class="v2-step-pill ${cls}"></div>`;
+    const label = i < currentIndex ? '✓' : String(i + 1);
+    return `<div class="v2-step-pill ${cls}">${label}</div>`;
   }).join('');
   return `
     <div class="v2-step-pills">${pills}</div>
@@ -294,7 +295,9 @@ function stepList(steps, currentIndex, note, loading) {
       </div>`;
     }
     if (i === currentIndex) {
-      return `<div class="v2-step-card v2-step-card--active">
+      return `<div class="v2-step-card--active v2-bracketed" style="overflow:visible">
+        <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
+        <div class="v2-today-action" style="margin-bottom:8px">// Step ${i + 1}</div>
         <p class="v2-h3" style="margin-bottom:12px">${esc(step.text)}</p>
         <div class="v2-field">
           <label class="v2-label">Your output or a short note:</label>
