@@ -5,7 +5,9 @@
   "scripts": {
     "start": "node backend/server.js",
     "dev": "node --watch backend/server.js",
-    "smoke": "node scripts/smoke.js"
+    "smoke": "node scripts/smoke.js",
+    "build": "esbuild frontend/app.js --bundle --format=iife --platform=browser --target=es2020 --outfile=frontend/bundle.js",
+    "vercel-build": "npm run build"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -15,5 +17,8 @@
   },
   "optionalDependencies": {
     "nodemailer": "^6.9.13"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
   }
 }
