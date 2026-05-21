@@ -3,7 +3,6 @@
 // URL param ?source=rescue → marks day as 'rescued' on success (not 'done').
 // URL param ?source=agent  → for display context only; completion handled by agent.js
 
-// Category-specific proof config
 const CATEGORY_PROOF = Object.freeze({
   coding: {
     prompt: 'What did you build or fix today?',
@@ -53,45 +52,38 @@ const TYPE_LABELS = Object.freeze({
   statement: 'Quick statement — "I completed X"',
 });
 
-// Module-level state to survive re-renders without DOM querying
 let proofText  = '';
 let proofType  = '';
 let submitting = false;
 
 export function render(container, state, actions) {
   const { track, today, ui } = state;
-  const source  = getQueryParam('source'); // 'rescue' | 'main' | 'agent' | null
+  const source  = getQueryParam('source');
 
   if (!track?.id || !Array.isArray(track.days) || !track.days.length) {
     actions.onNavigate?.('/onboarding');
     return;
   }
 
-  const dayNum  = track.currentDayNumber || today.dayNumber || 1;
-  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
+  const dayNum   = track.currentDayNumber || today.dayNumber || 1;
+  const dayPlan  = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
   const category = (track.goalCategory || 'other').toLowerCase();
-  const cfg     = CATEGORY_PROOF[category] || CATEGORY_PROOF.other;
+  const cfg      = CATEGORY_PROOF[category] || CATEGORY_PROOF.other;
 
-  // Initialise proof type to the first option for this category if not yet set
   if (!proofType || !cfg.types.includes(proofType)) {
     proofType = cfg.types[0];
   }
 
-  // proofResult is set by app.js after checkProof runs
   const proofResult = today.proofResult || null;
   const loading     = Boolean(ui?.proofLoading);
   const isRescue    = source === 'rescue';
 
   container.innerHTML = buildPage(dayNum, dayPlan, cfg, proofType, proofText, proofResult, loading, isRescue, submitting);
 
-  // ── Event wiring ──────────────────────────────────────────────────────────
-
-  // Back / cancel navigation
   container.querySelectorAll('[data-route]').forEach((el) => {
     el.addEventListener('click', () => actions.onNavigate?.(el.getAttribute('data-route')));
   });
 
-  // Proof type radio buttons — update module state and re-render
   container.querySelectorAll('input[name="proof-type"]').forEach((radio) => {
     radio.addEventListener('change', () => {
       const ta = container.querySelector('#proof-textarea');
@@ -101,13 +93,11 @@ export function render(container, state, actions) {
     });
   });
 
-  // Textarea — keep proofText in sync without re-rendering
   const ta = container.querySelector('#proof-textarea');
   if (ta) {
     ta.addEventListener('input', () => { proofText = ta.value; });
   }
 
-  // Primary submit button
   container.querySelector('#proof-submit')?.addEventListener('click', () => {
     const value = String(container.querySelector('#proof-textarea')?.value || proofText).trim();
     if (!value || submitting) return;
@@ -116,18 +106,15 @@ export function render(container, state, actions) {
     actions.onProofSubmit?.({ type: proofType, value, isRescue: Boolean(isRescue) });
   });
 
-  // Improvement submit (partial verdict — user adds more)
   container.querySelector('#proof-improve-submit')?.addEventListener('click', () => {
     const extra = String(container.querySelector('#proof-improve-text')?.value || '').trim();
     if (!extra || submitting) return;
-    // Combine original proof with the improvement note
     const combined = proofText ? `${proofText}\nImprovement: ${extra}` : extra;
     proofText  = combined;
     submitting = true;
     actions.onProofSubmit?.({ type: proofType, value: combined, isRescue: Boolean(isRescue) });
   });
 
-  // Reset proof to try again (not_enough / retry)
   container.querySelector('#proof-retry')?.addEventListener('click', () => {
     proofText  = '';
     submitting = false;
@@ -135,7 +122,6 @@ export function render(container, state, actions) {
   });
 }
 
-// Called by app.js on navigation away to reset module state
 export function resetProofState() {
   proofText  = '';
   proofType  = '';
@@ -148,37 +134,31 @@ function buildPage(dayNum, dayPlan, cfg, selectedType, currentText, proofResult,
   const verdict = proofResult?.verdict;
 
   return `
-    <div style="max-width:520px;margin:3rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif">
+    <div class="v2-page-center">
 
-      <div style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#6b7280;text-transform:uppercase;margin-bottom:8px">
-        Proof of progress · Day ${dayNum}${isRescue ? ' · Rescue' : ''}
+      <div class="v2-kicker" style="margin-bottom:8px">
+        <span class="v2-kicker--muted">Proof of progress · Day ${dayNum}${isRescue ? ' · Rescue' : ''}</span>
       </div>
-      <h1 style="font-size:1.35rem;font-weight:800;color:#f9fafb;margin:0 0 6px">
+      <h1 class="v2-h1" style="margin-bottom:6px">
         ${isRescue ? 'Did you complete the rescue action?' : 'Did you get it done?'}
       </h1>
 
       ${dayPlan.successCriteria
-        ? `<div style="margin-bottom:20px;padding:10px 14px;background:#111827;border-left:3px solid #3b82f6;border-radius:4px;color:#9ca3af;font-size:.82rem;line-height:1.55">
-             Done means: ${esc(dayPlan.successCriteria)}
-           </div>`
+        ? `<div class="v2-done-criteria" style="margin-bottom:20px">Done means: ${esc(dayPlan.successCriteria)}</div>`
         : '<div style="margin-bottom:20px"></div>'}
 
       ${loading ? renderLoading() : (verdict ? renderVerdict(verdict, proofResult, isRescue) : renderForm(cfg, selectedType, currentText, isSubmitting))}
 
-      <div style="margin-top:12px">
-        <button data-route="/today" style="padding:8px 0;background:transparent;color:#4b5563;border:none;font-size:.78rem;cursor:pointer">
-          ← Back to Today
-        </button>
-      </div>
+      <button data-route="/today" class="v2-btn v2-btn--ghost" style="margin-top:12px">← Back to Today</button>
 
     </div>`;
 }
 
 function renderForm(cfg, selectedType, currentText, isSubmitting) {
   const typeOptions = cfg.types.map((t) => `
-    <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:10px 12px;border:1px solid ${selectedType === t ? '#3b82f6' : '#374151'};border-radius:8px;background:${selectedType === t ? '#0f1f3d' : 'transparent'}">
-      <input type="radio" name="proof-type" value="${t}" ${selectedType === t ? 'checked' : ''} style="accent-color:#3b82f6;margin-top:3px;flex-shrink:0"/>
-      <span style="color:#e5e7eb;font-size:.88rem">${esc(TYPE_LABELS[t] || t)}</span>
+    <label class="v2-proof-type-option${selectedType === t ? ' v2-proof-type-option--on' : ''}">
+      <input type="radio" name="proof-type" value="${t}" ${selectedType === t ? 'checked' : ''} style="accent-color:var(--v2-blue);margin-top:3px;flex-shrink:0"/>
+      <span class="v2-body-text">${esc(TYPE_LABELS[t] || t)}</span>
     </label>`).join('');
 
   const placeholder = selectedType === 'link' ? 'https://…' : cfg.hint;
@@ -188,29 +168,27 @@ function renderForm(cfg, selectedType, currentText, isSubmitting) {
       ${typeOptions}
     </div>
 
-    <p style="color:#6b7280;font-size:.8rem;margin:0 0 8px">${esc(cfg.prompt)}</p>
-    <textarea id="proof-textarea"
+    <p class="v2-muted-text" style="margin:0 0 8px">${esc(cfg.prompt)}</p>
+    <textarea id="proof-textarea" class="v2-textarea"
       placeholder="${esc(placeholder)}"
-      style="width:100%;min-height:90px;padding:10px 12px;background:#1f2937;border:1px solid #374151;border-radius:8px;color:#f9fafb;font-size:.88rem;resize:vertical;box-sizing:border-box;line-height:1.5">${esc(currentText)}</textarea>
+      style="min-height:90px">${esc(currentText)}</textarea>
 
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button id="proof-submit" ${isSubmitting ? 'disabled' : ''}
-        style="flex:1;padding:12px;background:${isSubmitting ? '#374151' : '#22c55e'};color:${isSubmitting ? '#6b7280' : '#000'};border:none;border-radius:8px;font-weight:700;font-size:.9rem;cursor:${isSubmitting ? 'default' : 'pointer'}">
+    <div style="margin-top:12px">
+      <button id="proof-submit" ${isSubmitting ? 'disabled' : ''} class="v2-btn v2-btn--green v2-btn--lg v2-btn--full">
         ${isSubmitting ? 'Checking…' : 'Submit proof →'}
       </button>
     </div>
 
-    <p style="color:#4b5563;font-size:.75rem;margin:12px 0 0;text-align:center">
+    <p class="v2-muted-text" style="margin:12px 0 0;text-align:center;font-size:.75rem">
       Light proof — a sentence or two is enough.
     </p>`;
 }
 
 function renderLoading() {
   return `
-    <div style="text-align:center;padding:32px 0">
-      <div style="color:#6b7280;font-size:.88rem;margin-bottom:16px">Checking your proof…</div>
-      <div style="display:inline-block;width:18px;height:18px;border:2px solid #1f2937;border-top-color:#3b82f6;border-radius:50%;animation:spin .8s linear infinite"></div>
-      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+    <div class="v2-loading-center" style="padding:32px 0">
+      <div class="v2-spin"></div>
+      <p class="v2-muted-text">Checking your proof…</p>
     </div>`;
 }
 
@@ -219,53 +197,44 @@ function renderVerdict(verdict, proofResult, isRescue) {
 
   if (verdict === 'met') {
     return `
-      <div style="background:#052e16;border:1px solid #166534;border-radius:10px;padding:20px;text-align:center">
-        <div style="font-size:1.5rem;margin-bottom:8px">✓</div>
-        <div style="color:#4ade80;font-weight:700;font-size:1rem;margin-bottom:6px">
+      <div class="v2-card v2-card--green" style="text-align:center;padding:24px">
+        <div style="font-size:1.5rem;margin-bottom:8px;color:var(--v2-green)">✓</div>
+        <div style="color:var(--v2-green);font-weight:700;font-size:1rem;margin-bottom:6px">
           ${isRescue ? 'Rescue complete!' : 'Day complete!'}
         </div>
-        ${note ? `<p style="color:#6b7280;font-size:.82rem;margin:0">${note}</p>` : ''}
+        ${note ? `<p class="v2-muted-text" style="margin:0">${note}</p>` : ''}
       </div>`;
   }
 
   if (verdict === 'partial') {
     return `
-      <div style="background:#1a1200;border:1px solid #92400e;border-radius:10px;padding:18px;margin-bottom:16px">
-        <div style="color:#fbbf24;font-weight:700;font-size:.9rem;margin-bottom:6px">Almost there</div>
-        ${note ? `<p style="color:#d97706;font-size:.83rem;margin:0 0 12px;line-height:1.55">${note}</p>` : ''}
-        <p style="color:#6b7280;font-size:.8rem;margin:0">Add a bit more to confirm you're done:</p>
+      <div class="v2-card v2-card--amber" style="margin-bottom:16px">
+        <div style="color:var(--v2-amber);font-weight:700;font-size:.9rem;margin-bottom:6px">Almost there</div>
+        ${note ? `<p style="color:var(--v2-amber);font-size:.83rem;margin:0 0 12px;line-height:1.55">${note}</p>` : ''}
+        <p class="v2-muted-text" style="margin:0">Add a bit more to confirm you're done:</p>
       </div>
-      <textarea id="proof-improve-text"
+      <textarea id="proof-improve-text" class="v2-textarea"
         placeholder="One more sentence about what you completed…"
-        style="width:100%;min-height:72px;padding:10px 12px;background:#1f2937;border:1px solid #374151;border-radius:8px;color:#f9fafb;font-size:.88rem;resize:vertical;box-sizing:border-box;line-height:1.5"></textarea>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button id="proof-improve-submit"
-          style="flex:1;padding:11px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:.88rem;cursor:pointer">
+        style="min-height:72px"></textarea>
+      <div class="v2-row" style="margin-top:10px;gap:8px">
+        <button id="proof-improve-submit" class="v2-btn v2-btn--primary v2-btn--lg" style="flex:1">
           Resubmit →
         </button>
-        <button id="proof-retry"
-          style="padding:11px 14px;background:transparent;color:#6b7280;border:1px solid #374151;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer">
+        <button id="proof-retry" class="v2-btn v2-btn--ghost">
           Start over
         </button>
       </div>`;
   }
 
-  // not_enough
   return `
-    <div style="background:#1a0a0a;border:1px solid #7f1d1d;border-radius:10px;padding:18px;margin-bottom:16px">
-      <div style="color:#f87171;font-weight:700;font-size:.9rem;margin-bottom:6px">Needs more work</div>
-      ${note ? `<p style="color:#dc2626;font-size:.83rem;margin:0 0 10px;line-height:1.55">${note}</p>` : ''}
-      <p style="color:#6b7280;font-size:.8rem;margin:0">Go complete the remaining work, then come back to submit.</p>
+    <div class="v2-card v2-card--red" style="margin-bottom:16px">
+      <div style="color:var(--v2-red);font-weight:700;font-size:.9rem;margin-bottom:6px">Needs more work</div>
+      ${note ? `<p style="color:var(--v2-red);font-size:.83rem;margin:0 0 10px;line-height:1.55">${note}</p>` : ''}
+      <p class="v2-muted-text" style="margin:0">Go complete the remaining work, then come back to submit.</p>
     </div>
-    <div style="display:flex;gap:8px;margin-top:4px">
-      <button id="proof-retry"
-        style="padding:11px 18px;background:transparent;color:#9ca3af;border:1px solid #374151;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer">
-        ← Try again
-      </button>
-      <button data-route="/today"
-        style="flex:1;padding:11px;background:#111827;color:#6b7280;border:1px solid #1f2937;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer">
-        Back to Today
-      </button>
+    <div class="v2-row" style="margin-top:4px;gap:8px">
+      <button id="proof-retry" class="v2-btn v2-btn--ghost">← Try again</button>
+      <button data-route="/today" class="v2-btn v2-btn--secondary" style="flex:1">Back to Today</button>
     </div>`;
 }
 

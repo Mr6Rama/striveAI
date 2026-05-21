@@ -1,26 +1,24 @@
-// v2 Today's Action screen.
-// Route: /today — primary daily screen showing the current day's task.
+// v2 Today's Action screen — primary daily execution screen.
 
-const STATUS_COLOR = Object.freeze({
-  done:        '#22c55e',
-  rescued:     '#22c55e',
-  blocked:     '#f59e0b',
-  skipped:     '#6b7280',
-  missed:      '#ef4444',
-  in_progress: '#3b82f6',
-  pending:     '#6b7280',
+const STATUS_CLASS = Object.freeze({
+  done:        'v2-badge--done',
+  rescued:     'v2-badge--rescued',
+  blocked:     'v2-badge--blocked',
+  skipped:     'v2-badge--skipped',
+  missed:      'v2-badge--missed',
+  in_progress: 'v2-badge--in-prog',
+  pending:     'v2-badge--pending',
 });
 
 const STATUS_LABEL = Object.freeze({
-  done:        'DONE',
-  rescued:     'RESCUED',
-  blocked:     'BLOCKED',
-  skipped:     'SKIPPED',
-  missed:      'MISSED',
-  in_progress: 'IN PROGRESS',
-  pending:     'PENDING',
+  done:        'Done',
+  rescued:     'Rescued',
+  blocked:     'Blocked',
+  skipped:     'Skipped',
+  missed:      'Missed',
+  in_progress: 'In Progress',
+  pending:     'Pending',
 });
-
 
 // ── v1 legacy exports (used by old HTML shell via script.js) ───────────────
 
@@ -85,41 +83,28 @@ function renderActive(container, track, today, dayPlan, state, actions) {
   const tgNote  = buildTgNote(state.telegram);
 
   container.innerHTML = `
-    <div style="max-width:560px;margin:3rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif">
+    <div class="v2-page v2-page-center">
 
       ${topBar(dayNum, status, track.goal)}
       ${actionCard(dayPlan)}
-      ${insight ? `<div style="font-size:.78rem;color:#6b7280;padding:10px 12px;background:#0f172a;border-left:3px solid #374151;border-radius:4px;margin-bottom:16px">${esc(insight)}</div>` : ''}
+      ${insight ? `<div class="v2-insight">${esc(insight)}</div>` : ''}
 
-      <button id="td-agent"
-        style="width:100%;padding:13px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-weight:800;font-size:.95rem;cursor:pointer;margin-bottom:8px">
+      <button id="td-agent" class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full" style="margin-bottom:8px">
         Start with Agent →
       </button>
 
-      <div style="display:flex;gap:8px;margin-bottom:8px">
-        <button id="td-kit"
-          style="flex:1;padding:11px;background:#111827;color:#9ca3af;border:1px solid #1f2937;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer">
-          Action Kit
-        </button>
-        <button id="td-done"
-          style="flex:1;padding:11px;background:#111827;color:#9ca3af;border:1px solid #1f2937;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer">
-          I already did it
-        </button>
+      <div class="v2-row v2-row--mb">
+        <button id="td-kit"  class="v2-btn v2-btn--secondary" style="flex:1">Action Kit</button>
+        <button id="td-done" class="v2-btn v2-btn--secondary" style="flex:1">I already did it</button>
       </div>
 
-      <div style="display:flex;gap:8px;margin-bottom:20px">
-        <button id="td-blocked"
-          style="flex:1;padding:10px;background:transparent;color:#6b7280;border:1px solid #1f2937;border-radius:8px;font-size:.82rem;cursor:pointer">
-          I'm blocked
-        </button>
-        <button id="td-skip"
-          style="flex:1;padding:10px;background:transparent;color:#6b7280;border:1px solid #1f2937;border-radius:8px;font-size:.82rem;cursor:pointer">
-          Skip today
-        </button>
+      <div class="v2-row" style="margin-bottom:20px">
+        <button id="td-blocked" class="v2-btn v2-btn--ghost" style="flex:1">I'm blocked</button>
+        <button id="td-skip"    class="v2-btn v2-btn--ghost" style="flex:1">Skip today</button>
       </div>
 
       ${tgNote}
-      ${secondaryNav()}
+
     </div>`;
 
   container.querySelector('#td-agent')?.addEventListener('click', () => actions.onNavigate?.('/agent'));
@@ -127,42 +112,40 @@ function renderActive(container, track, today, dayPlan, state, actions) {
   container.querySelector('#td-done')?.addEventListener('click', () => actions.onNavigate?.('/proof?source=main'));
   container.querySelector('#td-blocked')?.addEventListener('click', () => actions.onNavigate?.('/blocked?type=blocked'));
   container.querySelector('#td-skip')?.addEventListener('click', () => actions.onNavigate?.('/blocked?type=skipped'));
-  wireNav(container, actions);
 }
 
 // ── Complete (done / rescued) ──────────────────────────────────────────────
 
 function renderComplete(container, track, today, dayPlan, status, actions) {
-  const dayNum = dayPlan.dayNumber || 1;
-  const isLast = dayNum >= 7;
-  const colour = STATUS_COLOR[status];
-  const label  = status === 'rescued' ? 'Rescued' : 'Done';
+  const dayNum  = dayPlan.dayNumber || 1;
+  const isLast  = dayNum >= 7;
+  const cardCls = status === 'rescued' ? 'v2-card v2-card--blue' : 'v2-card v2-card--green';
+  const label   = status === 'rescued' ? 'Rescued ✓' : 'Done ✓';
 
   container.innerHTML = `
-    <div style="max-width:560px;margin:3rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif">
+    <div class="v2-page v2-page-center">
 
       ${topBar(dayNum, status, track.goal)}
 
-      <div style="background:#0a1a0a;border:1px solid #166534;border-radius:10px;padding:16px;margin-bottom:20px">
-        <div style="font-size:.75rem;font-weight:700;color:${colour};text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">${esc(label)} ✓</div>
-        <div style="font-weight:700;color:#f9fafb;font-size:.95rem;line-height:1.4;margin-bottom:8px">${esc(dayPlan.title || '—')}</div>
-        ${today.proof?.value ? `<div style="font-size:.8rem;color:#6b7280;border-top:1px solid #14532d;padding-top:8px;margin-top:4px">Proof: ${esc(today.proof.value)}</div>` : ''}
+      <div class="${cardCls}" style="margin-bottom:20px">
+        <div class="v2-kicker" style="margin-bottom:8px">${esc(label)}</div>
+        <p class="v2-h3">${esc(dayPlan.title || '—')}</p>
+        ${today.proof?.value
+          ? `<p class="v2-muted-text" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--v2-border)">Proof: ${esc(today.proof.value)}</p>`
+          : ''}
       </div>
 
       ${isLast
-        ? `<button id="td-recap"
-            style="width:100%;padding:13px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-weight:800;font-size:.95rem;cursor:pointer;margin-bottom:10px">
-            Go to Day 7 Recap →
-          </button>`
-        : `<div style="color:#6b7280;font-size:.85rem;text-align:center;padding:14px 0">
-            Day ${dayNum} complete. Come back tomorrow for Day ${dayNum + 1}.
-          </div>`}
+        ? `<button id="td-recap" class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full" style="margin-bottom:10px">
+             Go to Day 7 Recap →
+           </button>`
+        : `<p class="v2-muted-text" style="text-align:center;padding:14px 0">
+             Day ${dayNum} complete. Come back tomorrow for Day ${dayNum + 1}.
+           </p>`}
 
-      ${secondaryNav()}
     </div>`;
 
   container.querySelector('#td-recap')?.addEventListener('click', () => actions.onNavigate?.('/recap'));
-  wireNav(container, actions);
 }
 
 // ── Blocked ────────────────────────────────────────────────────────────────
@@ -172,87 +155,82 @@ function renderBlocked(container, track, today, dayPlan, state, actions) {
   const insight = state.ui?.insight || '';
 
   container.innerHTML = `
-    <div style="max-width:560px;margin:3rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif">
+    <div class="v2-page v2-page-center">
 
       ${topBar(dayNum, 'blocked', track.goal)}
 
-      <div style="background:#1a1200;border:1px solid #92400e;border-radius:10px;padding:16px;margin-bottom:16px">
-        <div style="font-size:.75rem;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Blocked</div>
-        <div style="font-weight:700;color:#f9fafb;font-size:.92rem;line-height:1.4">${esc(dayPlan.title || '—')}</div>
-        ${today.blockerText ? `<div style="font-size:.82rem;color:#9ca3af;margin-top:8px">${esc(today.blockerText)}</div>` : ''}
+      <div class="v2-card v2-card--amber" style="margin-bottom:16px">
+        <div class="v2-kicker v2-badge v2-badge--blocked" style="margin-bottom:8px;align-self:flex-start">Blocked</div>
+        <p class="v2-h3">${esc(dayPlan.title || '—')}</p>
+        ${today.blockerText ? `<p class="v2-muted-text" style="margin-top:6px">${esc(today.blockerText)}</p>` : ''}
       </div>
 
-      <button id="td-rescue"
-        style="width:100%;padding:13px;background:#f59e0b;color:#000;border:none;border-radius:8px;font-weight:800;font-size:.95rem;cursor:pointer;margin-bottom:8px">
+      <button id="td-rescue" class="v2-btn v2-btn--amber v2-btn--lg v2-btn--full" style="margin-bottom:8px">
         Get Rescue Action →
       </button>
-      <button id="td-agent-b"
-        style="width:100%;padding:11px;background:#111827;color:#9ca3af;border:1px solid #1f2937;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer;margin-bottom:16px">
+      <button id="td-agent-b" class="v2-btn v2-btn--secondary v2-btn--full" style="margin-bottom:16px">
         Try Agent instead
       </button>
 
-      ${insight ? `<div style="font-size:.78rem;color:#6b7280;padding:10px 12px;background:#0f172a;border-left:3px solid #374151;border-radius:4px;margin-bottom:16px">${esc(insight)}</div>` : ''}
-      ${secondaryNav()}
+      ${insight ? `<div class="v2-insight">${esc(insight)}</div>` : ''}
+
     </div>`;
 
   container.querySelector('#td-rescue')?.addEventListener('click', () => actions.onNavigate?.('/blocked?type=blocked'));
   container.querySelector('#td-agent-b')?.addEventListener('click', () => actions.onNavigate?.('/agent'));
-  wireNav(container, actions);
 }
 
 // ── Inactive (skipped / missed) ────────────────────────────────────────────
 
 function renderInactive(container, track, today, dayPlan, status, actions) {
-  const dayNum = dayPlan.dayNumber || 1;
-  const label  = status === 'skipped' ? 'Skipped' : 'Missed';
-  const colour = STATUS_COLOR[status];
+  const dayNum  = dayPlan.dayNumber || 1;
+  const cardCls = status === 'missed' ? 'v2-card v2-card--red' : 'v2-card';
 
   container.innerHTML = `
-    <div style="max-width:560px;margin:3rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif">
+    <div class="v2-page v2-page-center">
 
       ${topBar(dayNum, status, track.goal)}
 
-      <div style="background:#111827;border:1px solid #1f2937;border-radius:10px;padding:16px;margin-bottom:16px">
-        <div style="font-size:.75rem;font-weight:700;color:${colour};text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">${esc(label)}</div>
-        <div style="font-weight:700;color:#9ca3af;font-size:.92rem;line-height:1.4">${esc(dayPlan.title || '—')}</div>
+      <div class="${cardCls}" style="margin-bottom:16px">
+        <div class="v2-kicker" style="margin-bottom:6px">
+          <span class="v2-badge v2-badge--${status}">${STATUS_LABEL[status] || status}</span>
+        </div>
+        <p class="v2-h3" style="color:var(--v2-text-2)">${esc(dayPlan.title || '—')}</p>
       </div>
 
-      <p style="color:#6b7280;font-size:.85rem;margin:0 0 16px">No action needed — the track will adapt. Come back tomorrow.</p>
+      <p class="v2-muted-text" style="margin-bottom:16px">No action needed — the track will adapt. Come back tomorrow.</p>
 
-      <button id="td-agent-r"
-        style="width:100%;padding:11px;background:#111827;color:#9ca3af;border:1px solid #1f2937;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer;margin-bottom:16px">
+      <button id="td-agent-r" class="v2-btn v2-btn--secondary v2-btn--full" style="margin-bottom:16px">
         Try it now with Agent →
       </button>
 
-      ${secondaryNav()}
     </div>`;
 
   container.querySelector('#td-agent-r')?.addEventListener('click', () => actions.onNavigate?.('/agent'));
-  wireNav(container, actions);
 }
 
 // ── Shared components ──────────────────────────────────────────────────────
 
 function topBar(dayNum, status, goal) {
-  const colour = STATUS_COLOR[status] || '#6b7280';
-  const label  = STATUS_LABEL[status] || String(status).toUpperCase();
+  const cls   = STATUS_CLASS[status] || 'v2-badge--pending';
+  const label = STATUS_LABEL[status] || String(status).toUpperCase();
   return `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-      <span style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#6b7280;text-transform:uppercase">Day ${dayNum} of 7</span>
-      <span style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:${colour}">· ${esc(label)}</span>
+    <div class="v2-kicker" style="margin-bottom:6px">
+      <span>Day ${dayNum} of 7</span>
+      <span class="v2-badge ${cls}">${esc(label)}</span>
     </div>
-    <p style="color:#6b7280;font-size:.8rem;margin:0 0 14px;line-height:1.4">${esc(goal || '')}</p>`;
+    <p class="v2-muted-text" style="margin-bottom:16px">${esc(goal || '')}</p>`;
 }
 
 function actionCard(dayPlan) {
   return `
-    <div style="margin-bottom:16px">
-      <h1 style="font-size:1.25rem;font-weight:800;color:#f9fafb;margin:0 0 8px;line-height:1.35">${esc(dayPlan.title || 'No task assigned')}</h1>
-      ${dayPlan.why ? `<p style="color:#9ca3af;font-size:.85rem;line-height:1.6;margin:0 0 10px">${esc(dayPlan.why)}</p>` : ''}
+    <div class="v2-today-action">
+      <h2 class="v2-today-title">${esc(dayPlan.title || 'No task assigned')}</h2>
+      ${dayPlan.why ? `<p class="v2-body-text" style="margin-bottom:10px">${esc(dayPlan.why)}</p>` : ''}
       ${dayPlan.successCriteria
-        ? `<div style="font-size:.8rem;color:#4b5563;padding:9px 12px;background:#0f172a;border-left:3px solid #1d4ed8;border-radius:4px;margin-bottom:10px">Done means: ${esc(dayPlan.successCriteria)}</div>`
+        ? `<div class="v2-done-criteria">Done means: ${esc(dayPlan.successCriteria)}</div>`
         : ''}
-      <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:.76rem;color:#4b5563">
+      <div class="v2-muted-text" style="display:flex;gap:12px;flex-wrap:wrap">
         <span>${dayPlan.estimateMinutes || 60} min</span>
         ${dayPlan.category ? `<span>· ${esc(dayPlan.category)}</span>` : ''}
         ${dayPlan.blockerRisk ? `<span>· Risk: ${esc(dayPlan.blockerRisk)}</span>` : ''}
@@ -260,26 +238,11 @@ function actionCard(dayPlan) {
     </div>`;
 }
 
-
 function buildTgNote(telegram) {
   if (!telegram?.connected) return '';
   const h      = telegram.pingHour ?? 9;
   const period = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
-  return `<div style="font-size:.76rem;color:#4b5563;margin-bottom:16px">Telegram check-in: ${period} · ${h}:00 UTC</div>`;
-}
-
-function secondaryNav() {
-  return `
-    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px">
-      <button data-route="/progress" style="padding:8px 0;background:transparent;color:#4b5563;border:none;font-size:.78rem;cursor:pointer">Progress</button>
-      <button data-route="/settings" style="padding:8px 0;background:transparent;color:#4b5563;border:none;font-size:.78rem;cursor:pointer">Settings</button>
-    </div>`;
-}
-
-function wireNav(container, actions) {
-  container.querySelectorAll('[data-route]').forEach((el) => {
-    el.addEventListener('click', () => actions.onNavigate?.(el.getAttribute('data-route')));
-  });
+  return `<p class="v2-muted-text" style="margin-bottom:16px">Telegram check-in: ${period} · ${h}:00 UTC</p>`;
 }
 
 function setText(id, value) {

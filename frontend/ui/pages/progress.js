@@ -1,15 +1,14 @@
 // Progress — /progress
-// Shows the 7-day track grid, per-day status, and session-level stats.
-// Visible any time an active track exists (not gated to Day 7).
+// 7-day track timeline with polished cards and stats.
 
 const STATUS_META = Object.freeze({
-  done:        { label: 'Done',        color: '#22c55e', bg: '#052e16', border: '#166534' },
-  rescued:     { label: 'Rescued',     color: '#3b82f6', bg: '#0c1a2e', border: '#1d4ed8' },
-  blocked:     { label: 'Blocked',     color: '#f59e0b', bg: '#1a1200', border: '#92400e' },
-  skipped:     { label: 'Skipped',     color: '#6b7280', bg: '#111827', border: '#374151' },
-  missed:      { label: 'Missed',      color: '#ef4444', bg: '#1a0a0a', border: '#7f1d1d' },
-  in_progress: { label: 'In progress', color: '#a78bfa', bg: '#0f0a1e', border: '#6d28d9' },
-  pending:     { label: 'Pending',     color: '#4b5563', bg: '#0f172a', border: '#1f2937' },
+  done:        { label: 'Done',        cls: 'v2-badge--done',     cardCls: 'v2-day-card--done'    },
+  rescued:     { label: 'Rescued',     cls: 'v2-badge--rescued',  cardCls: 'v2-day-card--rescued' },
+  blocked:     { label: 'Blocked',     cls: 'v2-badge--blocked',  cardCls: 'v2-day-card--blocked' },
+  skipped:     { label: 'Skipped',     cls: 'v2-badge--skipped',  cardCls: 'v2-day-card--skipped' },
+  missed:      { label: 'Missed',      cls: 'v2-badge--missed',   cardCls: 'v2-day-card--missed'  },
+  in_progress: { label: 'In progress', cls: 'v2-badge--in-prog',  cardCls: ''                     },
+  pending:     { label: 'Pending',     cls: 'v2-badge--pending',  cardCls: ''                     },
 });
 
 export function render(container, state, actions) {
@@ -22,33 +21,42 @@ export function render(container, state, actions) {
 
   const entries  = Array.isArray(history?.entries) ? history.entries : [];
   const patterns = Array.isArray(history?.failurePatterns) ? history.failurePatterns : [];
-
-  const stats    = computeStats(track, entries, patterns, telegram);
+  const stats    = computeStats(track, entries, telegram);
   const days     = buildDayRows(track, entries);
+  const done     = days.filter((d) => d.status === 'done' || d.status === 'rescued').length;
+  const total    = days.length;
+  const pct      = total ? Math.round((done / total) * 100) : 0;
 
   container.innerHTML = `
-    <div style="max-width:560px;margin:3rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif">
+    <div class="v2-page">
 
-      <div style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#6b7280;text-transform:uppercase;margin-bottom:8px">Progress</div>
-      <h1 style="font-size:1.35rem;font-weight:800;color:#f9fafb;margin:0 0 4px">7-day track</h1>
-      <p style="color:#6b7280;font-size:.82rem;margin:0 0 24px;line-height:1.5">${esc(track.goal || '')}</p>
-
-      ${renderDayGrid(days)}
-      ${renderStats(stats)}
-      ${renderPatternNote(patterns)}
-
-      <div style="margin-top:24px;display:flex;gap:10px;flex-wrap:wrap">
-        <button data-route="/today"
-          style="padding:9px 18px;background:transparent;color:#6b7280;border:1px solid #374151;border-radius:8px;font-weight:600;cursor:pointer;font-size:.85rem">
-          ← Today
-        </button>
+      <div class="v2-section-head" style="margin-bottom:20px">
+        <div>
+          <div class="v2-kicker v2-kicker--muted">7-Day Track</div>
+          <h1 class="v2-h1" style="margin-bottom:4px">Your progress</h1>
+          <p class="v2-sub" style="margin:0">${esc(track.goal || '')}</p>
+        </div>
         ${track.status === 'complete'
-          ? `<button data-route="/recap"
-               style="padding:9px 18px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:.85rem;cursor:pointer">
-               View Recap →
-             </button>`
+          ? `<button data-route="/recap" class="v2-btn v2-btn--primary">View Recap →</button>`
           : ''}
       </div>
+
+      <div class="v2-card" style="margin-bottom:20px">
+        <div class="v2-section-label" style="margin-bottom:12px">Completion</div>
+        <div class="v2-progress" style="margin-bottom:8px"><div class="v2-progress-fill" style="width:${pct}%"></div></div>
+        <p class="v2-muted-text">${done} of ${total} days complete · ${pct}%</p>
+      </div>
+
+      ${renderStats(stats)}
+
+      <div class="v2-section-label" style="margin-bottom:12px;margin-top:24px">7-Day Timeline</div>
+      <div class="v2-timeline">
+        ${days.map(renderDayCard).join('')}
+      </div>
+
+      ${renderPatternNote(patterns)}
+
+      <button data-route="/today" class="v2-btn v2-btn--ghost">← Back to Today</button>
 
     </div>`;
 
@@ -57,11 +65,10 @@ export function render(container, state, actions) {
   });
 }
 
-// ── Day grid ──────────────────────────────────────────────────────────────
+// ── Day cards ─────────────────────────────────────────────────────────────
 
 function buildDayRows(track, entries) {
   return track.days.map((day) => {
-    // Prefer the day plan's own status as ground truth; fall back to history entry
     const histEntry = entries.find((e) => e.dayNumber === day.dayNumber && e.trackId === track.id);
     const status    = day.status || histEntry?.outcome || 'pending';
     const isToday   = day.dayNumber === track.currentDayNumber;
@@ -69,59 +76,58 @@ function buildDayRows(track, entries) {
   });
 }
 
-function renderDayGrid(rows) {
-  const cards = rows.map(({ day, status, isToday }) => {
-    const meta = STATUS_META[status] || STATUS_META.pending;
-    return `
-      <div style="background:${meta.bg};border:1px solid ${isToday ? '#3b82f6' : meta.border};border-radius:8px;padding:12px 14px;position:relative">
-        ${isToday ? '<div style="position:absolute;top:8px;right:10px;font-size:.65rem;color:#60a5fa;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Today</div>' : ''}
-        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
-          <span style="font-size:.68rem;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:.06em">Day ${day.dayNumber}</span>
-          <span style="font-size:.68rem;font-weight:700;color:${meta.color};text-transform:uppercase;letter-spacing:.05em">${esc(meta.label)}</span>
-        </div>
-        <div style="color:#d1d5db;font-size:.87rem;font-weight:600;line-height:1.35;padding-right:${isToday ? '44px' : '0'}">${esc(day.title || '—')}</div>
-        ${day.date ? `<div style="color:#4b5563;font-size:.73rem;margin-top:4px">${esc(day.date)}</div>` : ''}
-      </div>`;
-  }).join('');
+function renderDayCard({ day, status, isToday }) {
+  const meta = STATUS_META[status] || STATUS_META.pending;
+  const todayCls = isToday ? ' v2-day-card--today' : '';
+  const statusCls = meta.cardCls ? ` ${meta.cardCls}` : '';
 
-  return `<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:24px">${cards}</div>`;
+  return `
+    <div class="v2-day-card${todayCls}${statusCls}">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="v2-section-label" style="margin:0">Day ${day.dayNumber}</span>
+          <span class="v2-badge ${meta.cls}">${esc(meta.label)}</span>
+        </div>
+        ${isToday ? `<span class="v2-badge v2-badge--today">Today</span>` : ''}
+      </div>
+      <p class="v2-body-text" style="margin:0;padding-right:${isToday ? '0' : '0'}">${esc(day.title || '—')}</p>
+      ${day.date ? `<p class="v2-muted-text" style="margin:4px 0 0">${esc(day.date)}</p>` : ''}
+    </div>`;
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────
 
-function computeStats(track, entries, patterns, telegram) {
-  const trackEntries = entries.filter((e) => e.trackId === track.id);
-
+function computeStats(track, entries, telegram) {
+  const te = entries.filter((e) => e.trackId === track.id);
   return {
-    daysReturned:    trackEntries.length,
-    done:            trackEntries.filter((e) => e.outcome === 'done').length,
-    rescued:         trackEntries.filter((e) => e.outcome === 'rescued').length,
-    missed:          trackEntries.filter((e) => e.outcome === 'missed').length,
-    skipped:         trackEntries.filter((e) => e.outcome === 'skipped').length,
-    agentSessions:   trackEntries.filter((e) => e.agentUsed).length,
-    actionKitsUsed:  0, // not yet tracked per-entry; reserved for future
-    telegramPings:   telegram?.lastPingSentAt ? 1 : 0, // basic signal; full count requires server log
+    daysReturned:  te.length,
+    done:          te.filter((e) => e.outcome === 'done').length,
+    rescued:       te.filter((e) => e.outcome === 'rescued').length,
+    missed:        te.filter((e) => e.outcome === 'missed').length,
+    skipped:       te.filter((e) => e.outcome === 'skipped').length,
+    agentSessions: te.filter((e) => e.agentUsed).length,
+    telegramPings: telegram?.lastPingSentAt ? 1 : 0,
   };
 }
 
 function renderStats(s) {
   const items = [
-    { label: 'Days returned',    value: s.daysReturned,   color: '#f9fafb' },
-    { label: 'Done',             value: s.done,           color: '#22c55e' },
-    { label: 'Rescued',          value: s.rescued,        color: '#3b82f6' },
-    { label: 'Missed',           value: s.missed,         color: '#ef4444' },
-    { label: 'Skipped',          value: s.skipped,        color: '#6b7280' },
-    { label: 'Agent sessions',   value: s.agentSessions,  color: '#a78bfa' },
+    { label: 'Days returned',  value: s.daysReturned,  color: 'var(--v2-text)'   },
+    { label: 'Done',           value: s.done,           color: 'var(--v2-green)'  },
+    { label: 'Rescued',        value: s.rescued,        color: 'var(--v2-blue-l)' },
+    { label: 'Missed',         value: s.missed,         color: 'var(--v2-red)'    },
+    { label: 'Skipped',        value: s.skipped,        color: 'var(--v2-muted)'  },
+    { label: 'Agent sessions', value: s.agentSessions,  color: 'var(--v2-violet)' },
   ];
 
   return `
-    <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;padding:16px;margin-bottom:16px">
-      <div style="font-size:.7rem;font-weight:700;letter-spacing:.08em;color:#6b7280;text-transform:uppercase;margin-bottom:12px">Stats</div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+    <div class="v2-card">
+      <div class="v2-section-label" style="margin-bottom:14px">Session stats</div>
+      <div class="v2-stats-grid">
         ${items.map((item) => `
-          <div>
-            <div style="font-size:1.25rem;font-weight:800;color:${item.color}">${item.value}</div>
-            <div style="font-size:.7rem;color:#4b5563;margin-top:1px">${esc(item.label)}</div>
+          <div class="v2-stat-cell">
+            <div style="font-family:var(--v2-fhead);font-size:1.5rem;font-weight:800;color:${item.color};line-height:1">${item.value}</div>
+            <div class="v2-muted-text" style="margin-top:4px">${esc(item.label)}</div>
           </div>`).join('')}
       </div>
     </div>`;
@@ -147,9 +153,9 @@ function renderPatternNote(patterns) {
   };
 
   return `
-    <div style="background:#1a1200;border:1px solid #92400e;border-radius:8px;padding:12px 14px;margin-bottom:8px">
-      <div style="font-size:.7rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Recurring pattern</div>
-      <div style="color:#fbbf24;font-size:.85rem;font-weight:600">${esc(LABELS[top] || top)} · appeared ${topCount}×</div>
+    <div class="v2-card v2-card--amber" style="margin-bottom:16px;margin-top:16px">
+      <div class="v2-section-label" style="margin-bottom:6px">Recurring pattern</div>
+      <p style="color:var(--v2-amber);font-weight:700;font-size:.875rem;margin:0">${esc(LABELS[top] || top)} · appeared ${topCount}×</p>
     </div>`;
 }
 

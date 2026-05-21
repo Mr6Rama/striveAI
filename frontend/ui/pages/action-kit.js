@@ -1,13 +1,12 @@
 // Action Kit — /action-kit
 // Generates practical, task-specific material to help the user start or finish today's action.
-// Items are AI-generated once per day and persisted — never regenerated on every render.
 
 const TYPE_META = Object.freeze({
-  template:  { label: 'Template',     bg: '#0c1a2e', border: '#1d4ed8', mono: true  },
-  reference: { label: 'Reference',    bg: '#0f172a', border: '#1f2937', mono: false },
-  question:  { label: 'Ask yourself', bg: '#1a1200', border: '#92400e', mono: false },
-  tool:      { label: 'Tool',         bg: '#0f172a', border: '#374151', mono: false },
-  tip:       { label: 'Quick tip',    bg: '#0a1a0a', border: '#166534', mono: false },
+  template:  { label: 'Template',     cls: 'v2-kit-item--template', mono: true  },
+  reference: { label: 'Reference',    cls: 'v2-kit-item--reference', mono: false },
+  question:  { label: 'Ask yourself', cls: 'v2-kit-item--question',  mono: false },
+  tool:      { label: 'Tool',         cls: 'v2-kit-item--tool',      mono: false },
+  tip:       { label: 'Quick tip',    cls: 'v2-kit-item--tip',       mono: false },
 });
 
 export function render(container, state, actions) {
@@ -26,50 +25,39 @@ export function render(container, state, actions) {
   const hasKit  = Array.isArray(kit) && kit.length > 0;
 
   container.innerHTML = `
-    <div style="max-width:600px;margin:3rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif">
+    <div class="v2-page">
 
-      <div style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#6b7280;text-transform:uppercase;margin-bottom:8px">
-        Action Kit · Day ${dayNum} of 7
-      </div>
-      <h1 style="font-size:1.35rem;font-weight:800;color:#f9fafb;margin:0 0 6px">Tools for today</h1>
-      <p style="color:#9ca3af;font-size:.85rem;margin:0 0 20px;line-height:1.5">${esc(dayPlan.title || 'your task')}</p>
+      <div class="v2-kicker v2-kicker--muted" style="margin-bottom:8px">Action Kit · Day ${dayNum} of 7</div>
+      <h1 class="v2-h1" style="margin-bottom:6px">Tools for today</h1>
+      <p class="v2-sub">${esc(dayPlan.title || 'your task')}</p>
 
-      ${hasKit  ? renderItems(kit) : renderEmpty(loading, dayPlan)}
+      ${hasKit ? renderItems(kit) : renderEmpty(loading)}
 
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:24px">
-        <button data-route="/agent"
-          style="flex:1;min-width:140px;padding:11px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:.88rem;cursor:pointer">
+      <div class="v2-row" style="margin-top:24px">
+        <button data-route="/agent" class="v2-btn v2-btn--primary" style="flex:1">
           Start with Agent
         </button>
-        ${hasKit ? `<button id="ak-used"
-          style="flex:1;min-width:120px;padding:11px;background:#111827;color:#9ca3af;border:1px solid #1f2937;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer">
+        ${hasKit ? `<button id="ak-used" class="v2-btn v2-btn--secondary" style="flex:1">
           I used this
         </button>` : ''}
       </div>
 
-      <div style="margin-top:10px">
-        <button data-route="/today" style="padding:8px 0;background:transparent;color:#4b5563;border:none;font-size:.78rem;cursor:pointer">
-          ← Back to Today
-        </button>
-      </div>
+      <button data-route="/today" class="v2-btn v2-btn--ghost" style="margin-top:8px">
+        ← Back to Today
+      </button>
 
     </div>`;
 
   if (!hasKit && !loading) {
-    container.querySelector('#ak-generate')?.addEventListener('click', () => {
-      actions.onKitGenerate?.();
-    });
+    container.querySelector('#ak-generate')?.addEventListener('click', () => actions.onKitGenerate?.());
   }
 
-  container.querySelector('#ak-used')?.addEventListener('click', () => {
-    actions.onNavigate?.('/today');
-  });
+  container.querySelector('#ak-used')?.addEventListener('click', () => actions.onNavigate?.('/today'));
 
   container.querySelectorAll('[data-route]').forEach((el) => {
     el.addEventListener('click', () => actions.onNavigate?.(el.getAttribute('data-route')));
   });
 
-  // Copy buttons for template items
   container.querySelectorAll('[data-copy]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const text = decodeURIComponent(btn.getAttribute('data-copy') || '');
@@ -85,29 +73,24 @@ export function render(container, state, actions) {
 
 function renderEmpty(loading) {
   if (loading) {
-    return `
-      <div style="text-align:center;padding:32px 0">
-        <div style="color:#6b7280;font-size:.88rem;margin-bottom:16px">Generating your kit…</div>
-        <div style="display:inline-block;width:18px;height:18px;border:2px solid #1f2937;border-top-color:#3b82f6;border-radius:50%;animation:spin .8s linear infinite"></div>
-        <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
-      </div>`;
+    return `<div class="v2-loading-center">
+      <div class="v2-spin"></div>
+      <p class="v2-muted-text">Generating your kit…</p>
+    </div>`;
   }
   return `
-    <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;padding:20px;text-align:center">
-      <p style="color:#6b7280;font-size:.88rem;margin:0 0 16px;line-height:1.6">
+    <div class="v2-card" style="text-align:center;padding:24px">
+      <p class="v2-sub" style="margin-bottom:16px">
         Generate a kit with templates, questions, and quick tips tailored to today's task.
       </p>
-      <button id="ak-generate"
-        style="padding:12px 24px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:.9rem;cursor:pointer">
+      <button id="ak-generate" class="v2-btn v2-btn--primary v2-btn--lg">
         Generate Action Kit
       </button>
     </div>`;
 }
 
 function renderItems(items) {
-  return `<div style="display:flex;flex-direction:column;gap:10px">
-    ${items.map((item) => renderItem(item)).join('')}
-  </div>`;
+  return `<div>${items.map((item) => renderItem(item)).join('')}</div>`;
 }
 
 function renderItem(item) {
@@ -116,17 +99,15 @@ function renderItem(item) {
   const encoded = encodeURIComponent(item.content);
 
   return `
-    <div style="background:${meta.bg};border:1px solid ${meta.border};border-radius:10px;padding:16px">
+    <div class="v2-kit-item ${meta.cls}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div style="font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#6b7280">
-          ${esc(meta.label)}${item.label ? ` · ${esc(item.label)}` : ''}
-        </div>
+        <span class="v2-section-label" style="margin:0">${esc(meta.label)}${item.label ? ` · ${esc(item.label)}` : ''}</span>
         ${meta.mono
-          ? `<button data-copy="${encoded}" style="padding:3px 8px;background:transparent;color:#4b5563;border:1px solid #374151;border-radius:4px;font-size:.7rem;cursor:pointer">Copy</button>`
+          ? `<button data-copy="${encoded}" class="v2-btn v2-btn--ghost v2-btn--sm">Copy</button>`
           : ''}
       </div>
-      <div style="color:#d1d5db;font-size:.88rem;line-height:1.65;${meta.mono ? 'font-family:monospace;white-space:pre-wrap;font-size:.82rem;' : ''}">
-        ${meta.mono ? content : content}
+      <div class="v2-body-text" style="${meta.mono ? 'font-family:var(--v2-fmono);white-space:pre-wrap;font-size:.82rem;' : ''}">
+        ${content}
       </div>
     </div>`;
 }
