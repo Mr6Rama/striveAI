@@ -89,7 +89,7 @@ function renderActive(container, track, today, dayPlan, state, actions) {
       ${actionCard(dayPlan)}
       ${insight ? `<div class="v2-insight">${esc(insight)}</div>` : ''}
 
-      <button id="td-agent" class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full" style="margin-bottom:8px">
+      <button id="td-agent" class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full" style="margin-bottom:10px">
         Start with Agent →
       </button>
 
@@ -224,16 +224,17 @@ function topBar(dayNum, status, goal) {
 
 function actionCard(dayPlan) {
   return `
-    <div class="v2-today-action">
+    <div class="v2-card v2-card--focus v2-bracketed" style="margin-bottom:20px;overflow:visible">
+      <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
+      <div class="v2-today-action">// Today's mission</div>
       <h2 class="v2-today-title">${esc(dayPlan.title || 'No task assigned')}</h2>
-      ${dayPlan.why ? `<p class="v2-body-text" style="margin-bottom:10px">${esc(dayPlan.why)}</p>` : ''}
+      ${dayPlan.why ? `<p class="v2-body-text" style="margin-bottom:12px">${esc(dayPlan.why)}</p>` : ''}
       ${dayPlan.successCriteria
-        ? `<div class="v2-done-criteria">Done means: ${esc(dayPlan.successCriteria)}</div>`
+        ? `<div class="v2-done-criteria" style="margin-bottom:10px">Done means: ${esc(dayPlan.successCriteria)}</div>`
         : ''}
-      <div class="v2-muted-text" style="display:flex;gap:12px;flex-wrap:wrap">
-        <span>${dayPlan.estimateMinutes || 60} min</span>
-        ${dayPlan.category ? `<span>· ${esc(dayPlan.category)}</span>` : ''}
-        ${dayPlan.blockerRisk ? `<span>· Risk: ${esc(dayPlan.blockerRisk)}</span>` : ''}
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+        <div class="v2-section-label" style="margin:0">${dayPlan.estimateMinutes || 60} min</div>
+        ${dayPlan.category ? `<div class="v2-section-label" style="margin:0">${esc(dayPlan.category)}</div>` : ''}
       </div>
     </div>`;
 }

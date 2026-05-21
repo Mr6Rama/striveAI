@@ -689,6 +689,14 @@ function handleRouteChange(route) {
 
 let _lastShellRoute = null;
 
+function _buildWatermark() {
+  const row = 'STRIVE<span class="v2-wm-dot">·</span>STRIVE<span class="v2-wm-dot">·</span>STRIVE<span class="v2-wm-dot">·</span>STRIVE<span class="v2-wm-dot">·</span>STRIVE<span class="v2-wm-dot">·</span>STRIVE';
+  const rows = Array.from({ length: 11 }, (_, i) =>
+    `<div class="v2-wm-row${i % 2 ? ' alt' : ''}" aria-hidden="true">${row}</div>`
+  ).join('');
+  return `<div class="v2-watermark" aria-hidden="true">${rows}</div>`;
+}
+
 function _esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -724,7 +732,7 @@ function buildShellNav(state, route) {
       <span class="v2-nav-logo-name">StriveAI</span>
     </button>
     <nav class="v2-nav-links">${links}</nav>
-    <div class="v2-nav-right">${dayChip}<div class="v2-nav-user">${initial}</div></div>
+    <div class="v2-nav-right">${dayChip}<div class="v2-nav-avatar">${initial}</div></div>
   </header>`;
 }
 
@@ -781,7 +789,7 @@ function renderApp(state) {
 
   const publicRoutes = new Set(['/', '/landing', '/auth']);
   if (publicRoutes.has(route)) {
-    root.innerHTML = '<div class="v2-public"></div>';
+    root.innerHTML = `${_buildWatermark()}<div class="v2-public"></div>`;
     renderRoute(root.querySelector('.v2-public'), route, renderState, actions);
     return;
   }
@@ -791,7 +799,7 @@ function renderApp(state) {
   if (!content || _lastShellRoute !== route) {
     const navHtml = buildShellNav(renderState, route);
     if (!content) {
-      root.innerHTML = `<div class="v2-shell">${navHtml}<main class="v2-content" id="v2-content"></main></div>`;
+      root.innerHTML = `${_buildWatermark()}<div class="v2-shell">${navHtml}<main class="v2-content" id="v2-content"></main></div>`;
     } else {
       // Replace just the nav to update active states
       const oldNav = root.querySelector('.v2-nav');
