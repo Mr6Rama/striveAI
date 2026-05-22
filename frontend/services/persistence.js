@@ -30,6 +30,18 @@ export async function saveDomains(domains, { userId, db }) {
   await writeCloudDomains(domains, { userId, db });
 }
 
+export async function clearProgressData({ userId, db }) {
+  const progressKeys = [K.track, K.today, K.history];
+  progressKeys.forEach((k) => localStorage.removeItem(k));
+  if (!userId || !db) return;
+  try {
+    const kvRef = db.collection('users').doc(userId).collection('kv');
+    await Promise.all(progressKeys.map((k) => kvRef.doc(k).delete().catch(() => {})));
+  } catch (error) {
+    console.warn('Cloud progress wipe failed (local cleared)', error);
+  }
+}
+
 export async function saveDomain(name, value, { userId, db }) {
   if (!Object.prototype.hasOwnProperty.call(K, name)) return;
   const key = K[name];
@@ -130,6 +142,10 @@ function validateUser(raw) {
                        ? raw.experienceLevel : 'intermediate',
     dailyHours:      ['1-2', '2-4', '4-6', '6-8', '8+'].includes(raw.dailyHours)
                        ? raw.dailyHours : '2-4',
+    currentProject:  String(raw.currentProject || '').slice(0, 200),
+    weekGoal:        String(raw.weekGoal       || '').slice(0, 200),
+    whyItMatters:    String(raw.whyItMatters   || '').slice(0, 200),
+    triedBefore:     String(raw.triedBefore    || '').slice(0, 200),
   };
 }
 

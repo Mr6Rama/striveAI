@@ -73,6 +73,7 @@ const DRAFT_KEY = 'sv2_onboarding_draft';
 function defaultDraft() {
   return {
     goalCategory: '', goalTemplate: '', specificGoal: '',
+    currentProject: '', weekGoal: '', whyItMatters: '', triedBefore: '',
     blocker: '', dailyHours: '2-4', ifThenRules: [],
     pingSelection: 'morning', pingHour: 9, escalationRule: '',
   };
@@ -220,16 +221,37 @@ function renderCategory(container) {
 function renderTemplate(container) {
   const tpls = (TEMPLATES[draft.goalCategory] || TEMPLATES.other).map((t) => ({ id: t, label: t }));
   container.innerHTML = wrap(`
-    ${hdr(2, 'Pick the closest goal')}
+    ${hdr(2, 'Tell us about your goal', 'The more specific, the more your plan fits you.')}
     ${selGrid(tpls, draft.goalTemplate, 'data-tpl')}
     <div class="v2-field">
-      <label class="v2-label">Make it more specific (optional)</label>
+      <label class="v2-label">Make it more specific</label>
       <input id="ob-specific" type="text" placeholder="e.g. Build a Notion clone in Next.js" value="${esc(draft.specificGoal)}" class="v2-input"/>
+    </div>
+    <div class="v2-field">
+      <label class="v2-label">What are you working on right now?</label>
+      <input id="ob-current" type="text" placeholder="e.g. A landing page for my SaaS idea" value="${esc(draft.currentProject)}" class="v2-input"/>
+    </div>
+    <div class="v2-field">
+      <label class="v2-label">By day 7, you want to have…</label>
+      <input id="ob-week" type="text" placeholder="e.g. A working signup form and 5 waitlist users" value="${esc(draft.weekGoal)}" class="v2-input"/>
+    </div>
+    <div class="v2-field">
+      <label class="v2-label">Why does this matter to you? <span class="v2-muted-text">(optional)</span></label>
+      <input id="ob-why" type="text" placeholder="e.g. So I can validate the idea before quitting my job" value="${esc(draft.whyItMatters)}" class="v2-input"/>
+    </div>
+    <div class="v2-field">
+      <label class="v2-label">What have you already tried? <span class="v2-muted-text">(optional)</span></label>
+      <input id="ob-tried" type="text" placeholder="e.g. Started twice, got stuck after the auth setup" value="${esc(draft.triedBefore)}" class="v2-input"/>
     </div>
     ${errDiv()}${nextBtn()}${backBtn()}`);
 
   bindCards(container, 'data-tpl', () => draft.goalTemplate, (v) => { draft.goalTemplate = v; });
-  container.querySelector('#ob-specific')?.addEventListener('input', (e) => { draft.specificGoal = e.target.value; saveDraft(); });
+  const bind = (id, key) => container.querySelector(id)?.addEventListener('input', (e) => { draft[key] = e.target.value; saveDraft(); });
+  bind('#ob-specific', 'specificGoal');
+  bind('#ob-current',  'currentProject');
+  bind('#ob-week',     'weekGoal');
+  bind('#ob-why',      'whyItMatters');
+  bind('#ob-tried',    'triedBefore');
 
   container.querySelector('#ob-next')?.addEventListener('click', () => {
     if (!draft.goalTemplate && !draft.specificGoal.trim()) {

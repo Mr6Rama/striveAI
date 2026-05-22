@@ -3,7 +3,7 @@
 import { createInitialState, createDefaultTodayV2, isoDateNow } from './core/state-model.js';
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
-import { loadPersistedDomains, saveDomains, saveDomain } from './services/persistence.js';
+import { loadPersistedDomains, saveDomains, saveDomain, clearProgressData } from './services/persistence.js';
 import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay, generateDay7Recap, generateContinuationWeek } from './services/ai-v2.js';
 import { rolloverIfNeeded, analyzePatterns, deriveInsight, shouldTriggerAdaptation, applyAdaptResult, isTrackComplete } from './domain/today-engine.js';
 import { resetProofState } from './ui/pages/proof.js';
@@ -128,6 +128,10 @@ async function handleGenerate(draft) {
       dailyHours:       draft.dailyHours,
       experienceLevel:  state.user.experienceLevel || 'intermediate',
       blockerHint:      draft.blocker,
+      currentProject:   draft.currentProject || '',
+      weekGoal:         draft.weekGoal || '',
+      whyItMatters:     draft.whyItMatters || '',
+      triedBefore:      draft.triedBefore || '',
     });
 
     const startDate = isoDateNow();
@@ -152,7 +156,15 @@ async function handleGenerate(draft) {
 
     const today   = createDefaultTodayV2(startDate, 1);
     const domains = {
-      user:     { ...state.user, goalCategory: draft.goalCategory, dailyHours: draft.dailyHours },
+      user:     {
+        ...state.user,
+        goalCategory:   draft.goalCategory,
+        dailyHours:     draft.dailyHours,
+        currentProject: draft.currentProject || state.user.currentProject || '',
+        weekGoal:       draft.weekGoal || state.user.weekGoal || '',
+        whyItMatters:   draft.whyItMatters || state.user.whyItMatters || '',
+        triedBefore:    draft.triedBefore || state.user.triedBefore || '',
+      },
       track,
       today,
       history:  state.history,
@@ -658,6 +670,21 @@ async function handleRecapNewTrack() {
   navigate('/onboarding', handleRouteChange, true);
 }
 
+async function handleResetProgress() {
+  const state   = getState();
+  const initial = createInitialState();
+  const cleared = {
+    ...initial,
+    user:     state.user,
+    telegram: state.telegram,
+    ui:       { ...initial.ui, authReady: true },
+  };
+  await clearProgressData({ userId: currentUser?.uid, db: getDb() });
+  await saveDomain('user', cleared.user, { userId: currentUser?.uid, db: getDb() });
+  replaceState(cleared);
+  navigate('/onboarding', handleRouteChange, true);
+}
+
 function buildArchivedTrack(track, entries) {
   const te = (entries || []).filter((e) => e.trackId === track.id);
   return {
@@ -785,6 +812,7 @@ function renderApp(state) {
     onRecapLoadReflection:    handleRecapLoadReflection,
     onRecapContinue:          handleRecapContinue,
     onRecapNewTrack:          handleRecapNewTrack,
+    onResetProgress:          handleResetProgress,
   };
 
   const publicRoutes = new Set(['/', '/landing', '/auth']);

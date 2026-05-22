@@ -66,6 +66,19 @@ export function render(container, state, actions) {
         </div>
       </section>
 
+      <section style="margin-bottom:24px">
+        <div class="v2-section-label" style="margin-bottom:12px">Danger zone</div>
+        <div class="v2-card" style="border-color:rgba(220,38,38,.25)">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:16px">
+            <div>
+              <p class="v2-body-text">Reset progress</p>
+              <p class="v2-muted-text" style="margin-top:3px">Erases your current 7-day track and all progress. Account stays. You'll start onboarding fresh.</p>
+            </div>
+            <button id="v2-reset-progress" class="v2-btn v2-btn--danger v2-btn--sm">Reset</button>
+          </div>
+        </div>
+      </section>
+
     </div>`;
 
   container.querySelectorAll('[data-route]').forEach((el) => {
@@ -74,6 +87,10 @@ export function render(container, state, actions) {
   container.querySelector('#v2-signout')?.addEventListener('click', () => actions.onSignOut?.());
   container.querySelector('#v2-tg-connect')?.addEventListener('click', () => actions.onNavigate?.('/today'));
   container.querySelector('#v2-tg-disconnect')?.addEventListener('click', () => actions.onTelegramDisconnect?.());
+  container.querySelector('#v2-reset-progress')?.addEventListener('click', () => {
+    const ok = window.confirm('This will erase your current 7-day track and all progress. Your account stays. Continue?');
+    if (ok) actions.onResetProgress?.();
+  });
 }
 
 export function renderSettings(state) {
