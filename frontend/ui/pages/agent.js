@@ -96,6 +96,10 @@ function renderExecution(container, dayPlan, track, today, session, insight, loa
         </div>
 
         <div style="flex:1;min-width:260px">
+          <div class="v2-agent-intro">
+            <strong>Agent walks you through ${steps.length} short steps.</strong>
+            Do each one in your own tools, drop a quick note, then mark it done — that's how today's task gets finished.
+          </div>
           ${progressPills(steps, currentStepIndex)}
           ${stepList(steps, currentStepIndex, stepNote, loading)}
           <button data-route="/today" class="v2-btn v2-btn--ghost" style="margin-top:6px">← Back to Today</button>
@@ -274,16 +278,37 @@ function contextPanel(dayPlan, track, today, insight) {
 }
 
 function progressPills(steps, currentIndex) {
-  const pills = steps.map((_, i) => {
+  const pills = steps.map((step, i) => {
     const cls = i < currentIndex ? 'v2-step-pill--done' : i === currentIndex ? 'v2-step-pill--active' : '';
     const label = i < currentIndex ? '✓' : String(i + 1);
-    return `<div class="v2-step-pill ${cls}">${label}</div>`;
+    const tag = stepTag(step.text);
+    return `
+      <div class="v2-step-pill-wrap">
+        <div class="v2-step-pill ${cls}">${label}</div>
+        ${tag ? `<div class="v2-step-pill-tag">${esc(tag)}</div>` : ''}
+      </div>`;
   }).join('');
   return `
     <div class="v2-step-pills">${pills}</div>
     <div class="v2-kicker v2-kicker--muted" style="margin-bottom:14px">
       Step ${Math.min(currentIndex + 1, steps.length)} of ${steps.length}
     </div>`;
+}
+
+function stepTag(text) {
+  if (!text) return '';
+  const first = String(text).trim().toLowerCase().split(/\s+/)[0] || '';
+  const VERBS = {
+    open: 'open', read: 'read', review: 'review',
+    write: 'write', draft: 'write', note: 'write', list: 'write',
+    build: 'build', create: 'build', make: 'build', code: 'build', set: 'build',
+    plan: 'plan', define: 'plan', pick: 'plan', choose: 'plan', identify: 'plan',
+    send: 'ship', publish: 'ship', share: 'ship', post: 'ship', submit: 'ship',
+    check: 'review', test: 'review', verify: 'review',
+    record: 'log', track: 'log', log: 'log',
+    complete: 'finish', finish: 'finish',
+  };
+  return VERBS[first] || '';
 }
 
 function stepList(steps, currentIndex, note, loading) {
@@ -295,19 +320,21 @@ function stepList(steps, currentIndex, note, loading) {
       </div>`;
     }
     if (i === currentIndex) {
+      const isLast = i === steps.length - 1;
+      const cta = isLast ? 'Finish today’s task →' : 'Done, next step →';
       return `<div class="v2-step-card--active v2-bracketed" style="overflow:visible">
         <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
-        <div class="v2-today-action" style="margin-bottom:8px">// Step ${i + 1}</div>
+        <div class="v2-today-action" style="margin-bottom:8px">Step ${i + 1} of ${steps.length}${stepTag(step.text) ? ` · ${stepTag(step.text)}` : ''}</div>
         <p class="v2-h3" style="margin-bottom:12px">${esc(step.text)}</p>
         <div class="v2-field">
-          <label class="v2-label">Your output or a short note:</label>
-          <textarea id="ag-note" rows="3" placeholder="What did you produce? Or note where you are…" class="v2-textarea" style="min-height:70px"></textarea>
+          <label class="v2-label">What did you do or produce?</label>
+          <textarea id="ag-note" rows="3" placeholder="One short line — link, output, or where you got to…" class="v2-textarea" style="min-height:70px"></textarea>
         </div>
         <div class="v2-row" style="margin-top:8px">
           <button id="ag-complete" ${loading ? 'disabled' : ''} class="v2-btn v2-btn--primary" style="flex:1">
-            Complete Step →
+            ${cta}
           </button>
-          <button id="ag-stuck" class="v2-btn v2-btn--ghost">I'm stuck</button>
+          <button id="ag-stuck" class="v2-btn v2-btn--ghost" title="Flag this step as blocked and get help">I'm stuck</button>
         </div>
       </div>`;
     }

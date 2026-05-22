@@ -360,14 +360,27 @@ function buildTrackPrompt(input) {
   const hours      = String(input?.dailyHours || '2-4').trim();
   const experience = String(input?.experienceLevel || 'intermediate').trim();
   const blocker    = String(input?.blockerHint || 'none').trim();
+  const project    = String(input?.currentProject || '').trim();
+  const weekGoal   = String(input?.weekGoal || '').trim();
+  const why        = String(input?.whyItMatters || '').trim();
+  const tried      = String(input?.triedBefore || '').trim();
+
+  const extra = [
+    project  ? `Current project / what they're doing: ${project}` : '',
+    weekGoal ? `Concrete outcome wanted by day 7: ${weekGoal}` : '',
+    why      ? `Why it matters to them: ${why}` : '',
+    tried    ? `What they've already tried: ${tried}` : '',
+  ].filter(Boolean).join('\n');
 
   return `Goal: ${goal}
 Category: ${category}
 Daily hours: ${hours}
 Experience: ${experience}
 Biggest blocker: ${blocker}
+${extra}
 
-Generate a 7-day execution track.
+Generate a 7-day execution track tailored to this specific person and project.
+Reference their concrete situation in task titles where natural — don't repeat generic templates.
 Day 1 must be the lowest-friction start possible — achievable in under 2 hours.
 Each day builds directly on the previous.
 Day 7 must produce a concrete artifact or shareable proof point.

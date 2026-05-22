@@ -10204,6 +10204,54 @@ body.v2-body::before {
   margin-bottom: 8px;
 }
 
+/* Agent Mode intro banner */
+.v2-agent-intro {
+  background: var(--v2-blue-wash);
+  border: 1px solid rgba(42,54,200,.18);
+  border-left: 3px solid var(--v2-blue);
+  border-radius: var(--v2-r-sm);
+  padding: 12px 14px;
+  font-size: .85rem;
+  color: var(--v2-text-2);
+  line-height: 1.55;
+  margin-bottom: 16px;
+}
+.v2-agent-intro strong { color: var(--v2-text); font-weight: 700; display: block; margin-bottom: 2px; }
+
+.v2-step-pill-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.v2-step-pill-tag {
+  font-family: var(--v2-fbody);
+  font-size: .65rem;
+  color: var(--v2-muted);
+  text-transform: lowercase;
+  letter-spacing: .02em;
+}
+
+/* 7-day SVG roadmap */
+.v2-roadmap {
+  width: 100%;
+  margin: 0 0 18px;
+  overflow: visible;
+}
+.v2-roadmap--compact { max-width: 720px; }
+.v2-roadmap--full    { margin-bottom: 24px; }
+.v2-roadmap svg { display: block; max-width: 100%; height: auto; }
+
+/* Mission card meta line — plain readable text, not monospace caps */
+.v2-mission-meta {
+  font-family: var(--v2-fbody);
+  font-size: .85rem;
+  color: var(--v2-muted);
+  margin: 4px 0 0;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 /* ── Cards ── */
 .v2-card {
   background: var(--v2-surface);

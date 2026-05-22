@@ -27,6 +27,10 @@ export function createDefaultUserV2() {
     createdAt:       isoDateNow(),
     experienceLevel: 'intermediate',
     dailyHours:      '2-4',
+    currentProject:  '',
+    weekGoal:        '',
+    whyItMatters:    '',
+    triedBefore:     '',
   };
 }
 

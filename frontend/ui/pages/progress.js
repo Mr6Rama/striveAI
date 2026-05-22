@@ -1,5 +1,6 @@
 // Progress — /progress
 // 7-day track timeline with polished cards and stats.
+import { renderRoadmap } from '../components/roadmap.js';
 
 const STATUS_META = Object.freeze({
   done:        { label: 'Done',        cls: 'v2-badge--done',     cardCls: 'v2-day-card--done'    },
@@ -40,6 +41,12 @@ export function render(container, state, actions) {
           ? `<button data-route="/recap" class="v2-btn v2-btn--primary">View Recap →</button>`
           : ''}
       </div>
+
+      ${renderRoadmap({
+        days: track.days.map((d) => ({ dayNumber: d.dayNumber, status: d.status || 'pending', title: d.title })),
+        currentDay: track.currentDayNumber || 1,
+        variant: 'full',
+      })}
 
       <div class="v2-card" style="margin-bottom:20px">
         <div class="v2-section-label" style="margin-bottom:12px">Completion</div>

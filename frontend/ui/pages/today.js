@@ -1,4 +1,5 @@
 // v2 Today's Action screen — primary daily execution screen.
+import { renderRoadmap } from '../components/roadmap.js';
 
 const STATUS_CLASS = Object.freeze({
   done:        'v2-badge--done',
@@ -85,7 +86,7 @@ function renderActive(container, track, today, dayPlan, state, actions) {
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
-      ${topBar(dayNum, status, track.goal)}
+      ${topBar(dayNum, status, track.goal, track)}
       ${actionCard(dayPlan)}
       ${insight ? `<div class="v2-insight">${esc(insight)}</div>` : ''}
 
@@ -125,7 +126,7 @@ function renderComplete(container, track, today, dayPlan, status, actions) {
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
-      ${topBar(dayNum, status, track.goal)}
+      ${topBar(dayNum, status, track.goal, track)}
 
       <div class="${cardCls}" style="margin-bottom:20px">
         <div class="v2-kicker" style="margin-bottom:8px">${esc(label)}</div>
@@ -157,7 +158,7 @@ function renderBlocked(container, track, today, dayPlan, state, actions) {
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
-      ${topBar(dayNum, 'blocked', track.goal)}
+      ${topBar(dayNum, "blocked", track.goal, track)}
 
       <div class="v2-card v2-card--amber" style="margin-bottom:16px">
         <div class="v2-kicker v2-badge v2-badge--blocked" style="margin-bottom:8px;align-self:flex-start">Blocked</div>
@@ -189,7 +190,7 @@ function renderInactive(container, track, today, dayPlan, status, actions) {
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
-      ${topBar(dayNum, status, track.goal)}
+      ${topBar(dayNum, status, track.goal, track)}
 
       <div class="${cardCls}" style="margin-bottom:16px">
         <div class="v2-kicker" style="margin-bottom:6px">
@@ -211,10 +212,17 @@ function renderInactive(container, track, today, dayPlan, status, actions) {
 
 // ── Shared components ──────────────────────────────────────────────────────
 
-function topBar(dayNum, status, goal) {
+function topBar(dayNum, status, goal, track) {
   const cls   = STATUS_CLASS[status] || 'v2-badge--pending';
   const label = STATUS_LABEL[status] || String(status).toUpperCase();
+  const days  = Array.isArray(track?.days) ? track.days.map((d) => ({
+    dayNumber: d.dayNumber,
+    status: d.status || 'pending',
+    title: d.title,
+  })) : [];
+  const roadmap = days.length ? renderRoadmap({ days, currentDay: dayNum, variant: 'compact' }) : '';
   return `
+    ${roadmap}
     <div class="v2-kicker" style="margin-bottom:6px">
       <span>Day ${dayNum} of 7</span>
       <span class="v2-badge ${cls}">${esc(label)}</span>
@@ -232,10 +240,7 @@ function actionCard(dayPlan) {
       ${dayPlan.successCriteria
         ? `<div class="v2-done-criteria" style="margin-bottom:10px">Done means: ${esc(dayPlan.successCriteria)}</div>`
         : ''}
-      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
-        <div class="v2-section-label" style="margin:0">${dayPlan.estimateMinutes || 60} min</div>
-        ${dayPlan.category ? `<div class="v2-section-label" style="margin:0">${esc(dayPlan.category)}</div>` : ''}
-      </div>
+      <p class="v2-mission-meta">${dayPlan.estimateMinutes || 60} min${dayPlan.category ? ` · ${esc(dayPlan.category)}` : ''}</p>
     </div>`;
 }
 
