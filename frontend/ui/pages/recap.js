@@ -18,7 +18,7 @@ export function render(container, state, actions) {
   const recapLoading   = Boolean(ui?.recapLoading);
   const continuing     = Boolean(ui?.trackContinuing);
 
-  container.innerHTML = buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram);
+  container.innerHTML = buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram, state.user);
   wireEvents(container, state, actions, track, recapText, patterns);
 
   // Auto-trigger reflection generation on first visit per track.
@@ -30,7 +30,9 @@ export function render(container, state, actions) {
 
 // ── Page builder ──────────────────────────────────────────────────────────────
 
-function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram) {
+function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram, user) {
+  const why      = String(user?.whyItMatters || '').trim();
+  const weekGoal = String(user?.weekGoal || '').trim();
   return `
     <div class="v2-page">
 
@@ -38,7 +40,8 @@ function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoa
         <span class="v2-badge v2-badge--done">Week complete</span>
       </div>
       <h1 class="v2-h1" style="margin-bottom:6px">Your 7-day track is complete.</h1>
-      <p class="v2-sub">${esc(track.goal || '')}</p>
+      <p class="v2-sub" style="margin-bottom:${why ? '14px' : '24px'}">${esc(track.goal || '')}${weekGoal ? ` · By Day 7: ${esc(weekGoal)}` : ''}</p>
+      ${why ? `<blockquote class="v2-recap-why">${esc(why)}</blockquote>` : ''}
 
       ${renderResultGrid(stats)}
       ${patternSummary ? renderPatternCard(patternSummary) : ''}

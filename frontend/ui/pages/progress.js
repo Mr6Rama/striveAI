@@ -35,7 +35,7 @@ export function render(container, state, actions) {
         <div>
           <div class="v2-kicker v2-kicker--muted">7-Day Track</div>
           <h1 class="v2-h1" style="margin-bottom:4px">Your progress</h1>
-          <p class="v2-sub" style="margin:0">${esc(track.goal || '')}</p>
+          <p class="v2-sub" style="margin:0">${esc(state.user?.currentProject || track.goal || '')}${state.user?.weekGoal ? ` · By Day 7: ${esc(state.user.weekGoal)}` : ''}</p>
         </div>
         ${track.status === 'complete'
           ? `<button data-route="/recap" class="v2-btn v2-btn--primary">View Recap →</button>`

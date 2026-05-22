@@ -68,11 +68,11 @@ export function render(container, state, actions) {
   const status  = today.status || 'pending';
 
   if (status === 'done' || status === 'rescued') {
-    renderComplete(container, track, today, dayPlan, status, actions);
+    renderComplete(container, track, today, dayPlan, status, state, actions);
   } else if (status === 'blocked') {
     renderBlocked(container, track, today, dayPlan, state, actions);
   } else if (status === 'skipped' || status === 'missed') {
-    renderInactive(container, track, today, dayPlan, status, actions);
+    renderInactive(container, track, today, dayPlan, status, state, actions);
   } else {
     renderActive(container, track, today, dayPlan, state, actions);
   }
@@ -94,9 +94,10 @@ function renderActive(container, track, today, dayPlan, state, actions) {
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
-      ${topBar(dayNum, status, track.goal, track)}
+      ${topBar(dayNum, status, track.goal, track, state.user)}
       ${softReturn ? softReturnBanner(missGap) : `<p class="v2-morning-brief">${esc(brief)}</p>`}
-      ${actionCard(dayPlan)}
+      ${actionCard(dayPlan, state.user)}
+      ${yesterdayCallback(state.history, track)}
       ${insight ? `<div class="v2-insight">${esc(insight)}</div>` : ''}
 
       <button id="td-agent" class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full" style="margin-bottom:10px">
@@ -127,7 +128,7 @@ function renderActive(container, track, today, dayPlan, state, actions) {
 
 // ── Complete (done / rescued) ──────────────────────────────────────────────
 
-function renderComplete(container, track, today, dayPlan, status, actions) {
+function renderComplete(container, track, today, dayPlan, status, state, actions) {
   const dayNum  = dayPlan.dayNumber || 1;
   const isLast  = dayNum >= 7;
   const cardCls = status === 'rescued' ? 'v2-card v2-card--blue' : 'v2-card v2-card--green';
@@ -136,7 +137,7 @@ function renderComplete(container, track, today, dayPlan, status, actions) {
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
-      ${topBar(dayNum, status, track.goal, track)}
+      ${topBar(dayNum, status, track.goal, track, state.user)}
 
       <div class="${cardCls}" style="margin-bottom:20px">
         <div class="v2-kicker" style="margin-bottom:8px">${esc(label)}</div>
@@ -168,7 +169,7 @@ function renderBlocked(container, track, today, dayPlan, state, actions) {
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
-      ${topBar(dayNum, "blocked", track.goal, track)}
+      ${topBar(dayNum, "blocked", track.goal, track, state.user)}
 
       <div class="v2-card v2-card--amber" style="margin-bottom:16px">
         <div class="v2-kicker v2-badge v2-badge--blocked" style="margin-bottom:8px;align-self:flex-start">Blocked</div>
@@ -193,14 +194,14 @@ function renderBlocked(container, track, today, dayPlan, state, actions) {
 
 // ── Inactive (skipped / missed) ────────────────────────────────────────────
 
-function renderInactive(container, track, today, dayPlan, status, actions) {
+function renderInactive(container, track, today, dayPlan, status, state, actions) {
   const dayNum  = dayPlan.dayNumber || 1;
   const cardCls = status === 'missed' ? 'v2-card v2-card--red' : 'v2-card';
 
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
-      ${topBar(dayNum, status, track.goal, track)}
+      ${topBar(dayNum, status, track.goal, track, state.user)}
 
       <div class="${cardCls}" style="margin-bottom:16px">
         <div class="v2-kicker" style="margin-bottom:6px">
@@ -222,35 +223,86 @@ function renderInactive(container, track, today, dayPlan, status, actions) {
 
 // ── Shared components ──────────────────────────────────────────────────────
 
-function topBar(dayNum, status, goal, track) {
-  const cls   = STATUS_CLASS[status] || 'v2-badge--pending';
-  const label = STATUS_LABEL[status] || String(status).toUpperCase();
-  const days  = Array.isArray(track?.days) ? track.days.map((d) => ({
+// Hide PENDING / IN_PROGRESS status — they are noise. Show the badge only
+// for outcomes that carry information (done, rescued, blocked, missed, skipped).
+const VISIBLE_STATUSES = new Set(['done', 'rescued', 'blocked', 'missed', 'skipped']);
+
+function topBar(dayNum, status, goal, track, user) {
+  const cls       = STATUS_CLASS[status] || '';
+  const label     = STATUS_LABEL[status] || '';
+  const showBadge = VISIBLE_STATUSES.has(status);
+  const project   = String(user?.currentProject || '').trim();
+  const weekGoal  = String(user?.weekGoal || '').trim();
+  // Lead with the most personal anchor: project, then week outcome, then track goal.
+  const subline   = project || weekGoal || goal || '';
+
+  const days = Array.isArray(track?.days) ? track.days.map((d) => ({
     dayNumber: d.dayNumber,
-    status: d.status || 'pending',
-    title: d.title,
+    status:    d.status || 'pending',
+    title:     d.title,
   })) : [];
   const roadmap = days.length ? renderRoadmap({ days, currentDay: dayNum, variant: 'compact' }) : '';
+
   return `
     ${roadmap}
     <div class="v2-kicker" style="margin-bottom:6px">
       <span>Day ${dayNum} of 7</span>
-      <span class="v2-badge ${cls}">${esc(label)}</span>
+      ${showBadge ? `<span class="v2-badge ${cls}">${esc(label)}</span>` : ''}
     </div>
-    <p class="v2-muted-text" style="margin-bottom:16px">${esc(goal || '')}</p>`;
+    ${subline ? `<p class="v2-muted-text" style="margin-bottom:16px">${esc(subline)}</p>` : ''}`;
 }
 
-function actionCard(dayPlan) {
+function actionCard(dayPlan, user) {
+  const weekGoal = String(user?.weekGoal || '').trim();
   return `
     <div class="v2-card v2-card--focus v2-bracketed" style="margin-bottom:20px;overflow:visible">
       <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
-      <div class="v2-today-action">Today's mission</div>
+      <div class="v2-today-action">Today’s mission</div>
       <h2 class="v2-today-title">${esc(dayPlan.title || 'No task assigned')}</h2>
       ${dayPlan.why ? `<p class="v2-body-text" style="margin-bottom:12px">${esc(dayPlan.why)}</p>` : ''}
       ${dayPlan.successCriteria
-        ? `<div class="v2-done-criteria" style="margin-bottom:10px">Done means: ${esc(dayPlan.successCriteria)}</div>`
+        ? `<div class="v2-done-criteria" style="margin-bottom:10px">You’re done when ${esc(deCapitalize(dayPlan.successCriteria))}</div>`
         : ''}
-      <p class="v2-mission-meta">${dayPlan.estimateMinutes || 60} min${dayPlan.category ? ` · ${esc(dayPlan.category)}` : ''}</p>
+      <p class="v2-mission-meta">${dayPlan.estimateMinutes || 60} min${weekGoal ? ` · toward ${esc(truncate(weekGoal, 36))}` : ''}</p>
+    </div>`;
+}
+
+function deCapitalize(s) {
+  const t = String(s || '').trim();
+  if (!t) return '';
+  return t.charAt(0).toLowerCase() + t.slice(1);
+}
+
+function truncate(s, n) {
+  const t = String(s || '');
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+
+function yesterdayCallback(history, track) {
+  const entries = Array.isArray(history?.entries) ? history.entries : [];
+  const inTrack = entries.filter((e) => e.trackId === track?.id);
+  if (!inTrack.length) return '';
+  const last = inTrack.reduce((a, b) => (!a || b.date > a.date ? b : a), null);
+  if (!last?.taskTitle) return '';
+
+  const icon = ({
+    done:    '✓',
+    rescued: '✓',
+    blocked: '!',
+    missed:  '·',
+    skipped: '·',
+  })[last.outcome] || '·';
+  const iconClass = (last.outcome === 'done' || last.outcome === 'rescued')
+    ? 'v2-yesterday__icon--good'
+    : (last.outcome === 'blocked')
+      ? 'v2-yesterday__icon--blocked'
+      : 'v2-yesterday__icon--muted';
+
+  return `
+    <div class="v2-yesterday">
+      <span class="v2-yesterday__icon ${iconClass}">${icon}</span>
+      <span class="v2-yesterday__label">Yesterday:</span>
+      <span class="v2-yesterday__title">${esc(truncate(last.taskTitle, 70))}</span>
     </div>`;
 }
 
