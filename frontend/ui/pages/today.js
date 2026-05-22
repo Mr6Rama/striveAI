@@ -234,7 +234,7 @@ function actionCard(dayPlan) {
   return `
     <div class="v2-card v2-card--focus v2-bracketed" style="margin-bottom:20px;overflow:visible">
       <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
-      <div class="v2-today-action">// Today's mission</div>
+      <div class="v2-today-action">Today's mission</div>
       <h2 class="v2-today-title">${esc(dayPlan.title || 'No task assigned')}</h2>
       ${dayPlan.why ? `<p class="v2-body-text" style="margin-bottom:12px">${esc(dayPlan.why)}</p>` : ''}
       ${dayPlan.successCriteria

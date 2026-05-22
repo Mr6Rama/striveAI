@@ -72,7 +72,7 @@ export function render(container, _state, actions) {
 
               <div class="v2-card v2-card--focus v2-bracketed v2-landing-preview__card">
                 <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
-                <div class="v2-today-action">// Today's mission</div>
+                <div class="v2-today-action">Today's mission</div>
                 <h2 class="v2-today-title">
                   Send 5 feedback DMs <em>for</em> your MVP.
                 </h2>

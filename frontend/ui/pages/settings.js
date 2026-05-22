@@ -32,7 +32,7 @@ export function render(container, state, actions) {
         <div class="v2-card">
           <div class="v2-meta-row">
             <span class="v2-muted-text">Email</span>
-            <span class="v2-body-text" style="font-family:var(--v2-fmono);font-size:.82rem">${escHtml(user.email || '—')}</span>
+            <span class="v2-body-text">${escHtml(user.email || '—')}</span>
           </div>
           <div class="v2-meta-row">
             <span class="v2-muted-text">Experience level</span>

@@ -9,7 +9,7 @@ const NODE_COLOR = {
   missed:      { fill: '#fff',    stroke: '#dc2626' },
   in_progress: { fill: '#2a36c8', stroke: '#2a36c8' },
   today:       { fill: '#2a36c8', stroke: '#2a36c8' },
-  pending:     { fill: '#fff',    stroke: '#c8ccd6' },
+  pending:     { fill: '#fff',    stroke: '#9aa3b2' },
 };
 
 // days: [{ dayNumber, status, title }], currentDay: number, variant: 'compact'|'full'
@@ -26,11 +26,11 @@ export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' }
     };
   });
 
-  const W = 700;
-  const H = variant === 'full' ? 140 : 90;
-  const padX = 30;
-  const midY = variant === 'full' ? 60 : 45;
-  const amp  = variant === 'full' ? 22 : 16;
+  const W = 760;
+  const H = variant === 'full' ? 230 : 170;
+  const padX = 50;
+  const midY = variant === 'full' ? 100 : 80;
+  const amp  = variant === 'full' ? 40 : 30;
 
   // Compute node positions along a gentle sine curve for organic feel.
   const positions = list.map((_, i) => {
@@ -53,14 +53,13 @@ export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' }
     const { x, y } = positions[i];
     const key = d.isToday ? 'today' : d.status;
     const c = NODE_COLOR[key] || NODE_COLOR.pending;
-    const r = d.isToday ? 11 : 8;
+    const r = d.isToday ? 22 : 16;
     const ring = d.isToday
-      ? `<circle cx="${x}" cy="${y}" r="${r + 5}" fill="none" stroke="${c.stroke}" stroke-width="1.5" opacity=".35"/>`
+      ? `<circle cx="${x}" cy="${y}" r="${r + 9}" fill="none" stroke="${c.stroke}" stroke-width="2" opacity=".35"/>`
       : '';
-    const inner = d.status === 'done' || d.status === 'rescued' || d.isToday
-      ? `<circle cx="${x}" cy="${y}" r="${r}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2"/>`
-      : `<circle cx="${x}" cy="${y}" r="${r}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2"/>`;
-    const dayLabel = `<text x="${x}" y="${y + 4}" text-anchor="middle" font-family="var(--v2-fmono)" font-size="10" font-weight="700" fill="${d.status === 'done' || d.status === 'rescued' || d.isToday ? '#fff' : '#6b7280'}">${d.dayNumber}</text>`;
+    const inner = `<circle cx="${x}" cy="${y}" r="${r}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2.5"/>`;
+    const isFilled = d.status === 'done' || d.status === 'rescued' || d.isToday;
+    const dayLabel = `<text x="${x}" y="${y + 5}" text-anchor="middle" font-family="var(--v2-fhead)" font-size="15" font-weight="800" fill="${isFilled ? '#fff' : '#475569'}">${d.dayNumber}</text>`;
     return ring + inner + dayLabel;
   }).join('');
 
@@ -68,16 +67,16 @@ export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' }
   if (variant === 'full') {
     labels = list.map((d, i) => {
       const { x, y } = positions[i];
-      const ly = y + 32;
+      const ly = y + 48;
       const title = (d.title || '').slice(0, 22) + ((d.title || '').length > 22 ? '…' : '');
-      return `<text x="${x}" y="${ly}" text-anchor="middle" font-family="var(--v2-fbody)" font-size="10" fill="${d.isToday ? '#2a36c8' : '#6b7280'}" font-weight="${d.isToday ? '700' : '500'}">${esc(title)}</text>`;
+      return `<text x="${x}" y="${ly}" text-anchor="middle" font-family="var(--v2-fbody)" font-size="12" fill="${d.isToday ? '#2a36c8' : '#475569'}" font-weight="${d.isToday ? '700' : '500'}">${esc(title)}</text>`;
     }).join('');
   }
 
   return `
     <div class="v2-roadmap v2-roadmap--${variant}" role="img" aria-label="7-day progress roadmap">
-      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">
-        <path d="${path}" fill="none" stroke="#d6dae3" stroke-width="2" stroke-linecap="round"/>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+        <path d="${path}" fill="none" stroke="#cbd0db" stroke-width="3" stroke-linecap="round"/>
         ${nodes}
         ${labels}
       </svg>
