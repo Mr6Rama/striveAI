@@ -2,527 +2,460 @@
 
 ## Router Overview
 
-Client-side pushState router. Single HTML file (`frontend/index.html`). Routes are logical screen states, not separate pages.
+Client-side pushState router. Single HTML shell (`frontend/index.html`)
+mounts `frontend/bundle.js` into `#app-v2`. Routes are logical screen
+states inside one SPA, not separate pages.
 
-Auth guard: all routes except `/` (landing), `/auth`, `/register` require a signed-in user. If not signed in, redirect to `/auth`.
+The allowlist of valid routes is defined in `frontend/ui/router.js` as
+`V2_ROUTES`. Any path outside the allowlist resolves to `/not-found`.
+Each route maps to a render function in `frontend/ui/pages/`.
 
-Track guard: routes `/today`, `/track`, `/history`, `/settings` require an active track. If no track, redirect to `/onboarding`.
+### Guards (enforced in `frontend/app.js` and individual page modules)
+
+- **Public routes** (no auth required): `/landing`, `/auth`.
+- **Authenticated routes** (Firebase user required): everything else.
+  Unauthenticated visits redirect to `/landing` (or `/auth` for explicit
+  sign-in intent).
+- **Track-required routes**: `/today`, `/agent`, `/action-kit`, `/proof`,
+  `/blocked`, `/progress`, `/recap` all check for an active
+  `state.track.days[]`. If missing, they redirect to `/onboarding`.
+- **Recap guard**: `/today` redirects to `/recap` when
+  `track.status === 'complete'`.
+
+### Default routes
+
+- Signed-in user with active track → `/today`
+- Signed-in user without track → `/onboarding`
+- Unauthenticated visitor → `/landing`
 
 ---
 
 ## Route Table
 
-| Route | Guard | Screen | Component/Section |
+| Route | Guard | Screen module | Purpose |
 |---|---|---|---|
-| `/` | none | Landing | `#landing-screen` |
-| `/auth` | none | Sign In | `#auth-screen` |
-| `/register` | none | Register | `#register-screen` |
-| `/onboarding` | auth | Onboarding | `#onboarding-screen` |
-| `/generating` | auth | Track generating | `#generating-screen` |
-| `/today` | auth + track | Today's Action | `#today-screen` |
-| `/agent` | auth + track | Agent Workspace | `#agent-screen` |
-| `/kit` | auth + track | Action Kit | `#kit-screen` |
-| `/track` | auth + track | 7-day track overview | `#track-screen` |
-| `/history` | auth + track | History log | `#history-screen` |
-| `/settings` | auth | Settings | `#settings-screen` |
-| `/recap` | auth | Day 7 recap | `#recap-screen` |
-
-Default route for signed-in user with active track: `/today`.
-
-Default route for signed-in user without track: `/onboarding`.
+| `/landing` | public | `landing.js` | Marketing / product-native front door |
+| `/auth` | public | `auth.js` | Sign in / Create account |
+| `/onboarding` | auth | `onboarding.js` | 8-step setup wizard |
+| `/confirm-track` | auth | `confirm-track.js` | Minimal "track ready" confirmation (overlaps with `/plan-preview`) |
+| `/plan-preview` | auth + track | `plan-preview.js` | Full plan preview after generation |
+| `/today` | auth + track | `today.js` | Primary daily screen |
+| `/agent` | auth + track | `agent.js` | Agent Mode — 3–5 micro-steps + proof |
+| `/action-kit` | auth + track | `action-kit.js` | AI-generated material for today's task |
+| `/proof` | auth + track | `proof.js` | Proof of Progress submission + AI verdict |
+| `/blocked` | auth + track | `blocked.js` | Blocker reason → Rescue Action |
+| `/progress` | auth + track | `progress.js` | 7-day timeline + stats + pattern |
+| `/recap` | auth | `recap.js` | Day 7 reflection + continuation choice |
+| `/settings` | auth | `settings.js` | Account + Telegram + sign out |
+| `/not-found` | public | `not-found.js` | 404 fallback |
 
 ---
 
 ## Screen Specifications
 
----
+### `/landing` — Landing
 
-### `/` — Landing
+**Purpose**: Front door for unauthenticated visitors. Product-native, not a
+generic SaaS marketing template.
 
-Purpose: First screen for unauthenticated visitors.
+**Main UI elements**:
 
-Elements:
-- Product name + one-line description: "A 7-day AI execution agent for young builders."
-- Two buttons: **Sign In** → `/auth`, **Sign Up** → `/register`
-- No hero image, no feature list, no pricing. Just the entry point.
+- Editorial hero with kicker `7-DAY AI EXECUTION AGENT`, italic-serif
+  accented headline ("Your roadmap should _not_ be passive."), sub-copy,
+  primary CTA, secondary "See how it works" scroll button, trust line.
+- Hero preview card rendered with real product primitives
+  (`v2-card--focus v2-bracketed`, `v2-today-action` "// Today's mission",
+  `v2-today-title`, `v2-done-criteria`, `v2-badge--today`).
+- Execution loop section: numbered milestone rail with route badges
+  (`/track`, `/today`, `/agent`, `/proof`, `/blocked`) and a return arrow
+  closing the loop.
+- Comparison section: ChatGPT / Notion / Trello vs StriveAI (bracketed card).
+- 7-day track preview using `v2-day-card` styling (done / rescued / today /
+  next / locked / recap).
+- Final CTA card (bracketed, focused).
 
----
+**Primary CTA**: `Start 7-day track →` → `/auth?mode=signup`.
 
-### `/auth` — Sign In
+**Next route**: `/auth`.
 
-Elements:
-- Email input
-- Password input
-- **Log In** button → calls `signIn(email, password)`
-- Link: "Don't have an account? Sign up" → `/register`
-- Link: "Forgot password?" → opens forgot-password modal (same as v1)
-- Inline error display (`#auth-error`)
-- Inline status (`#auth-status`)
-
-On success: if user has existing track → `/today`. If no track → `/onboarding`.
-
----
-
-### `/register` — Register
-
-Elements:
-- Name input
-- Email input
-- Password input
-- Confirm password input
-- **Sign Up** button → calls `signUp(email, password)` then saves name to `sv2_user`
-- Link: "Already have an account? Log in" → `/auth`
-- Inline error/status display
-
-On success: → `/onboarding`
+**Known gaps**: no inline goal capture; no social proof; secondary CTA only
+scrolls to the loop section.
 
 ---
 
-### `/onboarding` — Onboarding (3 steps)
+### `/auth` — Sign In / Create Account
 
-No back button on Step 1. Progress dots shown.
+**Purpose**: Get the user into the product.
 
-#### Step 1 of 3: Goal
+**Main UI elements**:
 
-Elements:
-- Heading: "What do you want to achieve in the next 7 days?"
-- Goal category selector (grid of 9 cards, one selection):
-  - Build a project / MVP
-  - Startup / idea validation
-  - Content / personal brand
-  - Learn a skill
-  - Career / portfolio
-  - Study / exam
-  - Habit / self-development
-  - Fitness / health
-  - Other
-- Goal text input: "Describe your goal in one sentence" (required, max 200 chars)
-- **Continue →** button
+- StriveAI logo + name.
+- Tabs: `Sign in` | `Create account`. URL `?mode=signup` pre-selects
+  Create account.
+- Email input, password input.
+- Inline error / success divs.
+- Submit button (`Sign in` or `Create account` depending on mode).
+- `Forgot password?` link (only on Sign in tab).
+- `← Back` to `/landing`.
 
-Saves to `sv2_user.goalCategory`, `sv2_track.goal` (draft).
+**Primary CTA**: Submit button — calls `actions.onSignIn` or
+`actions.onSignUp` (Firebase Auth email/password).
 
-#### Step 2 of 3: Context
+**Next route**: after success → `/today` if user has an active track, else
+`/onboarding`.
 
-Elements:
-- Daily hours available (select): 1–2h / 2–4h / 4–6h / 6–8h / 8+h
-- Experience level (select): Beginner / Intermediate / Advanced
-- Biggest blocker right now (text input, optional, max 200 chars): "What's your biggest obstacle right now?"
-- **Continue →** button, **← Back** button
-
-Saves to `sv2_user.dailyHours`, `sv2_user.experienceLevel`, `sv2_track.blockerHint`.
-
-#### Step 3 of 3: Telegram (optional)
-
-Elements:
-- Section heading: "Get a daily ping on Telegram"
-- Sub-text: "Optional. You can connect later in Settings."
-- Telegram connection widget:
-  1. Instruction: "Open Telegram → search @StriveAIBot → send /start → paste the code here"
-  2. Code input (6 digits)
-  3. **Connect** button
-- Skip link: "Skip for now →"
-- **Generate my 7-day track →** button (active even without connecting Telegram)
-- **← Back** button
-
-On "Generate my 7-day track":
-- Save all onboarding data.
-- Navigate to `/generating`.
-- Fire `track_generate` AI action.
+**Known gaps**: screen is visually disconnected from the editorial landing
+(no kicker, no italic accent, no preview). Highest-priority UX fix.
 
 ---
 
-### `/generating` — Track Generating
+### `/onboarding` — Onboarding (8 steps)
 
-Shown while `track_generate` AI call is in progress.
+**Purpose**: Capture enough context for AI to build a meaningful Day 1.
 
-Elements:
-- Spinner / animated indicator
-- Text: "Building your 7-day execution track…"
-- Rotating preview messages (cycle every 2s):
-  - "Analyzing your goal…"
-  - "Designing Day 1…"
-  - "Sequencing 7 concrete actions…"
-  - "Reviewing the track…"
-- No cancel button (prevents partial state).
+**Steps** (state persisted in `localStorage` key `sv2_onboarding_draft`):
 
-On success: → `/today`
-On failure after 2 retries: show error state with **Try Again** button. Do not navigate away.
+| Step | Title | Input |
+|---|---|---|
+| 1 | Goal category | One of 9 cards (project, startup, content, skill, career, study, habit, fitness, other) |
+| 2 | Goal template + specific goal | Pick template card OR type specific goal |
+| 3 | Main blocker | One of 8 (procrastinate, forget, overwhelmed, no_start, motivation, avoid, no_time, too_big) |
+| 4 | Daily intensity | 10 / 25 / 45 / 60+ min per day |
+| 5 | If-then rules | Pick 2–4 of 6 fallback behaviors |
+| 6 | Telegram | Ping time (morning/afternoon/evening/custom) + optional bot connect |
+| 7 | Escalation | What happens after 2 missed days (stricter message / friend message / restart promise / Tiny Mode / none) |
+| 8 | Confirm | Setup summary + `Build my 7-day track →` |
+
+**Main UI elements**: 8-dot progress strip, kicker `Step N of 8`, large
+headline per step, `v2-sel-grid` of selection cards, error div, primary
+"Continue →" button, secondary "← Back" button.
+
+**Primary CTA on Step 8**: `Build my 7-day track →` — fires
+`track_generate` AI action and navigates to `/plan-preview` on success.
+
+**Next route**: `/plan-preview`.
+
+**Known gaps**: 8 steps is long; Telegram + Escalation + If-Then could be
+deferred to Settings. Step 2 has color drift on the selected-card sub-text
+(hardcoded `#60a5fa`).
+
+---
+
+### `/confirm-track` — Confirm Track (minimal)
+
+**Purpose**: Currently a stripped-down clone of `/plan-preview`. Shows the
+goal + a flat list of all 7 day titles + a single `Start Day 1 →` button.
+
+**Status**: Redundant with `/plan-preview`. Should be removed (the v2 client
+currently does not route to it from onboarding).
+
+---
+
+### `/plan-preview` — Plan Preview
+
+**Purpose**: Show the freshly generated 7-day plan and onboarding summary.
+
+**Main UI elements**:
+
+- "Plan ready" badge + goal headline.
+- Setup summary card: Category, Blocker, Daily time, Telegram ping.
+- Day 1 hero card (`v2-card--blue`): title, why, "Done when" pill, estimate.
+- Day 2 secondary card.
+- Days 3–7 as quiet rows in a single card.
+- "StriveAI helps you execute each day" promise block (5 bullets).
+- `Start Day 1 →` primary button.
+- `Connect Telegram in Settings` secondary button.
+
+**Primary CTA**: `Start Day 1 →` → fires `actions.onStartDay1` then
+navigates to `/today`.
+
+**Next route**: `/today`.
+
+**Known gaps**: hardcoded blue tones on the Day 1 / Day 2 numbered circles
+(color drift); no AI-generated rationale for the 7-day arc.
 
 ---
 
 ### `/today` — Today's Action (primary screen)
 
-The main screen. Shown every day of the 7-day track.
+**Purpose**: The product. One concrete action per day, with execution CTAs.
 
-#### Header bar
+**Main UI elements** (active state):
 
-- "Day {N} of 7" label
-- Day dot strip: 7 dots, each colored by status (`done`=green, `missed`=red, `blocked`=orange, `skipped`=grey, `in_progress`=blue, `pending`=white)
-- Nav links: Today | Track | History | Settings
+- Kicker: `Day {N} of 7` + status badge + goal as sub-text.
+- Bracketed focus card (`v2-card v2-card--focus v2-bracketed`):
+  `// Today's mission` eyebrow, `v2-today-title`, why, `v2-done-criteria`
+  pill, estimate + category meta.
+- Insight banner (if a failure pattern has been detected) using `v2-insight`.
+- Primary CTA: `Start with Agent →`.
+- Row 1: `Action Kit` | `I already did it`.
+- Row 2: `I'm blocked` | `Skip today`.
+- Telegram ping note (if connected).
 
-#### Today card
+**Variants**:
 
-```
-DAY {N} OF 7
+- `done` / `rescued`: green/blue card, proof line if present,
+  "come back tomorrow" message or "Go to Day 7 Recap →" on Day 7.
+- `blocked`: amber card + `Get Rescue Action →` + `Try Agent instead`.
+- `skipped` / `missed`: muted card + "track will adapt" message + retry CTA.
 
-{taskTitle}
+**Primary CTA**: `Start with Agent →` → `/agent`.
 
-Why this matters:
-{why}
+**Next routes**: `/agent`, `/action-kit`, `/proof?source=main`,
+`/blocked?type=blocked`, `/blocked?type=skipped`.
 
-Done when:
-{successCriteria}
-
-Estimated: {estimateMinutes} min
-
-[Start with Agent]   [Action Kit]
-
-[✓ Mark as Done]   [⊘ Blocked]   [→ Skip]
-```
-
-If `today.status = 'done'`: show proof card and completion message. Buttons disabled.
-If `today.status = 'blocked'` and `rescueAction` exists: show Rescue Action card instead.
-If `today.status = 'missed'`: show "Missed yesterday. Today is Day N." card.
-If `today.adaptationNote` is set: show adaptation note below the card.
-
-#### Adaptation note
-
-Small banner below the today card (if `today.adaptationNote` is not empty):
-```
-AI adapted today's task based on yesterday's outcome.
-{adaptationNote}
-```
-
-#### Proof card (shown after done)
-
-```
-✓ Completed — Day {N}
-
-Proof submitted: {proofType} — {proofValue or 'statement'}
-Submitted at: {time}
-
-Tomorrow: Day {N+1}
-{tomorrow's taskTitle}
-```
-
-If Day 7 was just completed: show **View Recap** button → `/recap`.
-
-#### Blocked modal (opens on "Blocked" tap)
-
-```
-What's stopping you? (optional)
-[ text input, max 200 chars ]
-
-[Submit]  [Cancel]
-```
-
-On submit: saves `sv2_today.blockerText`, infers blocker category, fires `rescue_action`.
-
-#### Skip modal (opens on "Skip" tap)
-
-```
-Skip today's task?
-
-Add a note (optional):
-[ text input, max 100 chars ]
-
-[Skip]  [Cancel]
-```
-
-On skip: saves `sv2_today.skipReason`, sets status = `skipped`, records history entry.
-
-#### Proof modal (opens on "Mark as Done" tap, or from Agent end screen)
-
-```
-How do you want to record this?
-
-○ Statement — "I completed this task"
-○ Text note — describe what you did
-  [ text area ]
-○ Link — paste a URL to your artifact
-  [ url input ]
-
-[Submit proof]  [Cancel]
-```
-
-On submit: saves `sv2_today.proof`, sets status = `done`, records history entry, fires `adapt_day` for tomorrow.
+**Known gaps**: insight banner sits between the action card and the agent
+button — easy to miss. "I already did it" feels like a secondary CTA
+visually but is conceptually a Proof entry point.
 
 ---
 
-### `/agent` — Agent Workspace
+### `/agent` — Agent Mode Workspace
 
-Opened from the **Start with Agent** button on `/today`.
+**Purpose**: Guided execution via 3–5 ordered micro-steps + end-of-session
+proof submission.
 
-Sets `sv2_today.status = 'in_progress'` and `sv2_today.agentSession.startedAt`.
+**Main UI elements**:
 
-#### Layout
+- Sticky left context panel (260px): Day N kicker, goal, task title, done
+  criteria pill, estimate + category, optional pattern insight.
+- Right column:
+  - Step pills strip (`v2-step-pills`) showing done / active / upcoming
+    states + `Step N of M` kicker.
+  - Active step card: bracketed, `// Step N` eyebrow, instruction, textarea
+    for note, `Complete Step →` and `I'm stuck` buttons.
+  - Done steps as compact rows with ✓.
+  - Upcoming steps as quiet rows.
+  - `← Back to Today` ghost button.
+- After last step: proof input view with type radio (`text` / `link` /
+  `statement`), textarea, `Submit proof →`.
+- After proof: verdict view (partial → resubmit + Get Rescue / Try Again,
+  not-met → retry options).
 
-```
-← Back to Today
+**Primary CTA**: `Complete Step →` (per step), then `Submit proof →`.
 
-AGENT MODE · Day {N}
+**Next routes**: `/today` on success, `/blocked?type=blocked` on stuck.
 
-{taskTitle}
-
-Steps to complete this task:
-
-[1] {step 0 text}                 [ Mark done ]
-[2] {step 1 text}                 [ Mark done ]
-[3] {step 2 text}                 [ Mark done ]
-...
-
-[ Stuck on this step? ]           (shows inline hint input)
-```
-
-Micro-steps are fetched from `agent_steps` AI action when the workspace is opened. Show a brief loading state ("Preparing your steps…").
-
-#### Per step controls
-
-- **Mark done**: step.status = `done`, advance to next step.
-- **Skip this step**: step.status = `skipped`, advance.
-- **Stuck on this step?**: expands an inline text input. User types what they're stuck on. Fires `agent_hint`. Response shown inline below the step. Hint disappears when step is marked done.
-
-#### End state (all steps done or skipped)
-
-```
-Session complete
-
-Steps done: {N} / {total}
-
-Submit proof to close today's task:
-[Proof modal]
-
-[Close without submitting proof]
-```
-
-On "Close without submitting proof": navigate back to `/today`. Status remains `in_progress` until proof submitted or manual done.
-
-On proof submitted: status = `done`, navigate to `/today` (which shows completion card).
+**Known gaps**: sticky sidebar wraps awkwardly at medium widths; clicking
+`I'm stuck` discards the in-progress step note.
 
 ---
 
-### `/kit` — Action Kit
+### `/action-kit` — Action Kit
 
-Opened from the **Action Kit** button on `/today`.
+**Purpose**: Generate task-specific support material (templates, references,
+questions, tools, quick tips) for today's task.
 
-Fetches `action_kit` AI action. Shows a loading state ("Preparing your kit…").
+**Main UI elements**:
 
-#### Layout
+- Kicker `Action Kit · Day N of 7` + "Tools for today" headline +
+  task title.
+- Empty state with single `Generate Action Kit` button (calls
+  `actions.onKitGenerate`).
+- Item list with colored left-border per type (`v2-kit-item--template /
+  --reference / --question / --tool / --tip`). Template items have a
+  monospaced content area + `Copy` button.
+- Row of `Start with Agent` (primary) + `I used this` (secondary) once a
+  kit is generated.
+- `← Back to Today` ghost.
 
-```
-← Back to Today
+**Primary CTA**: `Start with Agent` (after kit is generated).
 
-ACTION KIT · Day {N}
+**Next route**: `/agent` or `/today`.
 
-{taskTitle}
-
-─────────────────────────────
-{item 1: Template}
-{label}
-{content}
-
-─────────────────────────────
-{item 2: Reference}
-{label}
-{content}
-
-─────────────────────────────
-... (up to 5 items)
-
-[I'm done — submit proof]
-[Back to Today]
-```
-
-Item types are visually distinguished by a type chip: `Template` | `Reference` | `Question` | `Tip` | `Tool`.
-
-"I'm done" opens the proof modal. On proof submit: navigate to `/today`.
+**Known gaps**: 5 colored borders on type variants overlap with status
+colors used elsewhere; no "Regenerate kit" option.
 
 ---
 
-### `/track` — 7-Day Track Overview
+### `/proof` — Proof of Progress
 
-Read-only view of all 7 days in the current track.
+**Purpose**: Submit proof and receive AI verdict.
 
-```
-YOUR 7-DAY TRACK
+**Main UI elements**:
 
-Goal: {goal}
-Started: {startDate}
+- Header: `Proof of progress · Day N` (or `· Rescue` if `?source=rescue`).
+- `Done means: …` pill above the form.
+- Category-aware prompt + hint (e.g., "What did you build or fix today?"
+  for `coding`).
+- Radio list with allowed proof types per category
+  (`v2-proof-type-option`).
+- Textarea (`v2-textarea`) with category-aware placeholder.
+- Submit button (currently `v2-btn--green` — color drift; should be
+  `v2-btn--primary`).
 
-Day 1  {status dot}  {taskTitle}      {date}
-Day 2  {status dot}  {taskTitle}      {date}
-Day 3  {status dot}  {taskTitle}  ←── TODAY
-Day 4  {status dot}  {taskTitle}
-...
-Day 7  {status dot}  {taskTitle}
-```
+**Verdict states** (after `v2_proof_check`):
 
-Each day row is non-interactive (read-only). Tapping a past day shows a summary modal (outcome, proof, rescue status).
+- `met` — green card, "Day complete!" / "Rescue complete!" + optional note.
+- `partial` — amber card, "Almost there", textarea + `Resubmit →` + `Start over`.
+- `not_met` — red card, "Needs more work", `← Try again` + `Back to Today`.
 
-Current day has a **Go to Today →** button.
+**Primary CTA**: `Submit proof →`.
 
----
+**Next route**: `/today` on completion.
 
-### `/history` — History Log
-
-Chronological list of all recorded outcomes across all tracks.
-
-```
-HISTORY
-
-This track: {doneCount} done / {missedCount} missed / {blockedCount} blocked
-
-──────────────────────────────────────
-May 19  Day 3  done     Write 3 cold DM scripts
-                        Proof: "sent to 5 people, 2 replied"
-──────────────────────────────────────
-May 18  Day 2  rescued  Set up landing page with email capture
-──────────────────────────────────────
-May 17  Day 1  done     Interview 3 potential users
-──────────────────────────────────────
-
-Failure patterns this track:
-  skill_gap ×2, time ×1
-```
-
-Entries sorted newest first. Proof shown inline if submitted. No pagination at MVP (truncate at 50 entries in view).
+**Known gaps**: submit color drift; no example of "what counts as proof"
+above the form; no explicit "accept partial as rescue" path.
 
 ---
 
-### `/settings` — Settings
+### `/blocked` — Blocked / Skipped
 
-```
-SETTINGS
+**Purpose**: Capture the blocker, generate a Rescue Action.
 
-──── Profile ────────────────────────
-Name:        Alex
-Email:       alex@example.com
-             [Edit name]
+**Query string**: `?type=blocked` (default) or `?type=skipped`.
 
-──── Current Track ──────────────────
-Goal:        {goal text}
-Started:     {date}
-Status:      Day 3 of 7 — active
+**Main UI elements**:
 
-──── Telegram ───────────────────────
-Status:      Connected as @alexbuilds   [Disconnect]
-Daily ping:  9:00 (UTC)                [Change hour ▾]
-Pings:       Enabled                   [Disable]
+- Kicker: `Day N` + `Blocked` or `Skip` badge.
+- Headline: "What blocked you?" or "Why are you skipping?".
+- 7 reason pills (`v2-reason-pill`): no_time, too_big, unclear_start,
+  low_energy, avoiding, forgot, not_important.
+- `Get rescue action →` (amber) — fires `actions.onBlockerDiagnose` which
+  calls the `rescue_action` AI action.
+- Loading view with amber spinner.
+- Rescue view: optional "Pattern repeating" amber call-out, reframe note
+  insight block, rescue card with rescue title + numbered steps + minutes.
+- Outcome buttons: `Start Rescue with Agent` (primary), `Mark Rescued`
+  (green), `Accept missed day` (ghost).
 
-             (If not connected:)
-             [Connect Telegram]
+**Primary CTA**: `Get rescue action →`, then `Start Rescue with Agent` or
+`Mark Rescued`.
 
-──── Account ────────────────────────
-[Sign Out]
-[Reset all data]  ← destructive, requires confirm modal
-```
+**Next routes**: `/agent` (run the rescue), `/today` (after outcome).
 
-Name edit: inline text input + save button. Updates `sv2_user.name`.
+**Known gaps**: reasons are all visually equal — no signal that some are
+root-causes vs symptoms; no "switch tracks" CTA on repeating patterns.
 
-Telegram ping hour: dropdown, 6–22 (UTC). Updates via `POST /api/telegram/ping-settings`.
+---
 
-Reset all data: shows confirm modal ("This will delete your track, history, and settings. Are you sure?"). On confirm: clears all `sv2_*` localStorage and Firestore keys, signs user out, navigates to `/register`.
+### `/progress` — Progress
+
+**Purpose**: Show the week's timeline, stats, and pattern.
+
+**Main UI elements**:
+
+- Section head: `7-Day Track` kicker + "Your progress" headline + goal
+  sub-text. `View Recap →` button if `track.status === 'complete'`.
+- Completion card: `v2-progress` bar + "X of Y days complete · N%".
+- Stats grid (`v2-stats-grid`): Days returned, Done, Rescued, Missed,
+  Skipped, Agent sessions.
+- 7-Day Timeline: `v2-day-card` rows with colored left-stripes (done /
+  rescued / blocked / missed / skipped / today). Today card is bracketed.
+- Recurring-pattern amber card if 2+ patterns of the same category.
+- `← Back to Today` ghost.
+
+**Primary CTA**: `View Recap →` (Day 7) or `← Back to Today`.
+
+**Next route**: `/recap` or `/today`.
+
+**Known gaps**: six different stat colors compete with the timeline;
+day cards are not clickable.
 
 ---
 
 ### `/recap` — Day 7 Recap
 
-Shown when Day 7 outcome is recorded (or on Day 8+ if user was away).
+**Purpose**: Reflect on the completed track, choose to continue or start
+fresh.
 
-```
-7-DAY RECAP
+**Main UI elements**:
 
-Goal: {goal}
+- "Week complete" badge + "Your 7-day track is complete." headline + goal.
+- Results grid (`v2-stats-grid`): Days returned, Done, Rescued, Missed,
+  Unanswered, Agent sessions.
+- Top-pattern amber card if `failurePatterns` exist.
+- Best-working-format insight ("Agent mode helped you finish more days"
+  / "Self-directed" / "Mixed").
+- AI reflection card: generated on-demand via the `day7_recap` action.
+  Empty state shows "Generate reflection →" ghost link.
+- CTA stack:
+  - `Continue this goal — next 7 days →` (primary) — fires
+    `track_continue`.
+  - `Start a new 7-day track` (secondary).
+- Bottom row: `Export my pattern` (copies plain text), optional
+  `Adjust Telegram ping` if connected.
+- `View full progress →` link to `/progress`.
 
-Mon  Tue  Wed  Thu  Fri  Sat  Sun
- ✓    ✓    ⊘    ✓    —    ✓    ✓
+**Primary CTA**: `Continue this goal — next 7 days →`.
 
-Done: 5   Missed: 1   Blocked: 1
-Streaks: best 3 days
-Proof submissions: 4
+**Next routes**: `/today` (continuation), `/onboarding` (new track),
+`/progress`, `/settings`.
 
-{AI-generated reflection paragraph}
-
-─────────────────────────────────
-What's next?
-
-[Continue this goal →]
-Start another 7-day run with the same goal.
-AI picks up from where you left off.
-
-[Start a new track →]
-Set a new goal and generate a fresh 7-day track.
-─────────────────────────────────
-```
-
-Day grid: 7 cells, each showing the day's outcome icon:
-- ✓ = done or rescued
-- ⊘ = blocked (not rescued)
-- — = missed
-- ∅ = skipped
-- … = in progress (should not appear in recap, but guard for it)
-
-#### On "Continue this goal"
-
-1. Archive current track to `sv2_history.archivedTracks`.
-2. Show brief loading ("Building continuation track…").
-3. Fire `track_continue` AI action.
-4. Save new track to `sv2_track` (with `continuationOf = old trackId`).
-5. Reset `sv2_today` to Day 1 of new track.
-6. Navigate to `/today`.
-
-#### On "Start a new track"
-
-1. Archive current track.
-2. Navigate to `/onboarding` Step 1 (goal category + goal text).
-3. Steps 2 (context) and 3 (Telegram) are skipped — user already has those settings.
-   - Exception: show Step 2 context fields with pre-filled values and allow user to update.
-4. On submit: fire `track_generate`, navigate to `/generating` → `/today`.
+**Known gaps**: continue / new-track presented equally; "Generate
+reflection" is a weak ghost link; no structured "What changed about you"
+insight.
 
 ---
 
-## Navigation Structure
+### `/settings` — Settings
 
-```
-Landing (/)
-├── Sign In (/auth)
-└── Register (/register)
-    └── Onboarding (/onboarding)
-        └── Generating (/generating)
-            └── Today (/today)          ← primary daily entry point
-                ├── Agent (/agent)
-                ├── Kit (/kit)
-                ├── Track (/track)      ← nav tab
-                ├── History (/history)  ← nav tab
-                ├── Settings (/settings) ← nav tab
-                └── Recap (/recap)      ← shown on Day 7
-                    ├── Continue → /generating → /today
-                    └── New track → /onboarding → /generating → /today
-```
+**Purpose**: Manage account + Telegram.
+
+**Main UI elements**:
+
+- Kicker `Settings` + "Your account" headline.
+- **Profile** card: email + experience level (read-only display).
+- **Telegram** card: connection status, ping hour, connect/disconnect
+  button.
+- **Account** card: `Sign out` (danger).
+
+**Primary CTA**: contextual per card.
+
+**Next route**: `/landing` on sign-out.
+
+**Known gaps**: cannot edit daily intensity, blocker, if-then rules,
+escalation rule, ping hour, profile name, or goal category — all captured
+in onboarding but not exposed here. No restart/pause-track or
+delete-account affordance. The Telegram connect button currently routes
+to `/today` instead of running the full link flow on this page.
 
 ---
 
-## UI Nav Tabs (shown when signed in with active track)
+### `/not-found` — 404
 
-Visible in the header while on `/today`, `/agent`, `/kit`, `/track`, `/history`, `/settings`:
+**Purpose**: Catch any path outside the `V2_ROUTES` allowlist.
+
+**Main UI elements**: kicker + large "404" + "Page not found" headline +
+`Go to Today →` button.
+
+**Primary CTA**: `Go to Today →`.
+
+---
+
+## Navigation Shell
+
+The authenticated app shell (`buildShellNav` in `frontend/app.js`) renders
+a top nav on every authenticated route:
 
 ```
-[Today]  [Track]  [History]  [Settings]
+[StriveAI logo]    [Today] [Track] [Settings]    [Day N of 7] [avatar]
 ```
 
-Active tab highlighted. No tab bar shown on `/auth`, `/register`, `/onboarding`, `/generating`, `/recap`.
+- `Today` tab is active for `/today`, `/agent`, `/action-kit`, `/proof`,
+  `/blocked`, `/recap`, `/onboarding`, `/confirm-track`, `/plan-preview`.
+- `Track` tab is active for `/progress`.
+- `Settings` tab is active for `/settings`.
+- The `Day N of 7` chip is shown when a track exists.
+
+Public routes (`/landing`, `/auth`) render without the nav shell.
 
 ---
 
 ## Removed Routes (v1 → v2)
 
-| v1 Route | v2 Status | Reason |
+| v1 Route | v2 Status | Replaced by |
 |---|---|---|
-| `/dashboard` | Removed | Replaced by `/today` as the primary screen |
-| `/work` | Removed | Task list replaced by 7-day track view |
-| `/goals` | Removed | Goals are now the track's single goal |
-| `/notes` (AI Chat) | Removed | Replaced by Agent Mode (task-scoped, not open chat) |
+| `/` | Removed | `/landing` (no implicit landing at `/`) |
+| `/register` | Removed | `/auth?mode=signup` |
+| `/generating` | Removed | Inline loading state in onboarding Step 8 |
+| `/kit` | Renamed | `/action-kit` |
+| `/track` | Renamed | `/progress` |
+| `/history` | Merged | `/progress` (timeline) + `/recap` (results) |
+| `/dashboard` | Removed | `/today` is the primary screen |
+| `/work` | Removed | Replaced by the 7-day track model |
+| `/goals` | Removed | Single goal per track |
+| `/notes` (AI Chat) | Removed | Replaced by Agent Mode (task-scoped) |
 | `/analytics` | Removed | Not in MVP scope |
 | `/billing` | Removed | No billing in MVP |
-| `/roadmap` | Removed | Replaced by `/track` (7-day linear view) |
-| `/progress` | Removed | Merged into `/history` |
+| `/roadmap` | Removed | Replaced by 7-day linear track |

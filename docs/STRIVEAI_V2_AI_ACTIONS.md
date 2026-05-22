@@ -24,25 +24,42 @@ The backend validates `action` against the `AI_ACTIONS` set. All v2 actions must
 
 ## v2 AI Actions Set
 
-Add to `AI_ACTIONS` in `backend/server.js`:
+The `AI_ACTIONS` allowlist in `backend/server.js` currently includes both v1
+and v2 actions. The v2 client (`frontend/services/ai-v2.js`) calls only the
+v2 actions below. The v1 actions stay on the allowlist until the legacy
+`frontend/script.js` is deleted (see `docs/LEGACY_NOTES.md`).
 
 ```js
 const AI_ACTIONS = new Set([
-  // v1 actions kept for compatibility (do not remove)
+  // v1 actions — kept on the allowlist while legacy script.js is on disk.
+  // The v2 client does NOT call these.
   'roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit',
   'goals_review', 'note_process', 'session_review', 'chat', 'goal_complete',
 
-  // v2 actions
+  // v2 actions (called by frontend/services/ai-v2.js)
   'track_generate',   // Build 7-day execution track from onboarding data
   'track_continue',   // Generate next 7-day continuation of same goal
   'agent_steps',      // Generate 3–5 micro-steps for today's action
-  'agent_hint',       // Inline hint for a stuck step during agent session
-  'rescue_action',    // Generate rescue task for a blocked day
-  'action_kit',       // Generate curated resources/frameworks for today's task
+  'agent_hint',       // Inline hint for a stuck step (RESERVED — not yet called by v2 client)
+  'rescue_action',    // Generate Rescue Action for a blocked day
+  'action_kit',       // Generate Action Kit (templates / references / questions / tools / tips)
+  'v2_proof_check',   // Judge submitted proof: met | partial | not_met
   'day7_recap',       // Generate reflection paragraph for Day 7 recap screen
   'adapt_day',        // Adapt tomorrow's action given today's outcome + patterns
 ]);
 ```
+
+| Action | Called from | Status |
+|---|---|---|
+| `track_generate` | `services/ai-v2.js · generateExecutionTrack()` (onboarding Step 8) | Active |
+| `track_continue` | `services/ai-v2.js · generateContinuationWeek()` (`/recap` Continue) | Active |
+| `agent_steps` | `services/ai-v2.js · generateAgentSteps()` (`/agent` init) | Active |
+| `agent_hint` | — | Reserved (allowlisted but not wired in v2 client) |
+| `rescue_action` | `services/ai-v2.js · diagnoseBlocker()` (`/blocked`) | Active |
+| `action_kit` | `services/ai-v2.js · generateActionKit()` (`/action-kit`) | Active |
+| `v2_proof_check` | `services/ai-v2.js · checkProof()` (`/proof`, `/agent` end) | Active |
+| `day7_recap` | `services/ai-v2.js · generateDay7Recap()` (`/recap`) | Active |
+| `adapt_day` | `services/ai-v2.js · adaptNextDay()` (after a day outcome) | Active |
 
 ---
 
@@ -376,6 +393,45 @@ Response JSON schema:
 
 ---
 
+### `v2_proof_check`
+
+Purpose: Judge user-submitted proof against the day's success criteria.
+
+Called from: `frontend/services/ai-v2.js · checkProof()` (entry points
+`/proof` submit and `/agent` end-of-session proof).
+
+Prompt context (built client-side):
+
+```
+Task: {dayPlan.title}
+Done means: {dayPlan.successCriteria}
+Proof type: {text | link | statement}
+Proof: {user input}
+```
+
+Expected JSON response:
+
+```json
+{
+  "verdict": "met" | "partial" | "not_met",
+  "note": "short explanation, 1–2 sentences"
+}
+```
+
+Stored at `sv2_today.proofResult`. Drives the verdict card on `/proof`
+and the partial / blocked branches in `/agent`.
+
+Deterministic fallback (when AI is unavailable):
+
+```js
+{
+  verdict: 'partial',
+  note: 'Automatic verification unavailable. Check your work against the success criteria manually.',
+}
+```
+
+---
+
 ### `day7_recap`
 
 Purpose: Generate a short reflection paragraph shown on the Day 7 recap screen.
@@ -457,22 +513,28 @@ Deterministic fallback: return `{ changed: false, title: tomorrowTitle, why: '' 
 
 ## Blocker Category Inference
 
-When a `blocked` event is logged and the user provides `blockerText`, the client infers a `blockerCategory` client-side (no AI call) using keyword matching:
+The v2 `/blocked` flow shows a static pill picker (7 reasons). Each reason
+declares its `category` directly in `frontend/ui/pages/blocked.js`, so no
+free-text inference is needed at the picker stage:
 
-```js
-function inferBlockerCategory(text) {
-  const t = text.toLowerCase();
-  if (/time|busy|no time|didn't have time/.test(t)) return 'time';
-  if (/don't know|skill|learn|how to|confused|unclear/.test(t)) return 'skill_gap';
-  if (/access|account|permission|login|tool|software/.test(t)) return 'no_access';
-  if (/don't understand|not sure what|vague|unclear task/.test(t)) return 'unclear';
-  if (/motivation|energy|tired|burnt|don't feel/.test(t)) return 'motivation';
-  if (/waiting|other person|team|external|depends on/.test(t)) return 'external';
-  return 'other';
-}
-```
+| Reason | Category |
+|---|---|
+| No time | `time` |
+| Too big | `unclear` |
+| Unclear start | `unclear` |
+| Low energy | `motivation` |
+| Avoiding it | `motivation` |
+| Forgot | `time` |
+| Not important today | `motivation` |
 
-This runs on the client before saving to `sv2_history.failurePatterns`.
+When the user types a free-text blocker description elsewhere (e.g.,
+inside Agent Mode), `frontend/services/ai-v2.js` exposes a fallback
+`inferBlockerCategory(text)` keyword matcher that returns one of:
+`time` | `skill_gap` | `no_access` | `unclear` | `motivation` | `external` |
+`other`.
+
+The chosen category is stored on each `sv2_history.failurePatterns[]` entry
+under `blockerCategory`.
 
 ---
 

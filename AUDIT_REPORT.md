@@ -1,7 +1,30 @@
 # striveAI Full-Stack Audit Report
 
-**Date:** 2026-05-10  
-**Audited by:** 8 specialist agents running in parallel  
+> ⚠️ **Historical full-stack audit — May 2026 (pre-v2 cutover).**
+> This report reflects the codebase before the v2 shell cutover. Several
+> findings have since been resolved:
+>
+> - `frontend/index.html` now mounts `bundle.js` into `<div id="app-v2">`
+>   and no longer loads the v1 monolith `script.js`.
+> - PayPal constants and the PayPal fields on `/api/config` were removed.
+> - STEM mode was removed.
+> - The v2 app shell, router, state model, and page modules are now the
+>   active product (see `docs/STRIVEAI_V2_*.md`).
+>
+> Issues related to authentication on `/api/openai/generate`, rate limits,
+> CSP, and test coverage may still apply — verify against the current
+> `backend/server.js` before acting on any specific finding.
+>
+> For the current product, route, state, and AI action specs, see:
+>
+> - `docs/STRIVEAI_V2_PRODUCT_SPEC.md`
+> - `docs/STRIVEAI_V2_ROUTES_AND_SCREENS.md`
+> - `docs/STRIVEAI_V2_STATE_MODEL.md`
+> - `docs/STRIVEAI_V2_AI_ACTIONS.md`
+> - `docs/SECURITY_NOTES.md`
+
+**Date:** 2026-05-10
+**Audited by:** 8 specialist agents running in parallel
 **Project root:** `striveAI-main/`
 
 ---

@@ -138,13 +138,18 @@ Vercel Cron setup (in `vercel.json`):
   "crons": [
     {
       "path": "/api/cron/telegram-pings",
-      "schedule": "0 * * * *"
+      "schedule": "0 9 * * *"
     }
   ]
 }
 ```
 
-Vercel automatically sends `Authorization: Bearer {CRON_SECRET}` to the cron path when `CRON_SECRET` is set in project settings.
+The active schedule is `0 9 * * *` — one daily run at 09:00 UTC. This is the
+Vercel Hobby plan limit (one cron job per project). Per-user timezone
+scheduling is not implemented; all pings fire at the same UTC hour.
+
+Vercel automatically sends `Authorization: Bearer {CRON_SECRET}` to the cron
+path when `CRON_SECRET` is set in project settings.
 
 ---
 

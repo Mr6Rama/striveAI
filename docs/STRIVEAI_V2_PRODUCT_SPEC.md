@@ -2,13 +2,45 @@
 
 ## What This Document Is
 
-Engineering and design reference for the StriveAI v2 rebuild. Not a pitch doc. All decisions here are final for MVP scope unless explicitly marked `[LATER]`.
+Engineering and design reference for the StriveAI v2 MVP. Not a pitch doc.
+All decisions here are final for MVP scope unless explicitly marked `[LATER]`.
+
+This is the **source of truth** for product behavior. Route specs are in
+`STRIVEAI_V2_ROUTES_AND_SCREENS.md`, state in `STRIVEAI_V2_STATE_MODEL.md`,
+AI actions in `STRIVEAI_V2_AI_ACTIONS.md`.
 
 ---
 
 ## Core Principle
 
-StriveAI does not stop at generating a plan. It helps the user execute today's specific step inside the product — through guided micro-steps (Agent Mode), optional self-service kits (Action Kit), and a proof-of-progress check before the day closes.
+StriveAI is a **7-day AI execution agent for builders.** It is not a planner,
+not a STEM app, not a billing product, and not a general chatbot.
+
+The product does not stop at generating a plan. Every day it:
+
+1. Surfaces one concrete daily action with a clear "done means" criterion.
+2. Helps the user execute that action inside the product via **Agent Mode**
+   (3–5 ordered micro-steps).
+3. Optionally produces an **Action Kit** of task-specific templates,
+   questions, and tips.
+4. Asks for **Proof of Progress** and judges it as met / partial / not-met.
+5. Runs a **Rescue Action** flow when the user is blocked or skipping.
+6. Updates **Failure Pattern Memory** based on the outcome.
+7. Adapts the next day's task to reflect what actually happened.
+
+Telegram is an optional accountability ping, not the core of the product.
+
+### Design direction
+
+- Paper/editorial visual language: warm cream background, ink text, one
+  Strive blue accent.
+- Heavy sans display headlines with italic serif accent words.
+- Brackets on focus surfaces (Today action card, Plan preview Day 1,
+  Progress today card).
+- Roadmap / milestone rail as the signature visual identity.
+- Product-native landing — not a generic AI SaaS marketing template.
+- No rainbow gradients. No childish startup illustrations. No generic
+  "AI orbs".
 
 ---
 
@@ -48,44 +80,46 @@ No STEM category. No locked-down per-category logic at MVP. The category feeds t
 
 | Decision | Chosen |
 |---|---|
-| Auth | Email/password only. No Google, no magic link. |
+| Auth | Email/password only. No Google, no social login, no magic link. |
 | Accountability channel | Telegram only. No email ping. No push notification. |
-| Deployment | Vercel |
-| AI backend | Existing Express OpenAI proxy at `/api/openai/generate` |
-| Database namespace | Fresh `sv2_*` keys. No migration of old v1 data except crash guard. |
-| Billing | None. Freemium. No pricing screens. |
+| Deployment | Vercel (canonical). `firebase.json` kept as a record but Firebase Hosting is not active. |
+| AI backend | Existing Express OpenAI proxy at `POST /api/openai/generate`. Reused, not replaced. |
+| Database namespace | Fresh `sv2_*` keys. v1 `sa_*` keys are read-only (migration guard). |
+| Billing | None. Freemium. No pricing screens. No Stripe, no PayPal. |
 | Agent Mode | Required. Guided 3–5 micro-step execution. Not an open chatbot. |
 | Day 7 | Recap screen. User chooses: continue same goal for 7 more days, or start a new track. |
+| STEM mode | Completely removed. No STEM labels, prompts, routes, fallbacks, or UI. |
 
 ---
 
 ## Core Product Loop
 
 ```
-Landing / Auth
-  ↓
-Onboarding (new user) OR load state (returning user)
-  ↓
-AI generates 7-day execution track
-  ↓
-Today's Action screen
-  ↓
-User picks one of:
-  [Start with Agent]  → Minimal Agent Workspace (3–5 guided micro-steps)
-  [Action Kit]        → Curated self-serve resources for the day's task
-  [Proof]             → Submit proof of completion
-  [Blocked]           → Rescue Action flow
-  [Skip]              → Logged as skipped; track adapts next day
-  ↓
-Outcome recorded
-  ↓
-Failure Pattern Memory updated (if blocked/skipped)
-  ↓
-Telegram daily ping (if connected) — sent by server at scheduled time
-  ↓
-AI adapts next day's action based on outcome + pattern
-  ↓
-Day 7 → Recap screen → Continue or new track
+Landing  →  Auth  →  Onboarding
+                        ↓
+              AI generates 7-day execution track
+                        ↓
+                   Plan Preview
+                        ↓
+              ┌────  Today's Action  ◀───────────────┐
+              │            ↓                          │
+              │  User picks one of:                   │
+              │    [Start with Agent] → Agent Mode    │
+              │    [Action Kit]       → Action Kit    │
+              │    [Proof]            → Proof flow    │
+              │    [Blocked]          → Rescue Action │
+              │    [Skip]             → logged        │
+              │            ↓                          │
+              │  Outcome recorded                     │
+              │            ↓                          │
+              │  Failure Pattern Memory updated       │
+              │            ↓                          │
+              │  Telegram daily ping (if connected)   │
+              │            ↓                          │
+              └──  AI adapts tomorrow's task  ────────┘
+                        ↓
+              Day 7 Recap  →  Continue same goal
+                          \\→ Start a new track
 ```
 
 ---
@@ -94,24 +128,39 @@ Day 7 → Recap screen → Continue or new track
 
 ### New User
 
-1. **Landing screen** — brief product description, Sign Up / Log In buttons.
-2. **Auth screen** — email + password registration. Error handling inline.
-3. **Onboarding** — 3 steps:
-   - Step 1: Goal category + goal text + timeframe hint ("what do you want to achieve in 7 days?")
-   - Step 2: Daily time available + experience level + biggest current blocker
-   - Step 3: Telegram connection (optional but recommended) — "Connect Telegram for daily pings"
-4. **Track generation** — AI builds a 7-day execution track. Shown as a loading state with preview of first action.
-5. **Today's Action** — Day 1 action card. User picks how to engage.
-6. **Execution** — Agent/Kit/Proof/Blocked/Skip flow.
-7. **Day closes** — outcome recorded; next day's action adapted.
-8. **Days 2–6** — same loop. Track adapts based on outcomes and failure patterns.
-9. **Day 7** — recap screen. Continue or new track decision.
+1. **`/landing`** — paper-editorial front door with product-native preview card.
+   Single CTA: "Start 7-day track →".
+2. **`/auth`** — email + password (Firebase Auth). Tab to switch sign-in /
+   create-account. Inline errors.
+3. **`/onboarding`** — 8 steps (current implementation):
+   - Step 1: Goal category (9 categories)
+   - Step 2: Goal template + specific goal text
+   - Step 3: Main blocker (8 options)
+   - Step 4: Daily intensity (4 levels)
+   - Step 5: If-then rules (pick 2–4 of 6)
+   - Step 6: Telegram ping time + optional bot connect
+   - Step 7: Escalation rule (what should happen after 2 missed days)
+   - Step 8: Confirm & generate
+   - The 8-step flow is on the long side; deferring Telegram + Escalation +
+     If-Then to Settings is a known improvement.
+4. **Track generation** — fires `track_generate` AI action. UI shows
+   "Building your track…" with deterministic fallback if AI fails.
+5. **`/plan-preview`** — setup summary + Day 1 hero card + Day 2 secondary
+   + Days 3–7 outline + "StriveAI helps you execute each day" promise block.
+6. **`/today`** — Day 1 action card with the bracketed focus styling.
+   Buttons: `Start with Agent` (primary), `Action Kit`, `I already did it`,
+   `I'm blocked`, `Skip today`.
+7. **Execution** — Agent Mode / Action Kit / Proof / Blocked flow.
+8. **Day closes** — outcome recorded; `adapt_day` is called for tomorrow.
+9. **Days 2–6** — same loop. Track adapts based on outcomes + failure patterns.
+10. **Day 7** — `/recap` screen. Continue or new track decision.
 
 ### Returning User
 
-1. Auth → load state from Firestore (`sv2_*` keys).
-2. Rollover check: if yesterday's action is still `pending`, auto-mark as `missed` and adapt.
-3. Land on Today's Action for the current day.
+1. Auth → load state from Firestore (`sv2_*` keys), mirror to localStorage.
+2. Rollover: if yesterday's action is still `pending`, auto-mark as `missed`
+   and run pattern analysis.
+3. Land on `/today` for the current day (or `/recap` if track is complete).
 
 ---
 
@@ -147,22 +196,32 @@ Day 7 → Recap screen → Continue or new track
 
 ## Failure Pattern Memory
 
-Purpose: track repeated blockers across days so the AI can adapt intelligently instead of resurfacing the same unworkable task.
+Purpose: track repeated blockers across days so the AI can adapt intelligently
+instead of resurfacing the same unworkable task.
 
-What is recorded per `blocked` or `skipped` event:
-- `dayNumber` — which day in the track
-- `taskTitle` — text of the action that failed
-- `blockerText` — user's description of the blocker (from Blocked modal)
-- `category` — inferred blocker category: `time` | `skill_gap` | `no_access` | `unclear` | `motivation` | `external` | `other`
-- `rescueOffered` — boolean, was a rescue action generated
-- `rescueCompleted` — boolean
+What is recorded per `blocked` or `skipped` event in
+`sv2_history.failurePatterns[]`:
+
+- `id` — `fp-{timestamp}`
 - `date` — ISO date
+- `dayNumber` — which day in the track
+- `trackId` — owning track
+- `taskTitle` — text of the action that failed
+- `blockerText` — user's description of the blocker (from the Blocked reason picker)
+- `blockerCategory` — inferred category: `time` | `skill_gap` | `no_access` | `unclear` | `motivation` | `external` | `other`
+- `rescueOffered` — was a Rescue Action generated
+- `rescueCompleted` — did the user complete it
 
 Pattern triggers (MVP):
-- Same blocker category appears 2+ times → AI receives the pattern summary in the next day's adaptation prompt.
-- 3+ consecutive `missed` days → AI offers a track reset or goal re-scope suggestion.
 
-Pattern data lives in `sv2_history.failurePatterns[]`.
+- Same blocker category appears 2+ times → AI receives the pattern summary in
+  the next day's `adapt_day` prompt, and `/today` shows an insight banner.
+- 3+ consecutive `missed` days → AI is asked to offer a track reset or
+  re-scope suggestion (planned; currently surfaces only as the recurring-
+  pattern card on `/blocked`).
+
+Pattern data is summarised by `buildPatternSummary()` before being injected
+into AI prompts (see `STRIVEAI_V2_AI_ACTIONS.md`).
 
 ---
 
@@ -226,22 +285,35 @@ Kit does not require internet resources to be fetched — AI generates the text 
 
 ---
 
-## Proof-of-Progress Logic
+## Proof of Progress
 
-User can submit proof from Today's Action or from the Agent Workspace end screen.
+User can submit proof from `/today` ("I already did it"), from the Agent Mode
+end screen, or from the Rescue Action flow.
 
 Proof types (user chooses one):
-- `text` — free text note: "I did X, result was Y"
+
+- `text` — free-text note: "I did X, result was Y"
 - `link` — URL to artifact (GitHub commit, doc, post, etc.)
-- `statement` — checkbox-style: "I confirm I completed this task"
+- `statement` — short confirmation: "I confirm I completed this task"
 
-What happens on submission:
-- `sv2_today.proof` is saved with type, value, and timestamp.
-- Day status → `done`.
-- Outcome recorded in history.
-- If Telegram connected: optional proof-submitted ping sent to user.
+Submission flow:
 
-Proof is not verified. It is for the user's own accountability log.
+1. User fills `proofText`, selects `proofType`, and submits.
+2. Frontend calls the `v2_proof_check` AI action with the day's
+   `successCriteria` + user input.
+3. AI returns a verdict: `met` | `partial` | `not_met`, plus a short note.
+4. UI shows the verdict in a colored card:
+   - **met** — day status → `done` (or `rescued` if entered via Rescue flow);
+     outcome recorded in `sv2_history.entries`.
+   - **partial** — show "Almost there" amber state. User can add more proof
+     and resubmit, or start over.
+   - **not_met** — show red state with the verdict note. User can try again
+     or return to `/today`.
+5. `sv2_today.proof` is saved with `{ type, value, submittedAt }`.
+6. On `met`, `adapt_day` is fired for tomorrow.
+
+Proof is judged for the user's own accountability. The `v2_proof_check`
+action falls back to `partial` when AI is unavailable.
 
 ---
 
@@ -297,28 +369,30 @@ Summary:
 
 ## MVP Scope vs Later Scope
 
-### In MVP
+### In MVP (implemented)
 
-- Email/password auth
-- 9 goal categories
-- 7-day track generation
-- Today Action screen
-- Agent Mode (guided micro-steps)
-- Action Kit (AI-generated)
-- Proof of progress
-- Blocked flow + Rescue Action
-- Skip + auto-missed rollover
-- Failure Pattern Memory (stored, feeds adaptation prompts)
-- Day 7 recap
-- Continue same goal / start new track
-- Telegram ping (one per day)
-- Settings: name, goal edit, Telegram disconnect/reconnect
-- Fresh v2 state namespace, crash-safe v1 guard
+- Email/password auth (Firebase Auth)
+- 8-step onboarding with 9 goal categories
+- 7-day track generation (`track_generate` + deterministic fallback)
+- Plan Preview screen
+- Today's Action screen with bracketed focus card
+- Agent Mode (3–5 guided micro-steps with per-step notes)
+- Action Kit (AI-generated templates / references / questions / tips)
+- Proof of Progress with AI verdict (met / partial / not-met)
+- Blocked + Skip flows producing a Rescue Action
+- Auto-missed rollover on a new day
+- Failure Pattern Memory (stored; feeds `adapt_day` and `/today` insight)
+- Day 7 Recap with stats + AI reflection + pattern export
+- Continue same goal (`track_continue`) / Start new track
+- Telegram ping (one per day at 09:00 UTC, optional)
+- Settings: email, experience level, Telegram connect/disconnect, sign out
+- Fresh `sv2_*` state namespace, crash-safe v1 read-only guard
+- Paper/editorial design system with watermark, brackets, italic serif accents
 
 ### Explicitly out of MVP
 
-- Google / social auth
-- Billing, plans, pricing
+- Google / social auth, magic links
+- Billing, plans, pricing screens, Stripe, PayPal
 - Buddy accounts / shared tracks
 - Multi-goal dashboard
 - Web push notifications
@@ -332,3 +406,7 @@ Summary:
 - Track "pause" or "abandon" flows
 - Adaptive track mid-run rebuild (AI re-generates remaining days)
 - Team/group tracks
+- Per-user timezone scheduling for Telegram pings
+- Full Settings editing of intensity / blocker / if-then / escalation / ping hour
+- `agent_hint` inline help (allowlisted on the backend; not yet wired in
+  `frontend/services/ai-v2.js`)
