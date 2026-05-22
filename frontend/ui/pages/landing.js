@@ -57,7 +57,7 @@ export function render(container, _state, actions) {
               <span class="v2-landing-preview__route">/today</span>
               <span class="v2-landing-preview__live">
                 <span class="v2-landing-preview__live-dot"></span>
-                live preview
+                product preview
               </span>
             </div>
 
@@ -98,7 +98,7 @@ export function render(container, _state, actions) {
                 <span class="v2-btn v2-btn--secondary">Action Kit</span>
               </div>
               <div class="v2-landing-preview__btns v2-landing-preview__btns--ghost">
-                <span class="v2-btn v2-btn--ghost">I'm blocked</span>
+                <span class="v2-btn v2-btn--ghost">I’m stuck</span>
                 <span class="v2-btn v2-btn--ghost">Proof</span>
               </div>
 

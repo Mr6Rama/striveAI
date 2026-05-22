@@ -10,6 +10,7 @@ import { resetProofState } from './ui/pages/proof.js';
 import { resetBlockedState } from './ui/pages/blocked.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
 import { renderRoute } from './ui/pages/index.js';
+import * as _streakModule from './domain/streak.js';
 
 const ROOT_ID = 'app-v2';
 
@@ -108,7 +109,7 @@ function guardRoute(route, state) {
   const noTrack   = !track.id || !track.days.length;
 
   // Routes that don't require an active track.
-  const freeRoutes = new Set(['/onboarding', '/confirm-track', '/plan-preview', '/settings', '/progress', '/not-found']);
+  const freeRoutes = new Set(['/onboarding', '/plan-preview', '/settings', '/progress', '/not-found']);
 
   if (noTrack && !freeRoutes.has(route)) return '/onboarding';
   if (track.status === 'complete' && route !== '/recap' && !freeRoutes.has(route)) return '/recap';
@@ -737,7 +738,7 @@ function buildShellNav(state, route) {
   const todayActive = ['/today', '/agent', '/action-kit', '/proof', '/blocked', '/recap'].includes(route);
   const trackActive = route === '/progress';
   const setActive   = route === '/settings';
-  const obActive    = ['/onboarding', '/confirm-track', '/plan-preview'].includes(route);
+  const obActive    = ['/onboarding', '/plan-preview'].includes(route);
 
   const items = [
     { path: '/today',    label: 'Today',    active: todayActive || obActive },
@@ -749,7 +750,8 @@ function buildShellNav(state, route) {
     `<button class="v2-nav-link${active ? ' v2-nav-link--active' : ''}" data-route="${path}">${label}</button>`
   ).join('');
 
-  const dayChip = hasTrack && day
+  const streakChip = hasTrack ? buildStreakChip(state) : '';
+  const dayChip    = hasTrack && day
     ? `<span class="v2-badge v2-badge--today">Day ${day} of 7</span>`
     : '';
 
@@ -759,8 +761,28 @@ function buildShellNav(state, route) {
       <span class="v2-nav-logo-name">StriveAI</span>
     </button>
     <nav class="v2-nav-links">${links}</nav>
-    <div class="v2-nav-right">${dayChip}<div class="v2-nav-avatar">${initial}</div></div>
+    <div class="v2-nav-right">${streakChip}${dayChip}<div class="v2-nav-avatar">${initial}</div></div>
   </header>`;
+}
+
+function buildStreakChip(state) {
+  try {
+    const { computeStreaks } = _streakModule;
+    if (!computeStreaks) return '';
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const { returned, delivered } = computeStreaks(state.history, state.track?.id, todayIso);
+    if (returned <= 0) return '';
+    return `
+      <span class="v2-streak-chip" title="Honest streak: days you returned and days you delivered">
+        <span><span class="v2-streak-chip__num v2-streak-chip__num--green">${delivered}</span>
+        <span class="v2-streak-chip__label">done</span></span>
+        <span class="v2-streak-chip__sep">·</span>
+        <span><span class="v2-streak-chip__num">${returned}</span>
+        <span class="v2-streak-chip__label">returned</span></span>
+      </span>`;
+  } catch (_e) {
+    return '';
+  }
 }
 
 function renderApp(state) {

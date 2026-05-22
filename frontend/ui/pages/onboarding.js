@@ -79,6 +79,8 @@ function defaultDraft() {
   };
 }
 
+const STEP_KEY = 'sv2_onboarding_step';
+
 function loadDraft() {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
@@ -90,18 +92,33 @@ function loadDraft() {
   }
 }
 
+function loadStep() {
+  try {
+    const n = parseInt(localStorage.getItem(STEP_KEY) || '1', 10);
+    return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 1;
+  } catch (_e) {
+    return 1;
+  }
+}
+
 function saveDraft() {
-  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch (_e) { /* quota / disabled */ }
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    localStorage.setItem(STEP_KEY, String(currentStep));
+  } catch (_e) { /* quota / disabled */ }
 }
 
 export function clearOnboardingDraft() {
-  try { localStorage.removeItem(DRAFT_KEY); } catch (_e) { /* noop */ }
+  try {
+    localStorage.removeItem(DRAFT_KEY);
+    localStorage.removeItem(STEP_KEY);
+  } catch (_e) { /* noop */ }
   draft = defaultDraft();
   currentStep = 1;
 }
 
 let draft = loadDraft();
-let currentStep = 1;
+let currentStep = loadStep();
 let lastState   = null;
 let lastActions = null;
 
