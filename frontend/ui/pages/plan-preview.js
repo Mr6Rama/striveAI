@@ -1,4 +1,5 @@
 // Plan preview — shown immediately after onboarding track generation.
+import { weekArcSummary } from '../components/roadmap.js';
 
 const INTENSITY_LABELS = {
   '0-1': '10 min/day', '1-2': '25 min/day', '2-4': '45 min/day', '4-6': '60+ min/day',
@@ -46,7 +47,11 @@ export function render(container, state, actions) {
         <span class="v2-badge v2-badge--done">Plan ready</span>
       </div>
       <h1 class="v2-h1" style="margin-bottom:6px">Your 7-day track is ready</h1>
-      <p class="v2-sub">${esc(track.goal)}</p>
+      <p class="v2-sub" style="margin-bottom:${weekArcSummary(days) ? '10px' : '24px'}">${esc(track.goal)}</p>
+      ${(() => {
+        const arc = weekArcSummary(days);
+        return arc ? `<p class="v2-week-arc">Your week: ${esc(arc)}</p>` : '';
+      })()}
 
       <div class="v2-card" style="margin-bottom:20px">
         <div class="v2-section-label" style="margin-bottom:12px">Setup summary</div>

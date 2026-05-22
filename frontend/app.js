@@ -451,6 +451,9 @@ async function handleBlockerMissed() {
     outcome:         'missed',
     taskTitle:       dayPlan.title || '',
     proofType:       '',
+    proofValue:      '',
+    agentOutput:     '',
+    blockerNote:     String(today?.blockerText || '').slice(0, 300),
     agentUsed:       false,
     rescueOffered:   Boolean(today.rescueAction),
     rescueCompleted: false,
@@ -486,6 +489,16 @@ async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
   const now     = new Date().toISOString();
   const outcome = fromRescue ? 'rescued' : 'done';
 
+  // Capture an artifact snapshot — proof body + per-step agent output if any.
+  // Used by /progress and /recap to render real artifacts, not just status dots.
+  const agentOutputText = today?.agentSession?.steps
+    ? today.agentSession.steps
+        .filter((s) => s.status === 'done')
+        .map((s, i) => `Step ${i + 1}: ${s.text}${s.stuckNote ? ` (stuck: ${s.stuckNote})` : ''}`)
+        .join('\n')
+        .slice(0, 800)
+    : '';
+
   const entry = {
     date:            today.date,
     dayNumber:       dayNum,
@@ -493,6 +506,9 @@ async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
     outcome,
     taskTitle:       dayPlan.title || '',
     proofType:       proofType || 'text',
+    proofValue:      String(proofValue || '').slice(0, 500),
+    agentOutput:     agentOutputText,
+    blockerNote:     '',
     agentUsed:       Boolean(fromAgent),
     rescueOffered:   Boolean(fromRescue),
     rescueCompleted: Boolean(fromRescue),

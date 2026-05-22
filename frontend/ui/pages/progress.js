@@ -1,6 +1,6 @@
 // Progress — /progress
 // 7-day track timeline with polished cards and stats.
-import { renderRoadmap } from '../components/roadmap.js';
+import { renderRoadmap, weekArcSummary } from '../components/roadmap.js';
 
 const STATUS_META = Object.freeze({
   done:        { label: 'Done',        cls: 'v2-badge--done',     cardCls: 'v2-day-card--done'    },
@@ -43,10 +43,15 @@ export function render(container, state, actions) {
       </div>
 
       ${renderRoadmap({
-        days: track.days.map((d) => ({ dayNumber: d.dayNumber, status: d.status || 'pending', title: d.title })),
+        days: track.days.map((d) => ({ dayNumber: d.dayNumber, status: d.status || 'pending', title: d.title, role: d.role })),
         currentDay: track.currentDayNumber || 1,
         variant: 'full',
       })}
+
+      ${(() => {
+        const summary = weekArcSummary(track.days);
+        return summary ? `<p class="v2-week-arc">Your week: ${esc(summary)}</p>` : '';
+      })()}
 
       <div class="v2-card" style="margin-bottom:20px">
         <div class="v2-section-label" style="margin-bottom:12px">Completion</div>
@@ -83,25 +88,79 @@ function buildDayRows(track, entries) {
   });
 }
 
-function renderDayCard({ day, status, isToday }) {
-  const meta = STATUS_META[status] || STATUS_META.pending;
+function renderDayCard({ day, status, isToday, histEntry }) {
+  const meta      = STATUS_META[status] || STATUS_META.pending;
   const todayCls  = isToday ? ' v2-day-card--today' : '';
   const statusCls = meta.cardCls ? ` ${meta.cardCls}` : '';
   const bracketEl = isToday ? '<span class="v2-br-tr"></span><span class="v2-br-bl"></span>' : '';
+  const artifact  = renderDayArtifact(histEntry);
 
-  return `
-    <div class="v2-day-card${todayCls}${statusCls}${isToday ? ' v2-bracketed' : ''}" style="overflow:visible">
-      ${bracketEl}
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span class="v2-section-label" style="margin:0">Day ${day.dayNumber}</span>
-          <span class="v2-badge ${meta.cls}">${esc(meta.label)}</span>
-        </div>
-        ${isToday ? `<span class="v2-badge v2-badge--today">Today</span>` : ''}
+  const header = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="v2-section-label" style="margin:0">Day ${day.dayNumber}</span>
+        <span class="v2-badge ${meta.cls}">${esc(meta.label)}</span>
       </div>
-      <p class="v2-body-text" style="margin:0">${esc(day.title || '—')}</p>
-      ${day.date ? `<p class="v2-muted-text" style="margin:4px 0 0">${esc(day.date)}</p>` : ''}
-    </div>`;
+      ${isToday ? `<span class="v2-badge v2-badge--today">Today</span>` : ''}
+    </div>
+    <p class="v2-body-text" style="margin:0">${esc(day.title || '—')}</p>
+    ${day.date ? `<p class="v2-muted-text" style="margin:4px 0 0">${esc(day.date)}</p>` : ''}`;
+
+  if (!artifact) {
+    return `<div class="v2-day-card${todayCls}${statusCls}${isToday ? ' v2-bracketed' : ''}" style="overflow:visible">${bracketEl}${header}</div>`;
+  }
+
+  // Wrap in a <details> so the day card stays compact by default but expands to show what was actually produced.
+  return `
+    <details class="v2-day-card v2-day-card--expandable${todayCls}${statusCls}${isToday ? ' v2-bracketed' : ''}" style="overflow:visible">
+      ${bracketEl}
+      <summary class="v2-day-card__summary">
+        ${header}
+        <span class="v2-day-card__chevron" aria-hidden="true">▾</span>
+      </summary>
+      <div class="v2-day-card__artifact">
+        ${artifact}
+      </div>
+    </details>`;
+}
+
+function renderDayArtifact(entry) {
+  if (!entry) return '';
+  const blocks = [];
+  if (entry.proofValue) {
+    const label = ({
+      text:      'Proof — what you produced',
+      link:      'Proof — link',
+      statement: 'Proof — statement',
+    })[entry.proofType] || 'Proof';
+    blocks.push(`
+      <div class="v2-artifact-block">
+        <div class="v2-artifact-block__label">${esc(label)}</div>
+        ${entry.proofType === 'link'
+          ? `<a class="v2-artifact-block__link" href="${escAttr(entry.proofValue)}" target="_blank" rel="noopener">${esc(entry.proofValue)}</a>`
+          : `<p class="v2-artifact-block__body">${esc(entry.proofValue)}</p>`}
+      </div>`);
+  }
+  if (entry.agentOutput) {
+    blocks.push(`
+      <div class="v2-artifact-block">
+        <div class="v2-artifact-block__label">Agent session</div>
+        <pre class="v2-artifact-block__pre">${esc(entry.agentOutput)}</pre>
+      </div>`);
+  }
+  if (entry.blockerNote) {
+    blocks.push(`
+      <div class="v2-artifact-block">
+        <div class="v2-artifact-block__label">What got in the way</div>
+        <p class="v2-artifact-block__body">${esc(entry.blockerNote)}</p>
+      </div>`);
+  }
+  if (!blocks.length) return '';
+  return blocks.join('');
+}
+
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────

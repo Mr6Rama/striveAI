@@ -240,6 +240,7 @@ function topBar(dayNum, status, goal, track, user) {
     dayNumber: d.dayNumber,
     status:    d.status || 'pending',
     title:     d.title,
+    role:      d.role,
   })) : [];
   const roadmap = days.length ? renderRoadmap({ days, currentDay: dayNum, variant: 'compact' }) : '';
 
