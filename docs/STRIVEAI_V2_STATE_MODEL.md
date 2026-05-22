@@ -2,7 +2,14 @@
 
 ## Overview
 
-All v2 state is stored under the `sv2_*` localStorage key namespace and mirrored to Firestore under `users/{uid}/kv/{key}`. The v1 `sa_*` keys are read-only for migration fallback and never written by v2 code.
+All v2 persistent state lives under the `sv2_*` localStorage key namespace and
+is mirrored to Firestore at `users/{uid}/kv/{key}`. The v1 `sa_*` keys are
+read-only for the one-time migration guard and never written by v2 code.
+
+This document is verified against `frontend/core/state-model.js`. Fields
+present in the code are documented under their domain. Fields planned but not
+yet implemented are listed under **Planned / not implemented** at the end of
+each domain.
 
 ---
 
@@ -137,8 +144,11 @@ interface TodayV2 {
   dayNumber: number;         // which day in the track (1–7)
   status: DayStatus;
   proof: ProofEntry | null;
+  proofResult: ProofResult | null;   // AI verdict on the latest proof submission
   agentSession: AgentSession | null;
+  actionKit: ActionKitItem[] | null; // Generated Action Kit items, if any
   rescueAction: RescueAction | null;
+  rescueRepeating: boolean;          // Set when the rescue surfaces a repeating pattern
   blockerText: string;       // user's typed blocker description
   skipReason: string;        // user's optional skip note
   outcomeAt: string;         // ISO timestamp when outcome was recorded
@@ -151,20 +161,33 @@ interface ProofEntry {
   submittedAt: string;       // ISO-8601
 }
 
+interface ProofResult {
+  verdict: 'met' | 'partial' | 'not_met';
+  note: string;              // Short AI explanation shown in the verdict card
+  checkedAt: string;         // ISO-8601
+}
+
 interface AgentSession {
   steps: AgentStep[];
   currentStepIndex: number;
   startedAt: string;
   closedAt: string;
   outcome: 'done' | 'blocked' | 'partial' | '';
+  proofNote: string;         // AI note returned with a partial/blocked verdict
 }
 
 interface AgentStep {
   index: number;             // 0-based
   text: string;              // step instruction
   status: 'pending' | 'done' | 'skipped';
-  stuckNote: string;         // if user asked for help on this step
+  note: string;              // user's per-step textarea content
   completedAt: string;
+}
+
+interface ActionKitItem {
+  type: 'template' | 'reference' | 'question' | 'tool' | 'tip';
+  label: string;
+  content: string;
 }
 
 interface RescueAction {
@@ -173,12 +196,14 @@ interface RescueAction {
   rescueTitle: string;       // smaller/rephrased version
   steps: string[];           // 1–3 micro-steps
   reframeNote: string;       // optional AI reframe
+  estimateMinutes: number;
   source: 'ai' | 'fallback';
   completed: boolean;
 }
 ```
 
-Default:
+Default (from `createDefaultTodayV2` in `frontend/core/state-model.js`):
+
 ```js
 function createDefaultTodayV2(date, dayNumber) {
   return {
@@ -186,8 +211,11 @@ function createDefaultTodayV2(date, dayNumber) {
     dayNumber: dayNumber || 1,
     status: 'pending',
     proof: null,
+    proofResult: null,
     agentSession: null,
+    actionKit: null,
     rescueAction: null,
+    rescueRepeating: false,
     blockerText: '',
     skipReason: '',
     outcomeAt: '',
@@ -195,6 +223,12 @@ function createDefaultTodayV2(date, dayNumber) {
   };
 }
 ```
+
+### Planned / not implemented (`sv2_today`)
+
+- `agentSession.steps[].stuckNote` — `agent_hint` is allowlisted on the
+  backend but not yet wired in `frontend/services/ai-v2.js`. The per-step
+  `note` field is the current user input.
 
 ---
 
@@ -313,7 +347,8 @@ function createDefaultTelegramV2() {
 
 ## In-Memory App State (`ui`)
 
-Not persisted. Lives in the store for the current session only.
+Not persisted. Lives in the store for the current session only. Source of
+truth is `createInitialState` in `frontend/core/state-model.js`.
 
 ```ts
 interface UIState {
@@ -329,6 +364,38 @@ interface UIState {
   day7RecapOpen: boolean;
   toast: { title: string; body: string } | null;
   error: string;
+  insight: string;            // Failure-pattern insight surfaced on /today
+  agentLoading: boolean;      // /agent is fetching steps or judging proof
+  kitLoading: boolean;        // /action-kit is generating
+  proofLoading: boolean;      // /proof is judging
+  recapLoading: boolean;      // /recap reflection paragraph is generating
+  trackContinuing: boolean;   // Day 7 continuation track is generating
+}
+```
+
+`state.recapText` (sibling to `ui`, not nested inside it) holds the
+session-only AI reflection text for `/recap`.
+
+---
+
+## Onboarding Draft (browser-only)
+
+Onboarding writes its in-progress form to `localStorage` under
+`sv2_onboarding_draft` so refreshing the page does not lose progress.
+The draft is **not** mirrored to Firestore and is cleared by
+`clearOnboardingDraft()` once the track is generated.
+
+```ts
+interface OnboardingDraft {
+  goalCategory: string;
+  goalTemplate: string;
+  specificGoal: string;
+  blocker: string;
+  dailyHours: string;       // '0-1' | '1-2' | '2-4' | '4-6'
+  ifThenRules: string[];    // 2–4 selected rule IDs
+  pingSelection: string;    // 'morning' | 'afternoon' | 'evening' | 'custom'
+  pingHour: number;         // 0–23 UTC
+  escalationRule: string;   // 'stricter' | 'message' | 'promise' | 'tiny_mode' | 'none'
 }
 ```
 
@@ -337,26 +404,33 @@ interface UIState {
 ## Full Initial State
 
 ```js
-function createInitialStateV2() {
+function createInitialState() {
   return {
-    user: createDefaultUserV2(),
-    track: createDefaultTrackV2(),
-    today: createDefaultTodayV2(isoDateNow(), 1),
-    history: createDefaultHistoryV2(),
-    telegram: createDefaultTelegramV2(),
+    user:      createDefaultUserV2(),
+    track:     createDefaultTrackV2(),
+    today:     createDefaultTodayV2(isoDateNow(), 1),
+    history:   createDefaultHistoryV2(),
+    telegram:  createDefaultTelegramV2(),
+    recapText: '',            // session-only
     ui: {
-      activeRoute: '/',
-      authReady: false,
-      loading: false,
-      trackGenerating: false,
-      agentOpen: false,
-      kitOpen: false,
-      blockedModalOpen: false,
-      rescueLoading: false,
-      proofModalOpen: false,
-      day7RecapOpen: false,
-      toast: null,
-      error: '',
+      activeRoute:       '/',
+      authReady:         false,
+      loading:           false,
+      trackGenerating:   false,
+      agentOpen:         false,
+      kitOpen:           false,
+      blockedModalOpen:  false,
+      rescueLoading:     false,
+      proofModalOpen:    false,
+      day7RecapOpen:     false,
+      toast:             null,
+      error:             '',
+      insight:           '',
+      agentLoading:      false,
+      kitLoading:        false,
+      proofLoading:      false,
+      recapLoading:      false,
+      trackContinuing:   false,
     },
   };
 }

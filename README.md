@@ -1,7 +1,14 @@
 # StriveAI v2
 
-7-day AI execution agent for builders, founders, and creators.
-Helps users execute a specific daily action — not just generate a plan.
+**7-day AI execution agent for builders.**
+StriveAI is not just a planner. It generates a 7-day execution track, gives one
+concrete daily action, guides execution inside the product with Agent Mode,
+checks Proof of Progress, runs a Rescue Action when the user is blocked, and
+adapts the next day based on what actually happened.
+
+This is a focused MVP. **No billing, no STEM mode, no generic AI chatbot,
+no Google/social auth, no email notifications.** See `CLAUDE.md` for the
+full list of enforced product decisions.
 
 ---
 
@@ -9,13 +16,14 @@ Helps users execute a specific daily action — not just generate a plan.
 
 | Layer | Technology |
 |---|---|
-| Frontend | Vanilla ES modules, no framework |
+| Frontend | Vanilla ES modules, bundled by esbuild into `frontend/bundle.js` |
 | Backend | Node.js + Express (AI proxy, Telegram, cron) |
-| Auth | Firebase Auth — email/password only |
+| Auth | Firebase Auth — email/password only (no Google, no magic link) |
 | Database | Firestore (`users/{uid}/kv/{sv2_*}`) + localStorage mirror |
-| AI | OpenAI via `/api/openai/generate` proxy |
-| Deployment | Vercel (serverless Node) |
-| Notifications | Telegram Bot (optional) |
+| AI | OpenAI via `POST /api/openai/generate` proxy |
+| Deployment | Vercel (serverless Node) — canonical |
+| Notifications | Telegram Bot (optional accountability ping) |
+| Design system | Paper/editorial: warm cream surface, ink text, one Strive blue accent |
 
 ---
 
@@ -23,17 +31,23 @@ Helps users execute a specific daily action — not just generate a plan.
 
 ```bash
 npm install
-# Copy and fill in environment variables
-cp .env.example .env   # edit with real values
-npm run dev            # auto-reload with node --watch
+cp .env.example .env   # fill in real values; never commit .env
+npm run build          # bundle frontend/app.js → frontend/bundle.js
+npm run dev            # backend with node --watch
 ```
 
 Open `http://localhost:3000`.
 
 ```bash
-npm run smoke          # quick health check (server start + /health)
+npm run smoke          # health check: server start + /health
 npm start              # production mode
+npm run build          # re-bundle the frontend after JS changes
 ```
+
+The frontend is a single-page app bundled via esbuild (`npm run build` →
+`frontend/bundle.js`). Re-run `npm run build` after editing files under
+`frontend/app.js`, `frontend/core/`, `frontend/domain/`, `frontend/services/`,
+or `frontend/ui/`.
 
 ---
 
@@ -66,7 +80,8 @@ All required vars are in `.env.example`. Copy it to `.env` — never commit `.en
 ### Vercel cron
 
 `vercel.json` schedules `/api/cron/telegram-pings` at `0 9 * * *` (09:00 UTC daily).
-This is the Vercel Hobby plan limit (one daily job only).
+This is the Vercel Hobby plan limit (one daily job only). All connected users
+receive their daily ping at 09:00 UTC — per-user timezones are not implemented.
 The cron endpoint is protected by `CRON_SECRET` — set it in Vercel env vars.
 
 ### Firebase Hosting
@@ -99,30 +114,39 @@ requires a separate deploy pipeline and is not tested for this app.
 
 ```
 frontend/
-  app.js              ← v2 boot, auth, route dispatch
+  index.html          ← SPA shell. Loads /style.css + /bundle.js into #app-v2.
+  style.css           ← Paper/editorial design system + page styles
+  app.js              ← v2 boot, auth, state, route dispatch (bundled by esbuild)
   core/
-    state-model.js    ← sv2_* schema and defaults
+    state-model.js    ← sv2_* schema and default factories
     store.js          ← pub/sub state store
+    migrations.js     ← v1 → v2 read-only migration guard
   domain/
-    today-engine.js   ← daily rollover, pattern analysis, adapt trigger
+    today-engine.js   ← v2 engine: rollover, pattern analysis, adapt trigger
+    plan-engine.js    ← v1 leftover (no longer referenced at runtime)
   services/
     auth.js           ← Firebase email/password auth
-    ai-v2.js          ← v2 AI action calls with fallbacks
-    persistence.js    ← localStorage + Firestore dual-write
+    ai-v2.js          ← v2 AI action calls with fallbacks (active)
+    ai.js             ← v1 leftover (no longer referenced at runtime)
+    persistence.js    ← localStorage + Firestore dual-write under sv2_*
   ui/
-    router.js         ← pushState router
-    pages/            ← one file per route
+    router.js         ← pushState router with V2_ROUTES allowlist
+    pages/            ← one file per route (see “v2 routes” table below)
 
 backend/
-  server.js           ← Express: AI proxy, Telegram, cron, auth middleware
+  server.js           ← Express: AI proxy, Telegram bot, cron, auth middleware
   utils/logger.js     ← Structured logger
 
 docs/
-  STRIVEAI_V2_PRODUCT_SPEC.md   ← product decisions
-  STRIVEAI_V2_STATE_MODEL.md    ← data schema
-  STRIVEAI_V2_AI_ACTIONS.md     ← AI prompt specs
-  LEGACY_NOTES.md               ← v1 code still present + cutover checklist
-  SECURITY_NOTES.md             ← credential rotation guide
+  STRIVEAI_V2_PRODUCT_SPEC.md       ← product decisions
+  STRIVEAI_V2_ROUTES_AND_SCREENS.md ← per-route screen specs
+  STRIVEAI_V2_STATE_MODEL.md        ← sv2_* data schema
+  STRIVEAI_V2_AI_ACTIONS.md         ← AI action prompts and fallbacks
+  STRIVEAI_V2_TELEGRAM_SPEC.md      ← Telegram bot + ping flow
+  SECURITY_NOTES.md                 ← credential rotation guide
+  V2_BACKEND_AUTH.md                ← Firebase Admin token verification
+  LEGACY_NOTES.md                   ← v1 code still on disk + cleanup tracker
+  FRONTEND_CANONICAL_DIR.md         ← frontend/ is the only frontend dir
 ```
 
 ### State namespace
@@ -142,20 +166,25 @@ Do not read from or write to the old `sa_*` v1 keys.
 
 ## v2 routes
 
-| Route | Screen |
-|---|---|
-| `/landing` | Landing |
-| `/auth` | Sign in / Create account |
-| `/onboarding` | 8-step onboarding |
-| `/plan-preview` | 7-day track preview |
-| `/today` | Today's Action (primary screen) |
-| `/agent` | Agent Workspace — guided micro-steps |
-| `/action-kit` | AI-generated task material |
-| `/proof` | Proof of Progress |
-| `/blocked` | Blocked / Skipped rescue flow |
-| `/progress` | 7-day track grid + stats |
-| `/recap` | Day 7 recap + continuation choice |
-| `/settings` | Settings |
+Defined in `frontend/ui/router.js`. Any path not in this allowlist is
+rewritten to `/not-found`.
+
+| Route | Screen | Purpose |
+|---|---|---|
+| `/landing` | Landing | Product-native marketing front door |
+| `/auth` | Sign in / Create account | Email + password (Firebase Auth) |
+| `/onboarding` | Onboarding | 8-step setup: goal → blocker → intensity → if-then → Telegram → escalation → confirm |
+| `/confirm-track` | Confirm track | Minimal stub. Currently overlaps with `/plan-preview`. |
+| `/plan-preview` | Plan preview | Setup summary + Day 1 hero + Day 2–7 outline |
+| `/today` | Today's Action | Primary daily screen. Action card + Start with Agent / Action Kit / Proof / Blocked / Skip |
+| `/agent` | Agent Mode | 3–5 ordered micro-steps, per-step note, end-of-session proof |
+| `/action-kit` | Action Kit | AI-generated templates, questions, tips for today's task |
+| `/proof` | Proof of Progress | Submit text / link / statement → AI verdict (met / partial / not-met) |
+| `/blocked` | Blocked / Skipped | Reason picker → AI Rescue Action → Mark Rescued / Accept Missed |
+| `/progress` | Progress | 7-day timeline + stats + failure pattern summary |
+| `/recap` | Day 7 Recap | Results grid, AI reflection, Continue same goal / Start new track |
+| `/settings` | Settings | Email, experience, Telegram connect/disconnect, sign out |
+| `/not-found` | 404 | Fallback for any unknown route |
 
 ---
 
@@ -175,10 +204,13 @@ See `docs/SECURITY_NOTES.md` for credential rotation procedures.
 
 ## Known limitations / next steps
 
-See `docs/LEGACY_NOTES.md` for the full v1 cutover checklist.
+See `docs/LEGACY_NOTES.md` for the full v1 cleanup tracker.
 
 Short list:
-- `frontend/script.js` (v1 monolith) is still loaded by `index.html`. It runs the old product loop. The v2 app mounts into `#app-v2` which does not yet exist in `index.html`. **Cutover step**: add `<div id="app-v2">`, remove the `<script src="script.js">` tag, delete `script.js`.
+- `frontend/script.js` (v1 monolith, ~500 KB) is still on disk but **no longer loaded** — `index.html` mounts `bundle.js` into `#app-v2`. The file can be deleted once nothing else in the repo references it (currently only `frontend/services/ai.js` and `frontend/domain/plan-engine.js` link back to v1, and they are also unreferenced at runtime).
 - Telegram cron fires at 09:00 UTC for all users. Per-user timezone scheduling requires a Vercel Pro plan (multiple cron jobs) or an external scheduler.
-- Action Kit usage is not tracked per history entry yet (`actionKits` stat is always 0 in Progress/Recap).
-- `/confirm-track` page is a stub — onboarding currently navigates straight to `/plan-preview`.
+- `/confirm-track` route exists but overlaps with `/plan-preview`. Pick one; the other should be removed.
+- Onboarding is 8 steps. Compressing to 5 by deferring Telegram + Escalation + If-Then to Settings is a known improvement.
+- `/settings` exposes only email, experience level, and Telegram connect/disconnect. Daily intensity, ping hour, escalation rule, and if-then rules captured in onboarding cannot yet be edited.
+- `agent_hint` is allowlisted on the backend but not yet called from the v2 client (`frontend/services/ai-v2.js`).
+- No automated tests yet. `npm run smoke` is the only check.

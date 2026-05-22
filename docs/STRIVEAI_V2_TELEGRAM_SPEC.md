@@ -221,19 +221,22 @@ Your goal: Validate my SaaS idea with 10 paying customers
 
 ### Vercel Cron (MVP approach)
 
-Add to `vercel.json`:
+Current `vercel.json`:
 ```json
 {
   "crons": [
     {
       "path": "/api/cron/telegram-pings",
-      "schedule": "0 * * * *"
+      "schedule": "0 9 * * *"
     }
   ]
 }
 ```
 
-This runs every hour (at the top of each hour UTC).
+This runs once per day at 09:00 UTC. The Vercel Hobby plan only allows
+one cron job per project, so per-hour scheduling is not available without
+upgrading. All connected users receive their daily ping at the same UTC
+hour — per-user timezone is a known limitation (see below).
 
 ### `GET /api/cron/telegram-pings`
 

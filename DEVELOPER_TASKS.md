@@ -1,6 +1,26 @@
 # Strive Developer Tasks
 
-## Purpose
+> ⚠️ **Superseded by v2.** This file is the v1 task brief and is preserved
+> for historical reference only. It refers to roadmaps, milestones, AI chat,
+> billing/PayPal, and an admin dashboard — none of which exist in the v2
+> product. **Do not implement tasks from this file.**
+>
+> For the current product, follow:
+>
+> - `CLAUDE.md` — hard rules + current architecture
+> - `docs/STRIVEAI_V2_PRODUCT_SPEC.md` — product behavior
+> - `docs/STRIVEAI_V2_ROUTES_AND_SCREENS.md` — screens
+> - `docs/STRIVEAI_V2_STATE_MODEL.md` — data
+> - `docs/STRIVEAI_V2_AI_ACTIONS.md` — AI actions
+>
+> The v2 product is a 7-day AI execution agent. It has **no billing, no
+> roadmap/milestone model, no generic AI chat, no admin dashboard, no STEM
+> mode, no email notifications, no PayPal**. Adding any of those would
+> violate `CLAUDE.md` hard rules.
+
+---
+
+## Purpose (v1 — historical)
 
 Improve the product functionality so Strive feels useful every day, not just visually polished.
 
