@@ -218,27 +218,27 @@ const ACTION_AI_CONFIG = Object.freeze({
   // ── v2 actions ────────────────────────────────────────────────────────────
   track_generate: {
     model: 'gpt-5-mini',
-    maxCompletionTokens: 1400,
+    maxCompletionTokens: 2000,
     reasoningEffort: 'minimal',
-    temperature: 0.9,
+    temperature: 0.55,
     topP: 1,
-    contextLimits: { promptChars: 5000, systemChars: 1400, totalChars: 6000 },
+    contextLimits: { promptChars: 7000, systemChars: 2000, totalChars: 8500 },
   },
   track_continue: {
     model: 'gpt-5-mini',
-    maxCompletionTokens: 1400,
+    maxCompletionTokens: 2000,
     reasoningEffort: 'minimal',
-    temperature: 0.9,
+    temperature: 0.55,
     topP: 1,
-    contextLimits: { promptChars: 5000, systemChars: 1400, totalChars: 6000 },
+    contextLimits: { promptChars: 7000, systemChars: 2000, totalChars: 8500 },
   },
   agent_steps: {
-    model: 'gpt-5-nano',
-    maxCompletionTokens: 600,
+    model: 'gpt-5-mini',
+    maxCompletionTokens: 900,
     reasoningEffort: 'minimal',
-    temperature: 0.8,
+    temperature: 0.6,
     topP: 1,
-    contextLimits: { promptChars: 2000, systemChars: 800, totalChars: 2600 },
+    contextLimits: { promptChars: 3500, systemChars: 1600, totalChars: 4800 },
   },
   agent_hint: {
     model: 'gpt-5-nano',
@@ -415,13 +415,32 @@ function buildV2Fallback(action, prompt) {
   }
 
   if (action === 'agent_steps') {
-    const title = parseV2PromptField(safePrompt, "Today's task") || 'your task';
-    const short = title.slice(0, 60);
+    const title    = parseV2PromptField(safePrompt, "TODAY'S TASK") || parseV2PromptField(safePrompt, "Today's task") || 'your task';
+    const success  = parseV2PromptField(safePrompt, 'Done when') || 'a concrete output exists';
+    const short    = title.slice(0, 80);
     return {
       steps: [
-        { index: 0, text: `Open your workspace and re-read the task: "${short}"` },
-        { index: 1, text: 'Write down the single most important sub-task you need to complete first.' },
-        { index: 2, text: 'Complete that sub-task and record the output before stopping.' },
+        {
+          index: 0,
+          text: `Open the doc or file you will use and type the task title at the top: "${short}".`,
+          output: 'A working doc/file with the task title at the top.',
+        },
+        {
+          index: 1,
+          text: 'Write 2-3 concrete bullet points naming the very first sub-pieces of this task.',
+          output: '2-3 sub-pieces named in writing.',
+          hint: 'Don\'t plan the whole task. Just name the next 2-3 things that can be done in 15-minute slices.',
+        },
+        {
+          index: 2,
+          text: 'Do the first bullet completely and paste the result back here.',
+          output: 'A real artifact from the first bullet exists.',
+        },
+        {
+          index: 3,
+          text: `Check against "${success}". If not met, do the next bullet; if met, stop.`,
+          output: 'Either the next bullet is done OR success criteria is fully met.',
+        },
       ],
     };
   }

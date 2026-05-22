@@ -168,8 +168,10 @@ function validateTrack(raw) {
   };
 }
 
+const DAY_ROLE_SET = new Set(['setup', 'build', 'validate', 'ship', 'review', 'recover']);
+
 function validateDayPlan(raw) {
-  const empty = { dayNumber: 1, title: '', why: '', successCriteria: '', estimateMinutes: 60, category: '', status: 'pending', date: '', adaptedAt: '', adaptNote: '' };
+  const empty = { dayNumber: 1, title: '', why: '', successCriteria: '', estimateMinutes: 60, category: '', role: 'build', status: 'pending', date: '', adaptedAt: '', adaptNote: '' };
   if (!raw || typeof raw !== 'object') return empty;
   return {
     dayNumber:       Math.max(1, Math.min(7, Number(raw.dayNumber) || 1)),
@@ -178,6 +180,7 @@ function validateDayPlan(raw) {
     successCriteria: String(raw.successCriteria || ''),
     estimateMinutes: Number(raw.estimateMinutes) || 60,
     category:        String(raw.category        || ''),
+    role:            DAY_ROLE_SET.has(raw.role) ? raw.role : 'build',
     status:          normalizeDayStatus(raw.status),
     date:            String(raw.date            || '').slice(0, 10),
     adaptedAt:       String(raw.adaptedAt       || ''),
@@ -263,11 +266,13 @@ function validateAgentSession(raw) {
 }
 
 function validateAgentStep(raw) {
-  const empty = { index: 0, text: '', status: 'pending', stuckNote: '', completedAt: '' };
+  const empty = { index: 0, text: '', output: '', hint: '', status: 'pending', stuckNote: '', completedAt: '' };
   if (!raw || typeof raw !== 'object') return empty;
   return {
     index:       Number(raw.index)  || 0,
     text:        String(raw.text        || ''),
+    output:      String(raw.output      || '').slice(0, 200),
+    hint:        String(raw.hint        || '').slice(0, 240),
     status:      ['pending', 'done', 'skipped'].includes(raw.status) ? raw.status : 'pending',
     stuckNote:   String(raw.stuckNote   || ''),
     completedAt: String(raw.completedAt || ''),

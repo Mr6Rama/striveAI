@@ -10260,6 +10260,19 @@ body.v2-body::before {
 .v2-streak-chip__sep { color: var(--v2-border-2); }
 .v2-streak-chip__label { color: var(--v2-muted); font-weight: 500; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; }
 
+/* Agent step inline hint — concrete template/example for the current step */
+.v2-step-hint {
+  font-family: var(--v2-fbody);
+  font-size: .92rem;
+  line-height: 1.5;
+  color: var(--v2-text-2);
+  background: var(--v2-blue-wash);
+  border-left: 2px solid var(--v2-blue);
+  padding: 8px 12px;
+  margin: 0 0 12px;
+  border-radius: 0 4px 4px 0;
+}
+
 /* Agent Mode intro banner */
 .v2-agent-intro {
   background: var(--v2-blue-wash);
