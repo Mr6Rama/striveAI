@@ -321,20 +321,27 @@ function stepList(steps, currentIndex, note, loading) {
     }
     if (i === currentIndex) {
       const isLast = i === steps.length - 1;
-      const cta = isLast ? 'Finish today’s task →' : 'Done, next step →';
+      const cta    = isLast ? 'Finish today’s task →' : 'Done, next step →';
+      const label  = step.output
+        ? `Paste what you produced — ${step.output}`
+        : 'What did you produce in this step?';
+      const placeholder = step.output
+        ? `e.g. ${step.output}`
+        : 'One short line — link, output, or where you got to…';
       return `<div class="v2-step-card--active v2-bracketed" style="overflow:visible">
         <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
         <div class="v2-today-action" style="margin-bottom:8px">Step ${i + 1} of ${steps.length}${stepTag(step.text) ? ` · ${stepTag(step.text)}` : ''}</div>
-        <p class="v2-h3" style="margin-bottom:12px">${esc(step.text)}</p>
+        <p class="v2-h3" style="margin-bottom:${step.hint ? '8px' : '12px'}">${esc(step.text)}</p>
+        ${step.hint ? `<p class="v2-step-hint">${esc(step.hint)}</p>` : ''}
         <div class="v2-field">
-          <label class="v2-label">What did you do or produce?</label>
-          <textarea id="ag-note" rows="3" placeholder="One short line — link, output, or where you got to…" class="v2-textarea" style="min-height:70px"></textarea>
+          <label class="v2-label">${esc(label)}</label>
+          <textarea id="ag-note" rows="3" placeholder="${esc(placeholder)}" class="v2-textarea" style="min-height:70px"></textarea>
         </div>
         <div class="v2-row" style="margin-top:8px">
           <button id="ag-complete" ${loading ? 'disabled' : ''} class="v2-btn v2-btn--primary" style="flex:1">
             ${cta}
           </button>
-          <button id="ag-stuck" class="v2-btn v2-btn--ghost" title="Flag this step as blocked and get help">I'm stuck</button>
+          <button id="ag-stuck" class="v2-btn v2-btn--ghost" title="Flag this step as blocked and get help">I’m stuck</button>
         </div>
       </div>`;
     }

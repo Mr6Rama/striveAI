@@ -79,16 +79,19 @@ export function inferBlockerCategory(text) {
 
 // ── JSON schemas ───────────────────────────────────────────────────────────
 
+const DAY_ROLES = ['setup', 'build', 'validate', 'ship', 'review', 'recover'];
+
 const DAY_ITEM_SCHEMA = {
   type: 'object',
-  required: ['dayNumber', 'title', 'why', 'successCriteria', 'estimateMinutes', 'category'],
+  required: ['dayNumber', 'title', 'why', 'successCriteria', 'estimateMinutes', 'category', 'role'],
   properties: {
     dayNumber:       { type: 'integer', minimum: 1, maximum: 7 },
-    title:           { type: 'string', maxLength: 80 },
+    title:           { type: 'string', maxLength: 90 },
     why:             { type: 'string', maxLength: 120 },
-    successCriteria: { type: 'string', maxLength: 120 },
+    successCriteria: { type: 'string', maxLength: 140 },
     estimateMinutes: { type: 'integer', enum: [30, 45, 60, 90, 120] },
     category:        { type: 'string' },
+    role:            { type: 'string', enum: DAY_ROLES },
     blockerRisk:     { type: 'string', maxLength: 100 },
   },
 };
@@ -115,10 +118,12 @@ function stepsSchema() {
         maxItems: 5,
         items: {
           type: 'object',
-          required: ['index', 'text'],
+          required: ['index', 'text', 'output'],
           properties: {
-            index: { type: 'integer' },
-            text:  { type: 'string', maxLength: 140 },
+            index:  { type: 'integer' },
+            text:   { type: 'string', maxLength: 160 },
+            output: { type: 'string', maxLength: 120 },
+            hint:   { type: 'string', maxLength: 200 },
           },
         },
       },
@@ -186,21 +191,47 @@ function adaptSchema() {
 
 // ── System context strings ─────────────────────────────────────────────────
 
-const TRACK_CTX = `You are a 7-day execution planner for young builders, creators, and early founders.
-Generate one concrete action per day that moves the user closer to their stated goal.
-Each action must be completable in the user's stated daily hours.
-Actions must be specific to the goal — no generic filler tasks.
-Return JSON only.`;
+const TRACK_CTX = `You are a 7-day execution coach for one specific person.
+Your job: produce 7 concrete actions, each one tailored to the user's actual project and stated week-outcome.
 
-const STEPS_CTX = `You are an execution assistant. Break one task into ordered micro-steps.
-Each step must be concrete, specific, and completable in 15–45 minutes.
-No motivational filler. No generic advice. Steps only.
-Return JSON only.`;
+CORE RULES:
+- Each task title must reference the user's specific project, output, or artifact. NEVER use placeholders like "your plan", "your goal", "your project".
+- Banned verbs in titles (these are non-actions): define, plan, work on, think about, decide, consider, explore, research (without an object), prepare, set up (without a specific thing).
+- Required verb pattern: a physical or digital action ON a named object. Examples: "Write", "Send", "Call", "Code", "Draft", "Email", "Build the X", "Pick 3 Y", "Record", "Publish".
+- Each task must produce a checkable artifact: a file, a message sent, a list written, a metric recorded, a draft completed.
+- The 7 days must form a story arc. Use role: setup -> build -> build -> validate -> build/ship -> ship -> review.
+- Day 1 must be the smallest possible real action (under 90 minutes). Day 7 must produce a shareable artifact.
 
-const RESCUE_CTX = `The user is blocked. Generate a rescue action: a smaller, more accessible version of the original task.
-The rescue must be completable in 5–30 minutes.
-Steps must be concrete — no advice or motivation.
-Return JSON only.`;
+TONE: direct, concrete, like a coach who knows them. No motivational filler. No "remember to take breaks".
+OUTPUT: JSON only.`;
+
+const STEPS_CTX = `You are inside a 7-day execution coach helping the user do today's task right now.
+Your job: break today's task into 3-5 micro-steps the user can do in this session.
+
+CORE RULES:
+- Banned step types (never produce these):
+  * "Open your workspace and re-read the task" - this is meta, not work
+  * "Decide what's most important" / "Choose your approach" - this is planning a plan
+  * "Think about X" / "Reflect on Y" - the user came here to DO, not think
+  * "Set up your environment" without naming what
+- Each step must be a physical action on a named object. Use verbs like: Write, Type, Open <specific file/URL>, Copy, Send, Run, Save, Add, Click, Record, Paste.
+- Each step must produce a visible OUTPUT (a sentence, a file, a number, a list) that the user can paste back as proof.
+- Step 1 must be the lowest-friction concrete action possible — getting the user moving in under 5 minutes.
+- Steps must reference the actual task content, not abstract it.
+- Do not send the user to "their workspace" without a specific reason — assume the user is already where they need to be.
+
+TONE: short, declarative. Like a teammate sitting next to them.
+OUTPUT: JSON only.`;
+
+const RESCUE_CTX = `The user is blocked on today's task. Generate a smaller version they can actually finish in 5-30 minutes.
+
+CORE RULES:
+- The rescue must be a meaningfully smaller version of the same task — not unrelated busywork.
+- Each step must be a concrete action with a named object. No meta-instructions.
+- Banned: "take a break", "come back later", "rest" - the user is HERE, give them something to do.
+- The reframeNote should help them see this rescue as real progress, not a consolation prize.
+
+OUTPUT: JSON only.`;
 
 // ── Exported functions ─────────────────────────────────────────────────────
 
@@ -211,29 +242,35 @@ export async function generateExecutionTrack(onboardingInput) {
       prompt: buildTrackPrompt(onboardingInput),
       systemCtx: TRACK_CTX,
       schema: trackSchema(),
-      maxTokens: 1400,
+      maxTokens: 2000,
     });
     if (!Array.isArray(data?.days) || data.days.length < 7) throw new Error('invalid track');
+    // Backfill role if model omitted it (defensive — schema requires it but be safe).
+    data.days = data.days.map((d, i) => ({ ...d, role: d.role || defaultRoleForDay(i + 1) }));
     return data;
   } catch (_e) {
     return fallbackTrack(onboardingInput);
   }
 }
 
-export async function generateAgentSteps(day, track, failureMemory) {
+function defaultRoleForDay(n) {
+  return ({ 1: 'setup', 2: 'build', 3: 'build', 4: 'validate', 5: 'build', 6: 'build', 7: 'ship' })[n] || 'build';
+}
+
+export async function generateAgentSteps(day, track, failureMemory, user) {
   try {
     const data = await requestJson({
       action: 'agent_steps',
-      prompt: buildAgentStepsPrompt(day, track, failureMemory),
+      prompt: buildAgentStepsPrompt(day, track, failureMemory, user),
       systemCtx: STEPS_CTX,
       schema: stepsSchema(),
-      maxTokens: 600,
+      maxTokens: 900,
     });
     const steps = Array.isArray(data?.steps) ? data.steps : [];
     if (!steps.length) throw new Error('empty steps');
     return steps;
   } catch (_e) {
-    return fallbackSteps(day);
+    return fallbackSteps(day, user);
   }
 }
 
@@ -365,38 +402,60 @@ function buildTrackPrompt(input) {
   const why        = String(input?.whyItMatters || '').trim();
   const tried      = String(input?.triedBefore || '').trim();
 
-  const extra = [
-    project  ? `Current project / what they're doing: ${project}` : '',
-    weekGoal ? `Concrete outcome wanted by day 7: ${weekGoal}` : '',
-    why      ? `Why it matters to them: ${why}` : '',
-    tried    ? `What they've already tried: ${tried}` : '',
-  ].filter(Boolean).join('\n');
+  // The "concrete object" the model must reference in titles. Falls back to goal.
+  const concreteObject = project || weekGoal || goal;
 
-  return `Goal: ${goal}
-Category: ${category}
-Daily hours: ${hours}
-Experience: ${experience}
-Biggest blocker: ${blocker}
-${extra}
+  const userCtx = `
+USER CONTEXT:
+- Stated goal: ${goal}
+- Category: ${category}
+- Daily time available: ${hours} hours
+- Experience level: ${experience}
+- Biggest blocker: ${blocker}
+${project  ? `- What they're working on right now: ${project}`              : '- (No specific project named)'}
+${weekGoal ? `- Concrete outcome they want by Day 7: ${weekGoal}`           : '- (No specific 7-day outcome named)'}
+${why      ? `- Why it matters to them: ${why}`                             : ''}
+${tried    ? `- What they have already tried (don't repeat these): ${tried}`: ''}`.trim();
 
-Generate a 7-day execution track tailored to this specific person and project.
-Reference their concrete situation in task titles where natural — don't repeat generic templates.
-Day 1 must be the lowest-friction start possible — achievable in under 2 hours.
-Each day builds directly on the previous.
-Day 7 must produce a concrete artifact or shareable proof point.
+  return `${userCtx}
 
-Field rules:
-- title: action-verb start, specific to this goal, max 80 chars.
-- why: one sentence connecting this day to the goal, max 120 chars.
-- successCriteria: the concrete done condition the user can verify, max 120 chars.
-- estimateMinutes: one of 30 | 45 | 60 | 90 | 120.
-- category: research | build | outreach | review | test | write | practice | other.
-- blockerRisk: one phrase for the most likely obstacle on this day, max 100 chars.
+TASK: Generate exactly 7 days that move this specific person from where they are to ${weekGoal || 'a concrete artifact'}.
 
-Bad titles: "Research market", "Work on project", "Make progress"
-Good titles: "Interview 3 people about their biggest frustration with this problem",
-             "Write the first draft of your outreach message (100 words max)",
-             "Build the core feature and run it end-to-end"`;
+FORMAT RULES:
+- title (max 90 chars): MUST reference "${concreteObject}" or a specific component of it. Action-verb start.
+  BAD:  "Define your workout plan: type, duration, and how many sessions"   (this is planning a plan)
+        "Research market opportunities"                                      (no object)
+        "Work on your project"                                               (vague)
+        "Set up your environment"                                            (set up what?)
+  GOOD: "Write the hero copy for your ${concreteObject || 'landing page'} (3 short lines)"
+        "Send 5 cold DMs about ${weekGoal || 'your idea'} to people in your niche"
+        "Pick 3 exercises for ${concreteObject || 'your routine'}: 1 push, 1 pull, 1 legs. Write reps."
+        "Build the auth screen for ${concreteObject || 'your app'} and push to your repo"
+- why (max 120 chars): one sentence tying this day to ${weekGoal || 'their goal'}. Direct, no filler.
+- successCriteria (max 140 chars): "You're done when [artifact] exists with [property]". Concrete and verifiable in 1 glance.
+- estimateMinutes: one of 30 | 45 | 60 | 90 | 120. Must fit in their daily ${hours}h.
+- category: one of: research | build | outreach | review | test | write | practice | other.
+- role: one of: setup | build | validate | ship | review | recover. Together the 7 roles must form an arc:
+  Day 1: setup
+  Days 2-3: build (mostly)
+  Day 4: validate (get feedback / test / interview / measure)
+  Days 5-6: build OR ship
+  Day 7: ship (must produce a shareable artifact)
+  If the user's biggest blocker is "motivation" or "overwhelmed", insert ONE "recover" day at day 4 or 5.
+- blockerRisk (max 100 chars): the most likely thing that could derail this specific day.
+
+DAY 1 SPECIAL RULES:
+- Must be completable in under 90 minutes regardless of stated hours.
+- Must NOT require any new tool, account, or external thing to be set up first.
+- Should feel like "of course I can do that" — anchor the week with a fast win.
+
+DAY 7 SPECIAL RULES:
+- Must produce a tangible, shareable artifact: a published post, a working demo, a sent message, a recorded video, a finished draft.
+- Title must contain a verb of completion: "Ship", "Publish", "Send", "Record", "Submit", "Post".
+
+DO NOT REPEAT what the user said they've already tried.
+
+Return JSON only with the trackSchema shape: { goal, days: [...] }.`;
 }
 
 function buildTrackContinuePrompt(previousTrack, previousDays, recap, choice) {
@@ -426,21 +485,57 @@ Design around the patterns that caused missed days.
 Day 1 of this new track should start from the current progress point.`;
 }
 
-function buildAgentStepsPrompt(day, track, failureMemory) {
-  const title    = String(day?.title || '').trim();
-  const goal     = String(track?.goal || '').trim();
-  const category = String(track?.goalCategory || 'other').trim();
-  const patterns = buildPatternSummary(failureMemory);
+function buildAgentStepsPrompt(day, track, failureMemory, user) {
+  const title           = String(day?.title || '').trim();
+  const why             = String(day?.why || '').trim();
+  const successCriteria = String(day?.successCriteria || '').trim();
+  const estimate        = Number(day?.estimateMinutes || 60);
+  const role            = String(day?.role || '').trim();
+  const goal            = String(track?.goal || '').trim();
+  const category        = String(track?.goalCategory || 'other').trim();
+  const project         = String(user?.currentProject || '').trim();
+  const weekGoal        = String(user?.weekGoal || '').trim();
+  const patterns        = buildPatternSummary(failureMemory);
 
-  return `Today's task: ${title}
+  return `TODAY'S TASK: ${title}
+Why: ${why}
+Done when: ${successCriteria}
+Role: ${role || 'work day'}
+Time budget: ${estimate} minutes
 Goal: ${goal}
 Category: ${category}
+${project  ? `User project: ${project}`   : ''}
+${weekGoal ? `Day 7 outcome: ${weekGoal}` : ''}
 Failure patterns so far: ${patterns}
 
-Break this task into 3–5 sequential micro-steps.
-Each step: one sentence, action-verb start, specific output expected.
-Steps must be completable in 15–45 minutes each.
-No summaries or introductions — steps only.`;
+TASK: Generate 3-5 sequential micro-steps that walk this user through completing TODAY'S TASK right now, in one session.
+
+BANNED STEP PATTERNS (never produce):
+- "Open your workspace and re-read the task"             (meta, not work)
+- "Decide what's the most important thing"               (planning a plan)
+- "Think about how you'll approach this"                 (thinking, not doing)
+- "Set up your environment"                              (set up WHAT?)
+- "Make a plan for X"                                    (plan inside a plan)
+- "Reflect on Y"                                         (the user came to DO)
+
+GOOD STEPS (each is a physical action with an output):
+- "Type the first headline for ${project || 'your landing page'} (one sentence, under 10 words)."
+- "Open the doc and write 3 bullet points describing what the user wants."
+- "Send this exact message to the first 3 people on your list: 'Quick question — would you ever pay for X?'"
+- "Run \`npm create vite@latest myapp -- --template react\` in your terminal."
+
+STEP STRUCTURE (per item):
+- text (max 160 chars): one declarative sentence. Action verb FIRST. Names a specific object.
+- output (max 120 chars): what should physically exist after this step. Examples: "A 1-sentence headline written in your doc", "A list of 3 names with emails", "The first message sent".
+- hint (max 200 chars, OPTIONAL): a concrete template, formula, or example the user can copy. Only include when genuinely useful. Examples:
+  * "Template: '[Problem] is annoying because [reason]. [Your name] makes [solution].'"
+  * "Try: 'Hey [name], saw you posted about [topic]. Quick question — [your question]?'"
+  * "Formula: hero copy = ['who it's for'] + ['what changes'] + ['proof']"
+
+STEP 1 MUST be the lowest-friction concrete action that gets the user moving in under 5 minutes.
+Each step must be completable in ${Math.max(10, Math.round(estimate / 4))}-${Math.max(20, Math.round(estimate / 2))} minutes.
+
+Return JSON only.`;
 }
 
 function buildProofCheckPrompt(day, proofInput, track) {
@@ -542,30 +637,107 @@ No motivational filler. Factual and direct.`;
 
 // ── Fallbacks ──────────────────────────────────────────────────────────────
 
-const FALLBACK_TITLES = {
-  project:  ['Define what you are building and who it is for', 'Cut scope to 3 essential features', 'Set up your repo and write a project README', 'Build the core feature end-to-end', 'Test with 2 real people and note observations', 'Fix the top issue found in testing', 'Record a demo or capture final screenshots'],
-  startup:  ['Write your one-sentence value proposition', 'List 10 potential users and mark 3 reachable', 'Send 5 direct outreach messages requesting calls', 'Run 3 user interviews and log verbatim quotes', 'Build a rough prototype of the core flow', 'Show prototype to 2 users and record reactions', 'Write a one-page problem–solution–evidence summary'],
-  content:  ['Draft your first post or script', 'Edit: cut everything not directly useful to the reader', 'Publish and note initial engagement numbers', 'Batch-write 2 more pieces in the same format', 'Study 3 high-performing posts in your niche', 'Apply the best structure to one draft and publish', 'Review 7-day numbers and write one clear lesson'],
-  skill:    ['Define one small project to build with this skill', 'Complete the first tutorial and write 3 takeaways', 'Build one exercise from scratch without copying', 'Find and close the biggest knowledge gap', 'Build an exercise combining two concepts', 'Explain the core concept back in 200 words', 'Complete or demo the project from Day 1'],
-  career:   ['Write your target-role summary and top qualification', 'Update your resume and cut every bullet to one line', 'Find 5 job postings where you meet 70%+ of requirements', 'Send one personalised cold outreach message', 'Apply to 2 saved postings with customised notes', 'Write out answers to the 3 most common interview questions', 'Do a mock interview and record yourself'],
-  study:    ['List the 3 most important concepts for this week', 'Study concept 1 and write a summary in your own words', 'Complete 3 practice problems on concept 1', 'Study concept 2 and connect it to concept 1 in writing', 'Complete 5 mixed practice problems', 'Study concept 3 and write a summary connecting all three', 'Do a timed recall without notes and note weak spots'],
-  habit:    ['Define the habit: trigger, action, and duration', 'Do the habit today and record start and end time', 'Set a specific daily time and block it in your calendar', 'Do the habit and rate difficulty 1–5', 'Remove one friction point and prepare the environment', 'Do the habit and note whether preparation helped', 'Write a one-paragraph reflection on what worked or did not'],
-  fitness:  ['Define your plan: type, duration, and frequency', 'Complete the first workout and record your key metric', 'Identify one technique issue and look up the fix', 'Complete second workout applying the technique change', 'Add one measurable progressive overload', 'Rest or do light movement and prepare for Day 7', 'Final workout: record metric and compare to Day 2'],
+// Specific, action-oriented fallbacks. Each item is [title, successCriteria, role, minutes, category].
+// Used when the AI request fails — these must be just as concrete as AI output.
+const FALLBACK_DAYS = {
+  project: [
+    ['Write a 3-sentence description of what you are building and who it is for', 'You have 3 sentences saved in a doc that name the user and the value', 'setup', 30, 'write'],
+    ['List the 3 essential features and cross out everything else', 'A list of exactly 3 must-have features exists', 'setup', 45, 'review'],
+    ['Initialise the repo, push a placeholder commit, and write the README first paragraph', 'Repo is created and the README opens with a real description', 'build', 60, 'build'],
+    ['Build the most important feature end-to-end (rough is fine)', 'You can run the core feature once and see it work', 'build', 120, 'build'],
+    ['Show the rough version to 2 people and write down their first reactions verbatim', 'Two sets of verbatim quotes exist in a notes doc', 'validate', 60, 'outreach'],
+    ['Fix the single biggest issue from the feedback', 'The fix is committed and the original problem no longer happens', 'build', 90, 'build'],
+    ['Record a 60-second screen demo or capture 3 clean screenshots, then post one', 'A demo or screenshot pack is published or saved as an artifact', 'ship', 60, 'ship'],
+  ],
+  startup: [
+    ['Write your value proposition in this exact format: "For [who], who [problem], we offer [thing] that [outcome]."', 'One sentence in that exact format is saved', 'setup', 30, 'write'],
+    ['List 10 specific people who match "who" and mark the 3 you can reach this week', 'A list of 10 names with 3 marked exists', 'setup', 45, 'research'],
+    ['Send a real DM/email to each of the 3 marked people asking for 15 minutes', '3 messages have been sent (not drafted)', 'outreach', 45, 'outreach'],
+    ['Run the first call you got, follow the script, and log 5 verbatim quotes', 'A doc with 5 quotes from the call exists', 'validate', 60, 'outreach'],
+    ['Build a rough prototype of the core flow (a Figma frame or 1 working screen)', 'A clickable or visual prototype of the core flow exists', 'build', 120, 'build'],
+    ['Show the prototype to the 2 most relevant people from your list and capture reactions', 'Reactions from 2 people are captured in writing', 'validate', 45, 'outreach'],
+    ['Write a one-page summary of problem, solution, evidence and post it (LinkedIn, blog, anywhere)', 'A one-pager is published with a link you can share', 'ship', 60, 'ship'],
+  ],
+  content: [
+    ['Pick the topic of your first piece and write a 2-sentence promise to the reader', 'Topic and promise are written down', 'setup', 30, 'write'],
+    ['Draft the full piece (don\'t edit — just get it out)', 'A complete first draft exists, however ugly', 'build', 90, 'write'],
+    ['Cut every sentence that doesn\'t serve the reader\'s outcome', 'The piece is 30%+ shorter and tighter', 'build', 60, 'write'],
+    ['Read it aloud once and fix everything that sounds wrong', 'No clunky sentences remain', 'validate', 30, 'review'],
+    ['Find 3 high-performing posts in your niche and steal one structural pattern', 'You have a structural change written into your piece', 'build', 45, 'research'],
+    ['Apply final formatting (headings, line breaks, one image or pull quote)', 'The piece looks like a finished product on the page', 'build', 45, 'build'],
+    ['Publish and share it in 2 specific places (and DM 1 person you respect)', 'The post is live and the DM is sent', 'ship', 45, 'ship'],
+  ],
+  skill: [
+    ['Pick one tiny project (1-2 hour scope) you will build using this skill by Day 7', 'A 1-line project description is written down', 'setup', 30, 'write'],
+    ['Complete the first tutorial or chapter and write 3 takeaways in your own words', '3 takeaways are written in a notes doc', 'build', 60, 'practice'],
+    ['Build one exercise from scratch without copying — close every tutorial first', 'The exercise runs and you closed all reference tabs', 'build', 60, 'practice'],
+    ['Find the concept you struggled with most and watch / read one resource to close it', 'You can explain that concept in 3 sentences', 'validate', 45, 'practice'],
+    ['Build a small exercise that combines two concepts you have learned', 'The combined exercise runs', 'build', 60, 'practice'],
+    ['Write a 200-word explanation of the core concept as if teaching a friend', 'A 200-word explainer exists', 'review', 45, 'write'],
+    ['Complete your Day 1 mini-project and post a screenshot or demo of it working', 'The mini-project works and a proof artifact is shared', 'ship', 90, 'ship'],
+  ],
+  career: [
+    ['Write your target-role summary (3 lines) and pick your single strongest qualification', 'Summary + qualification are written', 'setup', 30, 'write'],
+    ['Rewrite your resume bullets — each line one outcome, no soft verbs', 'Resume bullets are one line, outcome-focused', 'build', 90, 'write'],
+    ['Find 5 job postings where you meet 70%+ of the listed requirements', 'A list of 5 postings exists with links', 'research', 45, 'research'],
+    ['Send 1 personalised cold message to someone at your target company (LinkedIn or email)', 'One real personalised message has been sent', 'outreach', 45, 'outreach'],
+    ['Apply to 2 of your saved postings with customised cover letters', '2 applications are submitted', 'ship', 90, 'outreach'],
+    ['Write out word-for-word answers to the 3 most common interview questions for this role', '3 written answers exist', 'build', 45, 'write'],
+    ['Do a 15-minute mock interview, record yourself, and watch 1 thing you want to change', 'A recording + 1 change-note exists', 'ship', 45, 'practice'],
+  ],
+  study: [
+    ['List the 3 most important concepts to learn this week and pick concept 1', 'A list of 3 concepts is written, with one circled', 'setup', 30, 'review'],
+    ['Study concept 1 and write a 100-word summary in your own words (no copy-paste)', 'A 100-word summary exists', 'build', 60, 'practice'],
+    ['Complete 3 practice problems on concept 1, no notes', '3 attempts with answers exist', 'build', 60, 'practice'],
+    ['Study concept 2 and write how it connects to concept 1 (3-5 sentences)', 'A connection note exists', 'build', 60, 'practice'],
+    ['Complete 5 mixed practice problems covering concept 1 and 2', '5 attempts exist with answers', 'validate', 60, 'practice'],
+    ['Study concept 3 and write a 1-page summary tying all 3 concepts together', 'A 1-page summary exists', 'build', 90, 'write'],
+    ['Do a 30-minute timed recall without notes, then list 3 weak spots to revisit', 'A timed recall + weak-spot list exists', 'review', 45, 'practice'],
+  ],
+  habit: [
+    ['Write the habit in this exact format: "After [trigger], I will [action] for [time]."', 'One sentence in that format is written', 'setup', 15, 'write'],
+    ['Do the habit today and record start/end time', 'A log entry with times exists', 'build', 30, 'practice'],
+    ['Block the habit time in your calendar every day this week', 'Calendar blocks for the next 5 days are visible', 'setup', 15, 'build'],
+    ['Do the habit and rate difficulty 1-5 in the log', 'A log entry with a difficulty rating exists', 'build', 30, 'practice'],
+    ['Remove one friction point — prepare the environment in advance', 'A specific friction-removal step is done (e.g. clothes laid out)', 'build', 30, 'build'],
+    ['Do the habit and write 1 sentence: did the prep help?', 'A reflection sentence exists', 'validate', 30, 'practice'],
+    ['Write a 1-paragraph reflection on what worked and one specific tweak for next week', 'A reflection paragraph exists', 'review', 30, 'write'],
+  ],
+  fitness: [
+    ['Pick 3 exercises (1 push, 1 pull, 1 legs), write the rep scheme, and pick 3 specific days', 'Plan with 3 exercises × reps × 3 days exists', 'setup', 30, 'write'],
+    ['Do the first workout and record your key metric (reps, weight, or time)', 'A log entry with the metric exists', 'build', 60, 'practice'],
+    ['Identify the one technique issue you noticed and look up the specific fix', 'A note exists describing the issue and the fix', 'build', 30, 'research'],
+    ['Do the second workout applying the technique fix', 'A log entry exists with the fix applied', 'build', 60, 'practice'],
+    ['Add one measurable progressive overload (1 more rep, 5% more weight, or 30 more seconds)', 'A specific overload number is written for next session', 'validate', 30, 'practice'],
+    ['Light movement or rest and prepare gear / playlist / scheduling for the final workout', 'Prep is done', 'recover', 30, 'practice'],
+    ['Final workout: record metric and compare to Day 2 — write the % change', 'A side-by-side comparison with % change exists', 'ship', 60, 'practice'],
+  ],
 };
+
+const GENERIC_FALLBACK = [
+  ['Write a 2-sentence description of what "done" looks like by Day 7', 'A 2-sentence outcome description exists', 'setup', 30, 'write'],
+  ['List the 3 smallest concrete sub-tasks that will get you there', 'A list of 3 concrete sub-tasks exists', 'setup', 45, 'review'],
+  ['Complete sub-task 1 and write a 1-line note on what you produced', 'Sub-task 1 is done and noted', 'build', 60, 'build'],
+  ['Show your progress so far to 1 person and capture their reaction', 'A reaction is captured in writing', 'validate', 30, 'outreach'],
+  ['Complete sub-task 2 and write a 1-line note on what you produced', 'Sub-task 2 is done and noted', 'build', 60, 'build'],
+  ['Trim scope to make sure Day 7 will produce a real artifact', 'Day 7 plan is concrete and achievable', 'review', 45, 'review'],
+  ['Deliver one tangible output for the week — file, post, recording, or message sent', 'A shareable artifact exists', 'ship', 60, 'ship'],
+];
 
 function fallbackTrack(input) {
   const goal     = String(input?.goal || 'your goal').trim();
   const category = String(input?.goalCategory || 'other').trim();
-  const titles   = FALLBACK_TITLES[category] || ['Define your goal clearly and write a done condition', 'Identify the 3 most important sub-tasks', 'Complete the first sub-task', 'Review progress and set the next priority', 'Complete the second sub-task', 'Adjust scope so Day 7 is achievable', 'Deliver one tangible output for the week'];
+  const rows     = FALLBACK_DAYS[category] || GENERIC_FALLBACK;
   return {
     goal,
-    days: titles.map((title, i) => ({
+    days: rows.map(([title, successCriteria, role, estimateMinutes, cat], i) => ({
       dayNumber:       i + 1,
       title,
-      why:             `Advances progress toward: ${goal.slice(0, 60)}`,
-      successCriteria: 'A concrete output exists that you can point to',
-      estimateMinutes: 60,
-      category:        'other',
+      why:             `Advances toward: ${goal.slice(0, 60)}`,
+      successCriteria,
+      estimateMinutes,
+      category:        cat,
+      role,
       blockerRisk:     '',
       status:          'pending',
       date:            '',
@@ -573,12 +745,34 @@ function fallbackTrack(input) {
   };
 }
 
-function fallbackSteps(day) {
-  const title = String(day?.title || 'your task').slice(0, 60);
+function fallbackSteps(day, user) {
+  const title    = String(day?.title || 'your task').trim();
+  const success  = String(day?.successCriteria || 'a concrete output').trim();
+  const project  = String(user?.currentProject || '').trim();
+  const subject  = project ? `for ${project}` : 'for this task';
+
   return [
-    { index: 0, text: `Open your workspace and re-read the task: "${title}"` },
-    { index: 1, text: 'Write down the single most important sub-task to complete first.' },
-    { index: 2, text: 'Complete that sub-task and record the output before stopping.' },
+    {
+      index: 0,
+      text: `Open the doc or file you will work in and type the title of today's task at the top.`,
+      output: `Your doc is open with the task title at the top.`,
+    },
+    {
+      index: 1,
+      text: `Write 2-3 bullet points naming the very first sub-pieces of this task ${subject}.`,
+      output: `2-3 concrete sub-pieces are written.`,
+      hint: `Don't plan the whole task — just name the next 2-3 pieces. If the task is "${title.slice(0, 60)}", what is the smallest 15-minute slice?`,
+    },
+    {
+      index: 2,
+      text: `Do the first bullet completely and paste the result back here.`,
+      output: `The first bullet produced a real artifact (a sentence, a file, a number).`,
+    },
+    {
+      index: 3,
+      text: `Check against "${success}" — if not met, do the next bullet; if met, stop.`,
+      output: `Either the next bullet is done OR the success criteria is fully met.`,
+    },
   ];
 }
 
