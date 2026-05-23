@@ -128,16 +128,41 @@ function renderActive(container, track, today, dayPlan, state, actions) {
 
 // ── Complete (done / rescued) ──────────────────────────────────────────────
 
+// One-liner shown above the proof card on a completed day. Light, non-cheerleading.
+// Picked deterministically from a small pool so users see variety across the week.
+const COMPLETION_QUOTES = [
+  'Day stacked. The version of you who shipped today is a different version.',
+  'Done means done. Next day shifts from here, not from the original plan.',
+  'Small wins compound. This one counts.',
+  'Doing > planning. You picked the harder path today.',
+  'You showed up. That is the whole game.',
+  'Today is now an artifact. It cannot un-happen.',
+  'Momentum is a stack, not a sprint. One more layer.',
+];
+
+function pickCompletionQuote(dayNum) {
+  return COMPLETION_QUOTES[(dayNum - 1) % COMPLETION_QUOTES.length];
+}
+
 function renderComplete(container, track, today, dayPlan, status, state, actions) {
   const dayNum  = dayPlan.dayNumber || 1;
   const isLast  = dayNum >= 7;
   const cardCls = status === 'rescued' ? 'v2-card v2-card--blue' : 'v2-card v2-card--green';
   const label   = status === 'rescued' ? 'Rescued ✓' : 'Done ✓';
+  const quote   = pickCompletionQuote(dayNum);
 
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
       ${topBar(dayNum, status, track.goal, track, state.user)}
+
+      <div class="v2-day-complete-card">
+        <div class="v2-day-complete-card__check">✓</div>
+        <div class="v2-day-complete-card__body">
+          <p class="v2-day-complete-card__title">Day ${dayNum} ${status === 'rescued' ? 'rescued' : 'done'}.</p>
+          <p class="v2-day-complete-card__sub">${esc(quote)}</p>
+        </div>
+      </div>
 
       <div class="${cardCls}" style="margin-bottom:20px">
         <div class="v2-kicker" style="margin-bottom:8px">${esc(label)}</div>
@@ -156,6 +181,14 @@ function renderComplete(container, track, today, dayPlan, status, state, actions
            </p>`}
 
     </div>`;
+
+  // Trigger a one-time scale pulse on the active roadmap node — visible
+  // visual feedback when the user lands on the complete screen.
+  const todayNode = container.querySelector('.v2-roadmap g:nth-of-type(' + dayNum + ')') || null;
+  if (todayNode) {
+    todayNode.classList.add('v2-node-complete');
+    setTimeout(() => todayNode.classList.remove('v2-node-complete'), 600);
+  }
 
   container.querySelector('#td-recap')?.addEventListener('click', () => actions.onNavigate?.('/recap'));
 }

@@ -10219,6 +10219,68 @@ body.v2-body::before {
   max-width: 640px;
 }
 
+/* ── Completion ritual animations ─────────────────────────────────────── */
+
+/* Roadmap node + ring scale on completion */
+@keyframes v2-node-complete {
+  0%   { transform: scale(1);   filter: brightness(1); }
+  35%  { transform: scale(1.18); filter: brightness(1.08); }
+  100% { transform: scale(1);   filter: brightness(1); }
+}
+.v2-node-complete { animation: v2-node-complete .55s cubic-bezier(.22,1,.36,1) both; transform-origin: center; }
+
+/* Block reveal — used on /recap to introduce sections one at a time. */
+@keyframes v2-reveal-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.v2-reveal { opacity: 0; }
+.v2-reveal.is-in { animation: v2-reveal-in .42s cubic-bezier(.22,1,.36,1) both; }
+
+/* Day-complete inline card on /today (after a successful outcome) */
+@keyframes v2-cardflash {
+  from { opacity: 0; transform: scale(.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.v2-day-complete-card {
+  background: linear-gradient(135deg, rgba(22,163,74,.06), rgba(42,54,200,.04));
+  border: 1px solid rgba(22,163,74,.18);
+  border-radius: var(--v2-r);
+  padding: 18px 22px;
+  margin: 0 0 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  animation: v2-cardflash .35s cubic-bezier(.22,1,.36,1) both;
+}
+.v2-day-complete-card__check {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--v2-green);
+  color: #fff;
+  font-size: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.v2-day-complete-card__body { flex: 1; min-width: 0; }
+.v2-day-complete-card__title {
+  font-family: var(--v2-fhead);
+  font-size: 1.04rem;
+  font-weight: 700;
+  color: var(--v2-text);
+  margin: 0 0 2px;
+}
+.v2-day-complete-card__sub {
+  font-size: .9rem;
+  color: var(--v2-muted);
+  margin: 0;
+  font-style: italic;
+}
+
 /* Yesterday callback — small ribbon under the mission card */
 .v2-yesterday {
   display: flex;
