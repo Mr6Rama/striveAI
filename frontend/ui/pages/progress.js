@@ -70,6 +70,25 @@ export function render(container, state, actions) {
   container.querySelectorAll('[data-route]').forEach((el) => {
     el.addEventListener('click', () => actions.onNavigate?.(el.getAttribute('data-route')));
   });
+
+  wireRoadmapLabels(container);
+}
+
+// Toggle milestone title on node click — one label visible at a time
+function wireRoadmapLabels(container) {
+  const svg = container.querySelector('.v2-roadmap svg');
+  if (!svg) return;
+  let activeDay = null;
+  svg.querySelectorAll('g[data-day]').forEach((g) => {
+    g.addEventListener('click', () => {
+      const day = g.getAttribute('data-day');
+      svg.querySelectorAll('text[data-label-day]').forEach((t) => t.setAttribute('visibility', 'hidden'));
+      if (activeDay === day) { activeDay = null; return; }
+      const label = svg.querySelector(`text[data-label-day="${day}"]`);
+      if (label) label.setAttribute('visibility', 'visible');
+      activeDay = day;
+    });
+  });
 }
 
 // ── Day cards ─────────────────────────────────────────────────────────────

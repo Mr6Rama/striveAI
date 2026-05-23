@@ -187,13 +187,16 @@ function adaptSchema() {
 // ── System context strings ─────────────────────────────────────────────────
 
 const TRACK_CTX = `You are a 7-day execution planner for young builders, creators, and early founders.
-Generate one concrete action per day that moves the user closer to their stated goal.
+Generate one concrete action per day that moves the user toward their specific goal.
 Each action must be completable in the user's stated daily hours.
-Actions must be specific to the goal — no generic filler tasks.
+Personalize every task to the user's actual goal — never produce generic category templates.
+If a current project or week outcome is provided, reference it directly in every task title.
 Return JSON only.`;
 
 const STEPS_CTX = `You are an execution assistant. Break one task into ordered micro-steps.
 Each step must be concrete, specific, and completable in 15–45 minutes.
+Steps must be tailored to THIS specific task — do not generate generic steps.
+The steps must collectively satisfy the task's done condition.
 No motivational filler. No generic advice. Steps only.
 Return JSON only.`;
 
@@ -379,24 +382,27 @@ Experience: ${experience}
 Biggest blocker: ${blocker}
 ${extra}
 
-Generate a 7-day execution track tailored to this specific person and project.
-Reference their concrete situation in task titles where natural — don't repeat generic templates.
+Generate a 7-day execution track tailored to this specific person and their goal.
+Use the user's own words and context — never substitute generic placeholders like "your project" or "the skill".
+If currentProject is provided, every task title must name that project specifically.
+If weekGoal is provided, every day must visibly advance that specific outcome.
 Day 1 must be the lowest-friction start possible — achievable in under 2 hours.
-Each day builds directly on the previous.
+Each day builds directly on the previous day's concrete output.
 Day 7 must produce a concrete artifact or shareable proof point.
 
 Field rules:
-- title: action-verb start, specific to this goal, max 80 chars.
+- title: action-verb start, specific to this goal (name the subject, tool, or deliverable), max 80 chars.
 - why: one sentence connecting this day to the goal, max 120 chars.
 - successCriteria: the concrete done condition the user can verify, max 120 chars.
 - estimateMinutes: one of 30 | 45 | 60 | 90 | 120.
 - category: research | build | outreach | review | test | write | practice | other.
 - blockerRisk: one phrase for the most likely obstacle on this day, max 100 chars.
 
-Bad titles: "Research market", "Work on project", "Make progress"
-Good titles: "Interview 3 people about their biggest frustration with this problem",
-             "Write the first draft of your outreach message (100 words max)",
-             "Build the core feature and run it end-to-end"`;
+Bad titles: "Research market", "Work on project", "Study the concept", "Define your goal"
+Good titles: "Interview 3 coffee-shop owners about their biggest inventory frustration",
+             "Write the first 200-word draft of your cold email to design agencies",
+             "Build the login page for [their app name] and run it end-to-end",
+             "Solve 5 calculus chain-rule problems from Chapter 4 without notes"`;
 }
 
 function buildTrackContinuePrompt(previousTrack, previousDays, recap, choice) {
@@ -428,17 +434,20 @@ Day 1 of this new track should start from the current progress point.`;
 
 function buildAgentStepsPrompt(day, track, failureMemory) {
   const title    = String(day?.title || '').trim();
+  const criteria = String(day?.successCriteria || '').trim();
   const goal     = String(track?.goal || '').trim();
   const category = String(track?.goalCategory || 'other').trim();
   const patterns = buildPatternSummary(failureMemory);
 
   return `Today's task: ${title}
+${criteria ? `Done when: ${criteria}` : ''}
 Goal: ${goal}
 Category: ${category}
 Failure patterns so far: ${patterns}
 
 Break this task into 3–5 sequential micro-steps.
 Each step: one sentence, action-verb start, specific output expected.
+Steps must directly lead to satisfying the done condition.
 Steps must be completable in 15–45 minutes each.
 No summaries or introductions — steps only.`;
 }
@@ -553,17 +562,40 @@ const FALLBACK_TITLES = {
   fitness:  ['Define your plan: type, duration, and frequency', 'Complete the first workout and record your key metric', 'Identify one technique issue and look up the fix', 'Complete second workout applying the technique change', 'Add one measurable progressive overload', 'Rest or do light movement and prepare for Day 7', 'Final workout: record metric and compare to Day 2'],
 };
 
+const FALLBACK_CRITERIA = {
+  project:  ['Scope written: target user + the one problem you are solving', 'Feature list trimmed to 3, written down', 'Repo exists with README describing what it does', 'Core feature runs end-to-end without crashing', 'Notes from 2 testers written with at least one clear issue', 'Top issue fixed and re-tested', 'Demo video or final screenshots captured and saved'],
+  startup:  ['Value proposition written in one sentence', 'List of 10 potential users complete, 3 marked reachable', '5 outreach messages sent and noted in a log', '3 interview notes logged with verbatim quotes', 'Prototype is clickable or a screencast is recorded', 'Reaction notes from 2 users written with one key insight', 'One-page problem–solution–evidence summary written'],
+  content:  ['First draft or script exists as a file', 'Edited version is at least 30% shorter than the draft', 'Post published and engagement numbers noted', '2 more drafts exist in the same format', 'Notes on 3 high-performing posts in your niche written', 'Revised draft published', '7-day metrics reviewed and one lesson written'],
+  skill:    ['Small project defined and the goal written down', 'First tutorial completed and 3 takeaways written', 'One exercise built from scratch without copying', 'Biggest knowledge gap identified and a resource found', 'Exercise combining two concepts built and working', 'Core concept written out in 200 words without notes', 'Day 1 project completed or a demo recorded'],
+  career:   ['Target role summary and top qualification written', 'Resume updated with every bullet cut to one line', '5 job postings found where you meet 70%+ requirements', 'One personalised cold message sent', '2 applications submitted with customised cover notes', 'Answers to 3 common interview questions written out', 'Mock interview recorded and one improvement noted'],
+  study:    ['3 key concepts for the week listed with sources', 'Concept 1 summarised in your own words', '3 practice problems on concept 1 completed and checked', 'Concept 2 connected to concept 1 in writing', '5 mixed practice problems completed and scored', 'All 3 concepts summarised together in one page', 'Timed recall done without notes and weak spots listed'],
+  habit:    ['Habit written as: when X happens I will do Y for Z minutes', 'Start time and end time recorded for first attempt', 'Calendar block created for daily habit time', 'Difficulty rated 1–5 with one reason written', 'One friction point removed and environment prepared', 'Note written on whether the preparation helped', 'One-paragraph reflection on what worked or did not'],
+  fitness:  ['Plan written: type, duration, and weekly frequency', 'First workout done and key metric recorded', 'One technique issue found and fix looked up', 'Second workout done applying the technique change', 'One measurable progressive overload applied and noted', 'Recovery session done and Day 7 workout prepared', 'Final workout done and metric compared to Day 2'],
+};
+
 function fallbackTrack(input) {
   const goal     = String(input?.goal || 'your goal').trim();
   const category = String(input?.goalCategory || 'other').trim();
   const titles   = FALLBACK_TITLES[category] || ['Define your goal clearly and write a done condition', 'Identify the 3 most important sub-tasks', 'Complete the first sub-task', 'Review progress and set the next priority', 'Complete the second sub-task', 'Adjust scope so Day 7 is achievable', 'Deliver one tangible output for the week'];
+  const criteria = FALLBACK_CRITERIA[category] || titles.map((t) => `${t.slice(0, 65)} — output written and saved`);
+
+  const WHYS = [
+    'Sets a concrete starting point and removes ambiguity for the week',
+    `Builds on Day 1 and advances: ${goal.slice(0, 50)}`,
+    `Converts preparation into a first real output for: ${goal.slice(0, 45)}`,
+    `Maintains momentum and deepens progress toward: ${goal.slice(0, 45)}`,
+    `Pushes past the halfway point toward: ${goal.slice(0, 50)}`,
+    'Removes the last obstacle before the final deliverable',
+    'Produces the proof point that closes out the 7-day goal',
+  ];
+
   return {
     goal,
     days: titles.map((title, i) => ({
       dayNumber:       i + 1,
       title,
-      why:             `Advances progress toward: ${goal.slice(0, 60)}`,
-      successCriteria: 'A concrete output exists that you can point to',
+      why:             WHYS[i] || `Advances progress toward: ${goal.slice(0, 60)}`,
+      successCriteria: criteria[i] || `${title.slice(0, 65)} — output written and saved`,
       estimateMinutes: 60,
       category:        'other',
       blockerRisk:     '',
