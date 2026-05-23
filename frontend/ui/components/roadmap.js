@@ -1,5 +1,5 @@
-// 7-day roadmap visualization: smooth SVG curve with status-colored nodes.
-// Pure render — returns HTML string.
+// 7-day roadmap visualization: smooth SVG curve with role-shaped, status-colored nodes.
+// Roles give each day a narrative weight — the week reads as an arc, not a metro map.
 
 const NODE_COLOR = {
   done:        { fill: '#16a34a', stroke: '#16a34a' },
@@ -12,7 +12,26 @@ const NODE_COLOR = {
   pending:     { fill: '#fff',    stroke: '#9aa3b2' },
 };
 
-// days: [{ dayNumber, status, title }], currentDay: number, variant: 'compact'|'full'
+// Role-specific glyph rendered inside the node. Pure SVG, no external icons.
+const ROLE_GLYPH = {
+  setup:    { glyph: '○', label: 'setup'    },
+  build:    { glyph: '▍', label: 'build'    },
+  validate: { glyph: '?', label: 'validate' },
+  ship:     { glyph: '★', label: 'ship'     },
+  review:   { glyph: '↺', label: 'review'   },
+  recover:  { glyph: '~', label: 'recover'  },
+};
+
+// Per-role node radius — adds subtle visual hierarchy. ship/validate are bigger
+// because they are the load-bearing days of the week.
+function radiusForRole(role, isToday) {
+  const base = ({ ship: 19, validate: 18, recover: 14 })[role] || 16;
+  return isToday ? base + 6 : base;
+}
+
+// days: [{ dayNumber, status, title, role }]
+// currentDay: number
+// variant: 'compact' | 'full'
 export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' } = {}) {
   const total = 7;
   const list  = Array.from({ length: total }, (_, i) => {
@@ -20,19 +39,19 @@ export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' }
     const existing = days.find((d) => d.dayNumber === n) || {};
     return {
       dayNumber: n,
-      status: existing.status || 'pending',
-      title: existing.title || '',
-      isToday: n === currentDay,
+      status:    existing.status || 'pending',
+      title:     existing.title  || '',
+      role:      existing.role   || defaultRole(n),
+      isToday:   n === currentDay,
     };
   });
 
-  const W = 760;
-  const H = variant === 'full' ? 230 : 170;
-  const padX = 50;
-  const midY = variant === 'full' ? 100 : 80;
-  const amp  = variant === 'full' ? 40 : 30;
+  const W    = 780;
+  const H    = variant === 'full' ? 250 : 180;
+  const padX = 56;
+  const midY = variant === 'full' ? 105 : 85;
+  const amp  = variant === 'full' ? 42  : 32;
 
-  // Compute node positions along a gentle sine curve for organic feel.
   const positions = list.map((_, i) => {
     const t = i / (total - 1);
     const x = padX + t * (W - padX * 2);
@@ -40,7 +59,7 @@ export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' }
     return { x, y };
   });
 
-  // Smooth path connecting all points with quadratic curves.
+  // Smooth path through all points.
   let path = `M ${positions[0].x} ${positions[0].y}`;
   for (let i = 1; i < positions.length; i++) {
     const prev = positions[i - 1];
@@ -51,26 +70,46 @@ export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' }
 
   const nodes = list.map((d, i) => {
     const { x, y } = positions[i];
-    const key = d.isToday ? 'today' : d.status;
-    const c = NODE_COLOR[key] || NODE_COLOR.pending;
-    const r = d.isToday ? 22 : 16;
+    const key   = d.isToday ? 'today' : d.status;
+    const color = NODE_COLOR[key] || NODE_COLOR.pending;
+    const r     = radiusForRole(d.role, d.isToday);
+
     const ring = d.isToday
-      ? `<circle cx="${x}" cy="${y}" r="${r + 9}" fill="none" stroke="${c.stroke}" stroke-width="2" opacity=".35"/>`
+      ? `<circle cx="${x}" cy="${y}" r="${r + 9}" fill="none" stroke="${color.stroke}" stroke-width="2" opacity=".35"/>`
       : '';
-    const inner = `<circle cx="${x}" cy="${y}" r="${r}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2.5"/>`;
+    const inner = `<circle cx="${x}" cy="${y}" r="${r}" fill="${color.fill}" stroke="${color.stroke}" stroke-width="2.5"/>`;
+
     const isFilled = d.status === 'done' || d.status === 'rescued' || d.isToday;
-    const dayLabel = `<text x="${x}" y="${y + 5}" text-anchor="middle" font-family="var(--v2-fhead)" font-size="15" font-weight="800" fill="${isFilled ? '#fff' : '#475569'}">${d.dayNumber}</text>`;
-    const tooltip = `<title>Day ${d.dayNumber}${d.title ? ` — ${esc(d.title)}` : ''}${d.isToday ? ' (today)' : ''} · ${esc(d.status)}</title>`;
-    return `<g>${tooltip}${ring}${inner}${dayLabel}</g>`;
+    const numFill  = isFilled ? '#fff' : '#475569';
+    const num      = `<text x="${x}" y="${y + 5}" text-anchor="middle" font-family="var(--v2-fhead)" font-size="14" font-weight="800" fill="${numFill}">${d.dayNumber}</text>`;
+
+    // Role hint above the node — quiet but visible (no hover required).
+    const roleMeta = ROLE_GLYPH[d.role] || ROLE_GLYPH.build;
+    const roleFill = d.isToday ? '#2a36c8' : '#7b8392';
+    const roleY    = y - r - 10;
+    const roleLabel = variant === 'full' || d.isToday
+      ? `<text x="${x}" y="${roleY}" text-anchor="middle" font-family="var(--v2-fbody)" font-size="10" font-weight="${d.isToday ? '700' : '500'}" fill="${roleFill}" letter-spacing=".04em">${esc(roleMeta.label)}</text>`
+      : '';
+
+    const tipParts = [
+      `Day ${d.dayNumber} · ${roleMeta.label}`,
+      d.title  ? `— ${d.title}` : '',
+      d.isToday ? '(today)'     : '',
+    ].filter(Boolean).join(' ');
+    const tooltip = `<title>${esc(tipParts)}</title>`;
+    return `<g>${tooltip}${ring}${inner}${num}${roleLabel}</g>`;
   }).join('');
 
+  // In 'full' variant, render day titles below the curve with proper wrapping.
   let labels = '';
   if (variant === 'full') {
     labels = list.map((d, i) => {
       const { x, y } = positions[i];
-      const ly = y + 48;
-      const title = (d.title || '').slice(0, 22) + ((d.title || '').length > 22 ? '…' : '');
-      return `<text x="${x}" y="${ly}" text-anchor="middle" font-family="var(--v2-fbody)" font-size="12" fill="${d.isToday ? '#2a36c8' : '#475569'}" font-weight="${d.isToday ? '700' : '500'}">${esc(title)}</text>`;
+      const ly = y + radiusForRole(d.role, d.isToday) + 24;
+      const lines = wrapTitle(d.title || '', 14, 2);
+      return lines.map((line, li) =>
+        `<text x="${x}" y="${ly + li * 13}" text-anchor="middle" font-family="var(--v2-fbody)" font-size="11" fill="${d.isToday ? '#2a36c8' : '#475569'}" font-weight="${d.isToday ? '600' : '400'}">${esc(line)}</text>`
+      ).join('');
     }).join('');
   }
 
@@ -82,6 +121,47 @@ export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' }
         ${labels}
       </svg>
     </div>`;
+}
+
+// Build a single-line week summary from roles: "2 days of setup · 3 build · 1 validate · 1 ship"
+export function weekArcSummary(days) {
+  const counts = {};
+  (days || []).forEach((d) => {
+    const r = d?.role || defaultRole(d?.dayNumber);
+    counts[r] = (counts[r] || 0) + 1;
+  });
+  const order = ['setup', 'build', 'validate', 'recover', 'review', 'ship'];
+  return order
+    .filter((r) => counts[r])
+    .map((r) => `${counts[r]} ${r}`)
+    .join(' · ');
+}
+
+function defaultRole(n) {
+  return ({ 1: 'setup', 2: 'build', 3: 'build', 4: 'validate', 5: 'build', 6: 'build', 7: 'ship' })[n] || 'build';
+}
+
+function wrapTitle(text, maxPerLine, maxLines) {
+  if (!text) return [];
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    if (lines.length === maxLines - 1 && (cur + ' ' + w).trim().length > maxPerLine) {
+      // last line, must fit
+      if ((cur + ' ' + w).trim().length > maxPerLine) {
+        lines.push((cur + (cur ? ' ' : '') + w).slice(0, maxPerLine - 1) + '…');
+        return lines;
+      }
+    }
+    if (!cur) { cur = w; continue; }
+    if ((cur + ' ' + w).length <= maxPerLine) { cur += ' ' + w; continue; }
+    lines.push(cur);
+    cur = w;
+    if (lines.length >= maxLines) return lines.slice(0, maxLines);
+  }
+  if (cur) lines.push(cur);
+  return lines.slice(0, maxLines);
 }
 
 function esc(s) {

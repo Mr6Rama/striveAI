@@ -10355,12 +10355,105 @@ body.v2-body::before {
 }
 .v2-roadmap--compact {
   max-width: 860px;
-  height: 170px;
+  height: 180px;
 }
 .v2-roadmap--full {
   max-width: 920px;
-  height: 230px;
-  margin-bottom: 28px;
+  height: 250px;
+  margin-bottom: 22px;
+}
+
+/* Expandable day card — shows artifact (proof, agent output) on open */
+.v2-day-card--expandable { cursor: pointer; }
+.v2-day-card--expandable summary { list-style: none; outline: none; }
+.v2-day-card--expandable summary::-webkit-details-marker { display: none; }
+.v2-day-card__summary {
+  position: relative;
+  padding-right: 28px;
+}
+.v2-day-card__chevron {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 12px;
+  color: var(--v2-muted);
+  transition: transform .18s ease;
+}
+.v2-day-card--expandable[open] .v2-day-card__chevron { transform: rotate(180deg); }
+.v2-day-card__artifact {
+  border-top: 1px solid var(--v2-border);
+  margin-top: 12px;
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.v2-artifact-block {
+  background: rgba(10,13,24,.025);
+  border-left: 2px solid var(--v2-border-2);
+  border-radius: 0 4px 4px 0;
+  padding: 8px 12px;
+}
+.v2-artifact-block__label {
+  font-family: var(--v2-fbody);
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--v2-muted);
+  margin-bottom: 4px;
+}
+.v2-artifact-block__body {
+  font-family: var(--v2-fbody);
+  font-size: .95rem;
+  color: var(--v2-text);
+  line-height: 1.5;
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.v2-artifact-block__pre {
+  font-family: var(--v2-fbody);
+  font-size: .88rem;
+  color: var(--v2-text-2);
+  line-height: 1.5;
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  background: transparent;
+}
+.v2-artifact-block__link {
+  font-family: var(--v2-fbody);
+  font-size: .95rem;
+  color: var(--v2-blue);
+  word-break: break-all;
+}
+
+/* Recap artifact timeline — vertical stack of 7 day-cards */
+.v2-recap-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 24px;
+}
+.v2-recap-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Week-arc summary line — appears under headline on plan-preview / progress */
+.v2-week-arc {
+  font-family: var(--v2-fbody);
+  font-size: .95rem;
+  color: var(--v2-muted);
+  margin: 0 0 22px;
+  letter-spacing: .02em;
+  text-transform: lowercase;
+  max-width: 640px;
 }
 .v2-roadmap svg { display: block; width: 100%; height: 100%; }
 
