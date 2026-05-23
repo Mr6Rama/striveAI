@@ -1,28 +1,16 @@
-// v2 onboarding — 8-step flow. Module-level draft persists across re-renders.
+// v2 onboarding — 5-step flow. Module-level draft persists across re-renders.
 
 const CATEGORIES = [
-  { id: 'project', label: 'Build a project / MVP' },
-  { id: 'startup', label: 'Startup / idea validation' },
-  { id: 'content', label: 'Content / personal brand' },
+  { id: 'project', label: 'Build a project' },
+  { id: 'startup', label: 'Startup / validation' },
+  { id: 'content', label: 'Content / brand' },
   { id: 'skill',   label: 'Learn a skill' },
   { id: 'career',  label: 'Career / portfolio' },
   { id: 'study',   label: 'Study / exam' },
-  { id: 'habit',   label: 'Habit / self-development' },
+  { id: 'habit',   label: 'Habit / routine' },
   { id: 'fitness', label: 'Fitness / health' },
-  { id: 'other',   label: 'Other' },
+  { id: 'other',   label: 'Something else' },
 ];
-
-const TEMPLATES = {
-  project: ['Build an MVP', 'Finish a project', 'Launch a landing page', 'Create a portfolio project'],
-  startup: ['Validate an idea', 'Talk to potential users', 'Build a waitlist', 'Launch a first offer'],
-  content: ['Post daily', 'Write scripts', 'Plan a content week', 'Build a personal brand'],
-  skill:   ['Learn coding', 'Learn English', 'Complete a course', 'Practice every day'],
-  career:  ['Improve resume', 'Build portfolio', 'Prepare for interviews', 'Apply to opportunities'],
-  study:   ['Prepare for exam', 'Study every day', 'Finish assignments', 'Improve one subject'],
-  habit:   ['Build consistency', 'Journal daily', 'Read daily', 'Fix sleep routine'],
-  fitness: ['Exercise daily', 'Walk daily', 'Stretch daily', 'Track nutrition'],
-  other:   ['Custom goal'],
-};
 
 const BLOCKERS = [
   { id: 'procrastinate', label: 'I procrastinate' },
@@ -32,23 +20,21 @@ const BLOCKERS = [
   { id: 'motivation',    label: 'I lose motivation' },
   { id: 'avoid',         label: 'I avoid hard tasks' },
   { id: 'no_time',       label: "I don't have time" },
-  { id: 'too_big',       label: 'My plan is too big' },
+  { id: 'too_big',       label: 'My plan feels too big' },
 ];
 
 const INTENSITIES = [
   { id: '0-1', label: '10 min/day',  sub: 'tiny steps' },
   { id: '1-2', label: '25 min/day',  sub: 'light progress' },
-  { id: '2-4', label: '45 min/day',  sub: 'serious progress' },
-  { id: '4-6', label: '60+ min/day', sub: 'aggressive mode' },
+  { id: '2-4', label: '45 min/day',  sub: 'real progress' },
+  { id: '4-6', label: '60+ min/day', sub: 'aggressive' },
 ];
 
 const IF_THEN_RULES = [
-  { id: 'tiny_version', text: 'If I have no time → give me a 5-minute version' },
-  { id: 'tiny_step',    text: 'If I feel overwhelmed → break it into one tiny step' },
-  { id: 'first_action', text: "If I don't know where to start → give me the first visible action" },
-  { id: 'safe_step',    text: 'If I avoid the task → give me the safest first step' },
-  { id: 'recover',      text: "If I miss a day → recover, don't restart" },
-  { id: 'tiny_miss',    text: 'If I miss 2 days → make the next task tiny' },
+  { id: 'tiny_version', text: 'If no time → give me a 5-minute version of the task' },
+  { id: 'tiny_step',    text: 'If overwhelmed → break it into one tiny step' },
+  { id: 'first_action', text: "If stuck → show me the first visible action" },
+  { id: 'recover',      text: "If I miss a day → help me recover, don't restart" },
 ];
 
 const PING_OPTIONS = [
@@ -58,66 +44,73 @@ const PING_OPTIONS = [
   { id: 'custom',    label: 'Custom',    hour: null },
 ];
 
-const ESCALATIONS = [
-  { id: 'stricter',  label: 'Send me a stricter message' },
-  { id: 'message',   label: 'Generate a message I can send to a friend' },
-  { id: 'promise',   label: 'Make me write a restart promise' },
-  { id: 'tiny_mode', label: 'Switch me to Tiny Mode' },
-  { id: 'none',      label: 'No escalation' },
-];
+const GOAL_EXAMPLES = {
+  project:  'e.g. Build a web app that lets students track their study sessions',
+  startup:  'e.g. Validate my idea for a budget tool aimed at freelancers',
+  content:  'e.g. Write and publish 3 short posts about productivity for students',
+  skill:    'e.g. Learn enough Python to build a simple data analysis script',
+  career:   'e.g. Update my portfolio and apply to 3 UX designer roles at startups',
+  study:    'e.g. Prepare for my calculus exam next Friday, focus on integration',
+  habit:    'e.g. Build a consistent 20-minute morning reading habit',
+  fitness:  'e.g. Train at the gym 4 times this week and track my key lifts',
+  other:    'Describe your goal as specifically as possible',
+};
 
-// ── Module state ───────────────────────────────────────────────────────────
-
-const DRAFT_KEY = 'sv2_onboarding_draft';
+const DRAFT_KEY    = 'sv2_onboarding_draft';
+const STEP_KEY     = 'sv2_onboarding_step';
+const TOTAL_STEPS  = 5;
 
 function defaultDraft() {
   return {
-    goalCategory: '', goalTemplate: '', specificGoal: '',
-    currentProject: '', weekGoal: '', whyItMatters: '', triedBefore: '',
-    blocker: '', dailyHours: '2-4', ifThenRules: [],
-    pingSelection: 'morning', pingHour: 9, escalationRule: '',
+    goalCategory:  '',
+    specificGoal:  '',
+    weekGoal:      '',
+    currentProject:'',
+    triedBefore:   '',
+    blocker:       '',
+    dailyHours:    '2-4',
+    ifThenRules:   [],
+    pingSelection: 'morning',
+    pingHour:      9,
+    // kept for API compat — not shown in UI
+    escalationRule: 'none',
+    whyItMatters:   '',
+    goalTemplate:   '',
   };
 }
-
-const STEP_KEY = 'sv2_onboarding_step';
 
 function loadDraft() {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
     if (!raw) return defaultDraft();
-    const parsed = JSON.parse(raw);
-    return { ...defaultDraft(), ...(parsed && typeof parsed === 'object' ? parsed : {}) };
-  } catch (_e) {
-    return defaultDraft();
-  }
+    return { ...defaultDraft(), ...(JSON.parse(raw) || {}) };
+  } catch (_e) { return defaultDraft(); }
 }
 
 function loadStep() {
   try {
     const n = parseInt(localStorage.getItem(STEP_KEY) || '1', 10);
-    return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 1;
-  } catch (_e) {
-    return 1;
-  }
+    return Number.isFinite(n) && n >= 1 && n <= TOTAL_STEPS ? n : 1;
+  } catch (_e) { return 1; }
 }
 
 function saveDraft() {
   try {
     localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
     localStorage.setItem(STEP_KEY, String(currentStep));
-  } catch (_e) { /* quota / disabled */ }
+  } catch (_e) {}
 }
 
 export function clearOnboardingDraft() {
   try {
     localStorage.removeItem(DRAFT_KEY);
     localStorage.removeItem(STEP_KEY);
-  } catch (_e) { /* noop */ }
+  } catch (_e) {}
   draft = defaultDraft();
   currentStep = 1;
 }
 
-let draft = loadDraft();
+let draft       = loadDraft();
 let currentStep = loadStep();
 let lastState   = null;
 let lastActions = null;
@@ -130,14 +123,11 @@ export function render(container, state, actions) {
 
 function renderStep(container) {
   switch (currentStep) {
-    case 1:  renderCategory(container);   break;
-    case 2:  renderTemplate(container);   break;
-    case 3:  renderBlocker(container);    break;
-    case 4:  renderIntensity(container);  break;
-    case 5:  renderIfThen(container);     break;
-    case 6:  renderTelegram(container);   break;
-    case 7:  renderEscalation(container); break;
-    default: renderConfirm(container);
+    case 1: renderGoal(container);     break;
+    case 2: renderOutcome(container);  break;
+    case 3: renderObstacle(container); break;
+    case 4: renderRules(container);    break;
+    default: renderSetup(container);
   }
 }
 
@@ -146,7 +136,7 @@ function go(n, container) { currentStep = n; saveDraft(); renderStep(container);
 // ── Layout helpers ─────────────────────────────────────────────────────────
 
 function wrap(inner) {
-  const dots = Array.from({ length: 8 }, (_, i) =>
+  const dots = Array.from({ length: TOTAL_STEPS }, (_, i) =>
     `<div class="v2-ob-dot${i < currentStep ? ' v2-ob-dot--done' : ''}"></div>`
   ).join('');
   return `<div class="v2-page-center">
@@ -156,13 +146,14 @@ function wrap(inner) {
 }
 
 function hdr(step, title, sub) {
-  return `<div class="v2-kicker v2-kicker--muted">Step ${step} of 8</div>
+  return `<div class="v2-kicker v2-kicker--muted">Step ${step} of ${TOTAL_STEPS}</div>
     <h1 class="v2-h1" style="margin-bottom:${sub ? '8px' : '20px'}">${esc(title)}</h1>
-    ${sub ? `<p class="v2-sub">${esc(sub)}</p>` : ''}`;
+    ${sub ? `<p class="v2-sub" style="margin-bottom:20px">${esc(sub)}</p>` : ''}`;
 }
 
-function selGrid(items, selId, attr) {
-  return `<div class="v2-sel-grid">
+function selGrid(items, selId, attr, cols) {
+  const style = cols ? `style="grid-template-columns:repeat(${cols},1fr)"` : '';
+  return `<div class="v2-sel-grid" ${style}>
     ${items.map((item) => {
       const on = Array.isArray(selId) ? selId.includes(item.id) : item.id === selId;
       return `<button ${attr}="${esc(item.id)}" class="v2-sel-card${on ? ' v2-sel-card--on' : ''}">
@@ -181,9 +172,7 @@ function backBtn() {
   return `<button id="ob-back" class="v2-btn v2-btn--ghost v2-btn--sm" style="margin-top:4px">← Back</button>`;
 }
 
-function errDiv() {
-  return `<div id="ob-err" class="v2-err"></div>`;
-}
+function errDiv() { return `<div id="ob-err" class="v2-err"></div>`; }
 
 function setErr(container, msg) {
   const el = container.querySelector('#ob-err');
@@ -197,125 +186,114 @@ function bindCards(container, attr, getVal, setVal, multi = false) {
       if (multi) {
         const arr = getVal();
         const i = arr.indexOf(id);
-        if (i >= 0) arr.splice(i, 1);
-        else if (arr.length < 4) arr.push(id);
+        if (i >= 0) arr.splice(i, 1); else arr.push(id);
       } else {
         setVal(id);
       }
       saveDraft();
-      refreshCards(container, attr, getVal());
+      const sel = multi ? getVal() : [id];
+      container.querySelectorAll(`[${attr}]`).forEach((b) => {
+        b.classList.toggle('v2-sel-card--on', sel.includes(b.getAttribute(attr)));
+      });
     });
   });
 }
 
-function refreshCards(container, attr, sel) {
-  const selected = Array.isArray(sel) ? sel : [sel];
-  container.querySelectorAll(`[${attr}]`).forEach((b) => {
-    const on = selected.includes(b.getAttribute(attr));
-    b.classList.toggle('v2-sel-card--on', on);
-  });
-}
+// ── Step 1: Goal + Category ────────────────────────────────────────────────
 
-// ── Step 1: Goal Category ──────────────────────────────────────────────────
+function renderGoal(container) {
+  const placeholder = GOAL_EXAMPLES[draft.goalCategory] || GOAL_EXAMPLES.other;
 
-function renderCategory(container) {
   container.innerHTML = wrap(`
-    ${hdr(1, 'What do you want to stay on track with?')}
+    ${hdr(1, 'What do you want to work on?', 'The more specific you are, the more your plan fits you.')}
+    <div class="v2-field" style="margin-bottom:20px">
+      <textarea id="ob-goal" rows="3" class="v2-textarea"
+        placeholder="${esc(placeholder)}"
+        style="font-size:1rem;line-height:1.55;resize:none"
+      >${esc(draft.specificGoal)}</textarea>
+    </div>
+    <div class="v2-section-label" style="margin-bottom:10px">Pick the closest category</div>
     ${selGrid(CATEGORIES, draft.goalCategory, 'data-cat')}
     ${errDiv()}${nextBtn()}`);
 
-  bindCards(container, 'data-cat', () => draft.goalCategory, (v) => { draft.goalCategory = v; });
+  const ta = container.querySelector('#ob-goal');
+  if (ta) {
+    ta.addEventListener('input', (e) => { draft.specificGoal = e.target.value; saveDraft(); });
+  }
+
+  bindCards(container, 'data-cat', () => draft.goalCategory, (v) => {
+    draft.goalCategory = v;
+    const taEl = container.querySelector('#ob-goal');
+    if (taEl && !taEl.value.trim()) taEl.placeholder = esc(GOAL_EXAMPLES[v] || GOAL_EXAMPLES.other);
+  });
 
   container.querySelector('#ob-next')?.addEventListener('click', () => {
+    if (!draft.specificGoal.trim()) { setErr(container, 'Write your goal before continuing.'); return; }
     if (!draft.goalCategory) { setErr(container, 'Pick a category to continue.'); return; }
-    if (draft.goalTemplate && !TEMPLATES[draft.goalCategory]?.includes(draft.goalTemplate)) draft.goalTemplate = '';
     go(2, container);
   });
 }
 
-// ── Step 2: Goal Template ──────────────────────────────────────────────────
+// ── Step 2: By Day 7 ───────────────────────────────────────────────────────
 
-function renderTemplate(container) {
-  const tpls = (TEMPLATES[draft.goalCategory] || TEMPLATES.other).map((t) => ({ id: t, label: t }));
+function renderOutcome(container) {
   container.innerHTML = wrap(`
-    ${hdr(2, 'Tell us about your goal', 'The more specific, the more your plan fits you.')}
-    ${selGrid(tpls, draft.goalTemplate, 'data-tpl')}
+    ${hdr(2, 'What would make this week a success?', 'This is the target your 7-day plan will be built toward.')}
     <div class="v2-field">
-      <label class="v2-label">Make it more specific</label>
-      <input id="ob-specific" type="text" placeholder="e.g. Build a Notion clone in Next.js" value="${esc(draft.specificGoal)}" class="v2-input"/>
+      <label class="v2-label">By day 7, I want to have…</label>
+      <input id="ob-week" type="text" class="v2-input" value="${esc(draft.weekGoal)}"
+        placeholder="e.g. A working login page deployed and accessible online"/>
     </div>
     <div class="v2-field">
-      <label class="v2-label">What are you working on right now?</label>
-      <input id="ob-current" type="text" placeholder="e.g. A landing page for my SaaS idea" value="${esc(draft.currentProject)}" class="v2-input"/>
+      <label class="v2-label">What are you starting from? <span class="v2-muted-text">(optional)</span></label>
+      <input id="ob-current" type="text" class="v2-input" value="${esc(draft.currentProject)}"
+        placeholder="e.g. A Next.js project is set up but has no auth yet"/>
     </div>
     <div class="v2-field">
-      <label class="v2-label">By day 7, you want to have…</label>
-      <input id="ob-week" type="text" placeholder="e.g. A working signup form and 5 waitlist users" value="${esc(draft.weekGoal)}" class="v2-input"/>
-    </div>
-    <div class="v2-field">
-      <label class="v2-label">Why does this matter to you? <span class="v2-muted-text">(optional)</span></label>
-      <input id="ob-why" type="text" placeholder="e.g. So I can validate the idea before quitting my job" value="${esc(draft.whyItMatters)}" class="v2-input"/>
-    </div>
-    <div class="v2-field">
-      <label class="v2-label">What have you already tried? <span class="v2-muted-text">(optional)</span></label>
-      <input id="ob-tried" type="text" placeholder="e.g. Started twice, got stuck after the auth setup" value="${esc(draft.triedBefore)}" class="v2-input"/>
+      <label class="v2-label">What have you tried before? <span class="v2-muted-text">(optional)</span></label>
+      <input id="ob-tried" type="text" class="v2-input" value="${esc(draft.triedBefore)}"
+        placeholder="e.g. Started twice, got stuck on database setup every time"/>
     </div>
     ${errDiv()}${nextBtn()}${backBtn()}`);
 
-  bindCards(container, 'data-tpl', () => draft.goalTemplate, (v) => { draft.goalTemplate = v; });
-  const bind = (id, key) => container.querySelector(id)?.addEventListener('input', (e) => { draft[key] = e.target.value; saveDraft(); });
-  bind('#ob-specific', 'specificGoal');
-  bind('#ob-current',  'currentProject');
-  bind('#ob-week',     'weekGoal');
-  bind('#ob-why',      'whyItMatters');
-  bind('#ob-tried',    'triedBefore');
+  const bind = (id, key) =>
+    container.querySelector(id)?.addEventListener('input', (e) => { draft[key] = e.target.value; saveDraft(); });
+  bind('#ob-week',    'weekGoal');
+  bind('#ob-current', 'currentProject');
+  bind('#ob-tried',   'triedBefore');
 
   container.querySelector('#ob-next')?.addEventListener('click', () => {
-    if (!draft.goalTemplate && !draft.specificGoal.trim()) {
-      setErr(container, 'Pick a goal template or enter a specific goal.'); return;
-    }
+    if (!draft.weekGoal.trim()) { setErr(container, 'Describe what success looks like by Day 7.'); return; }
     go(3, container);
   });
   container.querySelector('#ob-back')?.addEventListener('click', () => go(1, container));
 }
 
-// ── Step 3: Main Blocker ───────────────────────────────────────────────────
+// ── Step 3: Obstacle + Intensity ──────────────────────────────────────────
 
-function renderBlocker(container) {
+function renderObstacle(container) {
   container.innerHTML = wrap(`
-    ${hdr(3, 'What usually makes you fall off track?')}
+    ${hdr(3, "What's in your way?")}
+    <div class="v2-section-label" style="margin-bottom:10px">What usually stops you?</div>
     ${selGrid(BLOCKERS, draft.blocker, 'data-blk')}
+    <div class="v2-section-label" style="margin:20px 0 10px">How much time can you spend each day?</div>
+    ${selGrid(INTENSITIES, draft.dailyHours, 'data-int', 4)}
     ${errDiv()}${nextBtn()}${backBtn()}`);
 
   bindCards(container, 'data-blk', () => draft.blocker, (v) => { draft.blocker = v; });
+  bindCards(container, 'data-int', () => draft.dailyHours, (v) => { draft.dailyHours = v; });
 
   container.querySelector('#ob-next')?.addEventListener('click', () => {
-    if (!draft.blocker) { setErr(container, 'Pick your main blocker to continue.'); return; }
+    if (!draft.blocker)    { setErr(container, 'Pick your main obstacle to continue.'); return; }
+    if (!draft.dailyHours) { setErr(container, 'Pick your daily time to continue.'); return; }
     go(4, container);
   });
   container.querySelector('#ob-back')?.addEventListener('click', () => go(2, container));
 }
 
-// ── Step 4: Daily Intensity ────────────────────────────────────────────────
+// ── Step 4: Smart Rules ────────────────────────────────────────────────────
 
-function renderIntensity(container) {
-  container.innerHTML = wrap(`
-    ${hdr(4, 'How much can you realistically do each day?')}
-    ${selGrid(INTENSITIES, draft.dailyHours, 'data-int')}
-    ${errDiv()}${nextBtn()}${backBtn()}`);
-
-  bindCards(container, 'data-int', () => draft.dailyHours, (v) => { draft.dailyHours = v; });
-
-  container.querySelector('#ob-next')?.addEventListener('click', () => {
-    if (!draft.dailyHours) { setErr(container, 'Pick your daily intensity to continue.'); return; }
-    go(5, container);
-  });
-  container.querySelector('#ob-back')?.addEventListener('click', () => go(3, container));
-}
-
-// ── Step 5: If-Then Rules ──────────────────────────────────────────────────
-
-function renderIfThen(container) {
+function renderRules(container) {
   const ruleCards = IF_THEN_RULES.map((r) => {
     const on = draft.ifThenRules.includes(r.id);
     return `<button data-rule="${esc(r.id)}" class="v2-sel-card${on ? ' v2-sel-card--on' : ''}" style="grid-column:1/-1;padding:13px 16px">
@@ -324,7 +302,7 @@ function renderIfThen(container) {
   }).join('');
 
   container.innerHTML = wrap(`
-    ${hdr(5, 'What should StriveAI do when things go wrong?', 'Select 2–4 rules.')}
+    ${hdr(4, 'How should StriveAI adapt for you?', 'Pick all that apply.')}
     <div class="v2-sel-grid" style="grid-template-columns:1fr;gap:8px;margin-bottom:20px">
       ${ruleCards}
     </div>
@@ -333,17 +311,22 @@ function renderIfThen(container) {
   bindCards(container, 'data-rule', () => draft.ifThenRules, () => {}, true);
 
   container.querySelector('#ob-next')?.addEventListener('click', () => {
-    if (draft.ifThenRules.length < 2) { setErr(container, 'Select at least 2 rules.'); return; }
-    go(6, container);
+    if (!draft.ifThenRules.length) { setErr(container, 'Pick at least one rule.'); return; }
+    go(5, container);
   });
-  container.querySelector('#ob-back')?.addEventListener('click', () => go(4, container));
+  container.querySelector('#ob-back')?.addEventListener('click', () => go(3, container));
 }
 
-// ── Step 6: Telegram Ping Setup ────────────────────────────────────────────
+// ── Step 5: Setup + Confirm ────────────────────────────────────────────────
 
-function renderTelegram(container) {
-  const tg        = lastState?.telegram || {};
-  const connected = Boolean(tg.connected);
+function renderSetup(container) {
+  const tg      = lastState?.telegram || {};
+  const loading = Boolean(lastState?.ui?.trackGenerating || lastState?.ui?.loading);
+  const errText = String(lastState?.ui?.error || '');
+
+  const catLabel = CATEGORIES.find((c) => c.id === draft.goalCategory)?.label || draft.goalCategory;
+  const blkLabel = BLOCKERS.find((b) => b.id === draft.blocker)?.label || draft.blocker;
+  const intLabel = INTENSITIES.find((i) => i.id === draft.dailyHours)?.label || draft.dailyHours;
 
   const pingCards = PING_OPTIONS.map((opt) => {
     const on = draft.pingSelection === opt.id;
@@ -353,28 +336,45 @@ function renderTelegram(container) {
     </button>`;
   }).join('');
 
+  const row = (label, value) =>
+    `<div class="v2-meta-row">
+      <span class="v2-muted-text" style="flex-shrink:0">${esc(label)}</span>
+      <span class="v2-body-text" style="text-align:right">${esc(String(value))}</span>
+    </div>`;
+
   container.innerHTML = wrap(`
-    ${hdr(6, 'When should StriveAI check in on Telegram?')}
-    <div class="v2-sel-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+    ${hdr(5, 'Review and generate')}
+
+    <div class="v2-card" style="margin-bottom:20px">
+      ${row('Category',     catLabel)}
+      ${row('Goal',         (draft.specificGoal || '—').slice(0, 80))}
+      ${row('Day 7 target', (draft.weekGoal     || '—').slice(0, 80))}
+      ${draft.currentProject ? row('Starting from', draft.currentProject.slice(0, 80)) : ''}
+      ${row('Main obstacle', blkLabel)}
+      ${row('Daily time',    intLabel)}
+    </div>
+
+    <div class="v2-section-label" style="margin-bottom:10px">Telegram check-ins <span class="v2-muted-text">(optional)</span></div>
+    <div class="v2-sel-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px">
       ${pingCards}
     </div>
     ${draft.pingSelection === 'custom' ? `
-      <div class="v2-field" style="margin-bottom:14px">
+      <div class="v2-field" style="margin-bottom:10px">
         <label class="v2-label">Hour (0–23, UTC)</label>
         <input id="ob-custom-hour" type="number" min="0" max="23" value="${draft.pingHour}" class="v2-input" style="max-width:100px"/>
       </div>` : ''}
-    <div class="v2-card v2-card--sm" style="margin-bottom:16px">
-      <div class="v2-h3" style="margin-bottom:10px">Telegram</div>
-      ${connected
-        ? `<p class="v2-body-text" style="color:var(--v2-green)">Connected${tg.username ? ` as @${esc(tg.username)}` : ''}</p>`
-        : `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
-             <span class="v2-muted-text">Not connected</span>
-             <button id="ob-tg-connect" class="v2-btn v2-btn--primary v2-btn--sm">Connect Telegram</button>
-             <button id="ob-tg-refresh" class="v2-btn v2-btn--ghost v2-btn--sm">I connected →</button>
-           </div>`}
-      <p id="ob-tg-note" class="v2-hint">Telegram is the only ping channel.</p>
-    </div>
-    ${errDiv()}${nextBtn()}${backBtn()}`);
+
+    ${tg.connected
+      ? `<p style="margin-bottom:14px;font-size:.875rem;color:var(--v2-green)">Telegram connected${tg.username ? ` as @${esc(tg.username)}` : ''}</p>`
+      : `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+           <span class="v2-muted-text">Not connected</span>
+           <button id="ob-tg-connect" class="v2-btn v2-btn--primary v2-btn--sm">Connect Telegram</button>
+           <button id="ob-tg-refresh" class="v2-btn v2-btn--ghost v2-btn--sm">I connected →</button>
+         </div>`}
+
+    ${errText ? `<p class="v2-err" style="margin-bottom:12px">${esc(errText)}</p>` : ''}
+    ${nextBtn(loading ? 'Building your track…' : 'Build my 7-day track →', loading)}
+    ${backBtn()}`);
 
   container.querySelectorAll('[data-ping]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -382,7 +382,7 @@ function renderTelegram(container) {
       const opt = PING_OPTIONS.find((p) => p.id === draft.pingSelection);
       if (opt?.hour !== null) draft.pingHour = opt.hour;
       saveDraft();
-      renderTelegram(container);
+      renderSetup(container);
     });
   });
 
@@ -393,87 +393,35 @@ function renderTelegram(container) {
 
   container.querySelector('#ob-tg-connect')?.addEventListener('click', async () => {
     const note = container.querySelector('#ob-tg-note');
-    if (note) note.textContent = 'Opening Telegram…';
     try {
       await lastActions?.onTelegramLink?.();
-      if (note) note.textContent = "Opened! Click 'I connected →' to refresh status.";
+      if (note) note.textContent = "Opened. Click 'I connected →' to refresh.";
     } catch (err) {
       if (note) note.textContent = String(err?.message || 'Could not start connection.');
     }
   });
 
   container.querySelector('#ob-tg-refresh')?.addEventListener('click', async () => {
-    const note = container.querySelector('#ob-tg-note');
-    if (note) note.textContent = 'Checking…';
     await lastActions?.onTelegramRefresh?.();
   });
 
-  container.querySelector('#ob-next')?.addEventListener('click', () => go(7, container));
-  container.querySelector('#ob-back')?.addEventListener('click', () => go(5, container));
-}
-
-// ── Step 7: Escalation ────────────────────────────────────────────────────
-
-function renderEscalation(container) {
-  container.innerHTML = wrap(`
-    ${hdr(7, 'What should happen if you disappear for 2 days?')}
-    ${selGrid(ESCALATIONS, draft.escalationRule, 'data-esc')}
-    ${errDiv()}${nextBtn()}${backBtn()}`);
-
-  bindCards(container, 'data-esc', () => draft.escalationRule, (v) => { draft.escalationRule = v; });
-
-  container.querySelector('#ob-next')?.addEventListener('click', () => {
-    if (!draft.escalationRule) { setErr(container, 'Pick an option to continue.'); return; }
-    go(8, container);
-  });
-  container.querySelector('#ob-back')?.addEventListener('click', () => go(6, container));
-}
-
-// ── Step 8: Confirm Track ──────────────────────────────────────────────────
-
-function renderConfirm(container) {
-  const goal      = draft.specificGoal.trim() || draft.goalTemplate;
-  const catLabel  = CATEGORIES.find((c)  => c.id === draft.goalCategory)?.label  || draft.goalCategory;
-  const blkLabel  = BLOCKERS.find((b)    => b.id === draft.blocker)?.label       || draft.blocker;
-  const intLabel  = INTENSITIES.find((i) => i.id === draft.dailyHours)?.label    || draft.dailyHours;
-  const escLabel  = ESCALATIONS.find((e) => e.id === draft.escalationRule)?.label || draft.escalationRule;
-  const pingLabel = PING_OPTIONS.find((p) => p.id === draft.pingSelection)?.label || 'Morning';
-  const tg        = lastState?.telegram || {};
-  const loading   = Boolean(lastState?.ui?.trackGenerating || lastState?.ui?.loading);
-  const errText   = String(lastState?.ui?.error || '');
-  const ruleTexts = draft.ifThenRules.map((id) => IF_THEN_RULES.find((r) => r.id === id)?.text || id).join(' · ');
-
-  const row = (label, value) =>
-    `<div class="v2-meta-row">
-      <span class="v2-muted-text" style="flex-shrink:0">${esc(label)}</span>
-      <span class="v2-body-text" style="text-align:right">${esc(String(value))}</span>
-    </div>`;
-
-  container.innerHTML = wrap(`
-    ${hdr(8, 'Your 7-day track setup')}
-    <div class="v2-card" style="margin-bottom:20px">
-      ${row('Goal category', catLabel)}
-      ${row('Goal', goal || '—')}
-      ${row('Main blocker', blkLabel)}
-      ${row('Daily time', intLabel)}
-      ${row('Rules', ruleTexts || '—')}
-      ${row('Telegram ping', `${pingLabel} · ${draft.pingHour}:00 UTC${tg.connected ? ' (connected)' : ' (not connected)'}`)}
-      ${row('If absent 2 days', escLabel)}
-    </div>
-    ${errText ? `<p class="v2-err" style="margin-bottom:12px">${esc(errText)}</p>` : ''}
-    ${nextBtn(loading ? 'Building your track…' : 'Build my 7-day track →', loading)}
-    ${backBtn()}`);
-
   container.querySelector('#ob-next')?.addEventListener('click', async () => {
-    if (!goal.trim()) return;
+    const goal = draft.specificGoal.trim();
+    if (!goal) return;
     const btn = container.querySelector('#ob-next');
     if (btn) { btn.disabled = true; btn.textContent = 'Building your track…'; }
     try {
-      await lastActions?.onGenerate?.({ ...draft, goal: goal.trim() });
+      await lastActions?.onGenerate?.({
+        ...draft,
+        goal,
+        // fix: pass blocker under the key that buildTrackPrompt reads
+        blockerHint: draft.blocker,
+      });
       clearOnboardingDraft();
-    } catch (_e) { /* error state already surfaced via ui.error */ }
+    } catch (_e) { /* error shown via ui.error */ }
   });
-  container.querySelector('#ob-back')?.addEventListener('click', () => go(7, container));
+
+  container.querySelector('#ob-back')?.addEventListener('click', () => go(4, container));
 }
 
 // ── Utils ──────────────────────────────────────────────────────────────────
