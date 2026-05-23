@@ -312,37 +312,50 @@ function stepTag(text) {
 }
 
 function stepList(steps, currentIndex, note, loading) {
-  return steps.map((step, i) => {
+  const parts = [];
+  let addedComingUp = false;
+
+  steps.forEach((step, i) => {
     if (i < currentIndex) {
-      return `<div class="v2-step-done-row">
+      parts.push(`<div class="v2-step-done-row">
         <span style="color:var(--v2-green);flex-shrink:0">✓</span>
         <span style="color:var(--v2-muted)">${esc(step.text)}</span>
-      </div>`;
+      </div>`);
+      return;
     }
+
     if (i === currentIndex) {
       const isLast = i === steps.length - 1;
-      const cta = isLast ? 'Finish today’s task →' : 'Done, next step →';
-      return `<div class="v2-step-card--active v2-bracketed" style="overflow:visible">
+      const cta = isLast ? "Finish today's task →" : "Done, next step →";
+      parts.push(`<div class="v2-step-card--active v2-bracketed" style="overflow:visible">
         <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
-        <div class="v2-today-action" style="margin-bottom:8px">Step ${i + 1} of ${steps.length}${stepTag(step.text) ? ` · ${stepTag(step.text)}` : ''}</div>
-        <p class="v2-h3" style="margin-bottom:12px">${esc(step.text)}</p>
-        <div class="v2-field">
-          <label class="v2-label">What did you do or produce?</label>
-          <textarea id="ag-note" rows="3" placeholder="One short line — link, output, or where you got to…" class="v2-textarea" style="min-height:70px"></textarea>
-        </div>
-        <div class="v2-row" style="margin-top:8px">
+        <div class="v2-today-action" style="margin-bottom:10px">Step ${i + 1} of ${steps.length}${stepTag(step.text) ? ` · ${stepTag(step.text)}` : ''}</div>
+        <p class="v2-h2" style="margin-bottom:18px">${esc(step.text)}</p>
+        <div class="v2-row" style="margin-bottom:12px">
           <button id="ag-complete" ${loading ? 'disabled' : ''} class="v2-btn v2-btn--primary" style="flex:1">
-            ${cta}
+            ${loading ? 'Saving…' : cta}
           </button>
-          <button id="ag-stuck" class="v2-btn v2-btn--ghost" title="Flag this step as blocked and get help">I'm stuck</button>
+          <button id="ag-stuck" class="v2-btn v2-btn--ghost" title="Flag as blocked and get help">I'm stuck</button>
         </div>
-      </div>`;
+        <div class="v2-field">
+          <label class="v2-label" style="font-size:.75rem;opacity:.65">Log output (optional)</label>
+          <textarea id="ag-note" rows="2" placeholder="Link, filename, or one line of what you made" class="v2-textarea" style="min-height:52px"></textarea>
+        </div>
+      </div>`);
+      return;
     }
-    return `<div class="v2-step-upcoming-row">
+
+    if (!addedComingUp) {
+      parts.push(`<div class="v2-kicker v2-kicker--muted" style="margin:18px 0 6px;font-size:.75rem">Coming up:</div>`);
+      addedComingUp = true;
+    }
+    parts.push(`<div class="v2-step-upcoming-row">
       <span style="color:var(--v2-dim);flex-shrink:0">${i + 1}.</span>
       <span>${esc(step.text)}</span>
-    </div>`;
-  }).join('');
+    </div>`);
+  });
+
+  return parts.join('');
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

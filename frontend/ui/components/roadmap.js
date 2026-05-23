@@ -1,4 +1,5 @@
-// 7-day roadmap visualization: smooth SVG curve with status-colored nodes.
+// 7-day roadmap visualization: smooth sinusoidal SVG curve with status-colored nodes.
+// Labels are hidden by default — shown on node click (wired by progress.js).
 // Pure render — returns HTML string.
 
 const NODE_COLOR = {
@@ -20,57 +21,74 @@ export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' }
     const existing = days.find((d) => d.dayNumber === n) || {};
     return {
       dayNumber: n,
-      status: existing.status || 'pending',
-      title: existing.title || '',
-      isToday: n === currentDay,
+      status:    existing.status || 'pending',
+      title:     existing.title || '',
+      isToday:   n === currentDay,
     };
   });
 
-  const W = 760;
-  const H = variant === 'full' ? 230 : 170;
-  const padX = 50;
-  const midY = variant === 'full' ? 100 : 80;
-  const amp  = variant === 'full' ? 40 : 30;
+  const W    = 900;
+  const H    = variant === 'full' ? 300 : 180;
+  const padX = 64;
+  const midY = variant === 'full' ? 150 : 90;
+  const amp  = variant === 'full' ? 85 : 32;
 
-  // Compute node positions along a gentle sine curve for organic feel.
-  const positions = list.map((_, i) => {
-    const t = i / (total - 1);
-    const x = padX + t * (W - padX * 2);
-    const y = midY + Math.sin(t * Math.PI * 1.5) * amp;
-    return { x, y };
-  });
+  // True sinusoidal: 2 full periods across 7 nodes → alternating up-down-up-down
+  const positions = list.map((_, i) => ({
+    x: padX + (i / (total - 1)) * (W - padX * 2),
+    y: midY - Math.sin(i * 2 * Math.PI / 3) * amp,
+  }));
 
-  // Smooth path connecting all points with quadratic curves.
-  let path = `M ${positions[0].x} ${positions[0].y}`;
+  // Smooth curve via Catmull-Rom → cubic Bezier conversion
+  let path = `M ${f(positions[0].x)} ${f(positions[0].y)}`;
   for (let i = 1; i < positions.length; i++) {
-    const prev = positions[i - 1];
-    const curr = positions[i];
-    const cx = (prev.x + curr.x) / 2;
-    path += ` Q ${cx} ${prev.y} ${cx} ${(prev.y + curr.y) / 2} T ${curr.x} ${curr.y}`;
+    const p0 = positions[Math.max(0, i - 2)];
+    const p1 = positions[i - 1];
+    const p2 = positions[i];
+    const p3 = positions[Math.min(positions.length - 1, i + 1)];
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    path += ` C ${f(cp1x)} ${f(cp1y)} ${f(cp2x)} ${f(cp2y)} ${f(p2.x)} ${f(p2.y)}`;
   }
 
   const nodes = list.map((d, i) => {
     const { x, y } = positions[i];
     const key = d.isToday ? 'today' : d.status;
-    const c = NODE_COLOR[key] || NODE_COLOR.pending;
-    const r = d.isToday ? 22 : 16;
+    const c   = NODE_COLOR[key] || NODE_COLOR.pending;
+    const r   = d.isToday ? 22 : 16;
     const ring = d.isToday
-      ? `<circle cx="${x}" cy="${y}" r="${r + 9}" fill="none" stroke="${c.stroke}" stroke-width="2" opacity=".35"/>`
+      ? `<circle cx="${f(x)}" cy="${f(y)}" r="${r + 9}" fill="none" stroke="${c.stroke}" stroke-width="2" opacity=".35"/>`
       : '';
-    const inner = `<circle cx="${x}" cy="${y}" r="${r}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2.5"/>`;
+    const inner    = `<circle cx="${f(x)}" cy="${f(y)}" r="${r}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2.5"/>`;
     const isFilled = d.status === 'done' || d.status === 'rescued' || d.isToday;
-    const dayLabel = `<text x="${x}" y="${y + 5}" text-anchor="middle" font-family="var(--v2-fhead)" font-size="15" font-weight="800" fill="${isFilled ? '#fff' : '#475569'}">${d.dayNumber}</text>`;
-    const tooltip = `<title>Day ${d.dayNumber}${d.title ? ` — ${esc(d.title)}` : ''}${d.isToday ? ' (today)' : ''} · ${esc(d.status)}</title>`;
-    return `<g>${tooltip}${ring}${inner}${dayLabel}</g>`;
+    const numLabel = `<text x="${f(x)}" y="${f(y + 5)}" text-anchor="middle" font-family="var(--v2-fhead)" font-size="15" font-weight="800" fill="${isFilled ? '#fff' : '#475569'}">${d.dayNumber}</text>`;
+    const hitArea  = `<circle cx="${f(x)}" cy="${f(y)}" r="${r + 14}" fill="transparent" style="cursor:pointer"/>`;
+    const tooltip  = `<title>Day ${d.dayNumber}${d.title ? ` — ${esc(d.title)}` : ''}${d.isToday ? ' (today)' : ''} · ${esc(d.status)}</title>`;
+    return `<g data-day="${d.dayNumber}" style="cursor:pointer">${tooltip}${ring}${inner}${numLabel}${hitArea}</g>`;
   }).join('');
 
+  // Labels: hidden by default, toggled on node click (via progress.js wireRoadmapLabels)
   let labels = '';
   if (variant === 'full') {
     labels = list.map((d, i) => {
       const { x, y } = positions[i];
-      const ly = y + 48;
-      const title = (d.title || '').slice(0, 22) + ((d.title || '').length > 22 ? '…' : '');
-      return `<text x="${x}" y="${ly}" text-anchor="middle" font-family="var(--v2-fbody)" font-size="12" fill="${d.isToday ? '#2a36c8' : '#475569'}" font-weight="${d.isToday ? '700' : '500'}">${esc(title)}</text>`;
+      const r = d.isToday ? 22 : 16;
+      // Nodes above midline get label below (toward center); nodes below get label above
+      const labelY = y <= midY ? f(y + r + 20) : f(y - r - 8);
+      const title  = (d.title || '').slice(0, 26) + ((d.title || '').length > 26 ? '…' : '');
+      return `<text
+        data-label-day="${d.dayNumber}"
+        x="${f(x)}" y="${labelY}"
+        text-anchor="middle"
+        font-family="var(--v2-fbody)"
+        font-size="11.5"
+        fill="${d.isToday ? '#2a36c8' : '#334155'}"
+        font-weight="${d.isToday ? '700' : '600'}"
+        visibility="hidden"
+        style="pointer-events:none"
+      >${esc(title)}</text>`;
     }).join('');
   }
 
@@ -83,6 +101,8 @@ export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' }
       </svg>
     </div>`;
 }
+
+function f(n) { return Number(n).toFixed(1); }
 
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
