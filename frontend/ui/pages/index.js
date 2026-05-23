@@ -3,7 +3,6 @@
 import { render as renderLanding }      from './landing.js';
 import { render as renderAuth }         from './auth.js';
 import { render as renderOnboarding }   from './onboarding.js';
-import { render as renderConfirmTrack } from './confirm-track.js';
 import { render as renderPlanPreview }  from './plan-preview.js';
 import { render as renderToday }        from './today.js';
 import { render as renderAgent }        from './agent.js';
@@ -19,7 +18,6 @@ const ROUTE_MAP = {
   '/landing':       renderLanding,
   '/auth':          renderAuth,
   '/onboarding':    renderOnboarding,
-  '/confirm-track': renderConfirmTrack,
   '/plan-preview':  renderPlanPreview,
   '/today':         renderToday,
   '/agent':         renderAgent,

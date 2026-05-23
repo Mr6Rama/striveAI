@@ -60,7 +60,8 @@ export function renderRoadmap({ days = [], currentDay = 1, variant = 'compact' }
     const inner = `<circle cx="${x}" cy="${y}" r="${r}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2.5"/>`;
     const isFilled = d.status === 'done' || d.status === 'rescued' || d.isToday;
     const dayLabel = `<text x="${x}" y="${y + 5}" text-anchor="middle" font-family="var(--v2-fhead)" font-size="15" font-weight="800" fill="${isFilled ? '#fff' : '#475569'}">${d.dayNumber}</text>`;
-    return ring + inner + dayLabel;
+    const tooltip = `<title>Day ${d.dayNumber}${d.title ? ` — ${esc(d.title)}` : ''}${d.isToday ? ' (today)' : ''} · ${esc(d.status)}</title>`;
+    return `<g>${tooltip}${ring}${inner}${dayLabel}</g>`;
   }).join('');
 
   let labels = '';

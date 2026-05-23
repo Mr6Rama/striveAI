@@ -1,7 +1,7 @@
 // Day 7 Recap — /recap
 // Shown when track.status === 'complete'.
 
-let exportCopied = false;
+let reflectionRequestedFor = '';
 
 export function render(container, state, actions) {
   const { track, history, telegram, ui } = state;
@@ -20,6 +20,12 @@ export function render(container, state, actions) {
 
   container.innerHTML = buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram);
   wireEvents(container, state, actions, track, recapText, patterns);
+
+  // Auto-trigger reflection generation on first visit per track.
+  if (!recapText && !recapLoading && reflectionRequestedFor !== track.id) {
+    reflectionRequestedFor = track.id;
+    actions.onRecapLoadReflection?.();
+  }
 }
 
 // ── Page builder ──────────────────────────────────────────────────────────────

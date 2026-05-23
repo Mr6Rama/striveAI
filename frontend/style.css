@@ -10206,6 +10206,60 @@ body.v2-body::before {
   margin-bottom: 8px;
 }
 
+/* Morning Brief — short coach greeting on /today */
+.v2-morning-brief {
+  font-family: var(--v2-fbody);
+  font-size: 1.02rem;
+  line-height: 1.55;
+  color: var(--v2-text-2);
+  margin: 0 0 18px;
+  max-width: 640px;
+}
+
+/* Soft return — shown after 2+ missed days, replaces the brief */
+.v2-soft-return {
+  background: var(--v2-blue-wash);
+  border: 1px solid rgba(42,54,200,.16);
+  border-left: 3px solid var(--v2-blue);
+  border-radius: var(--v2-r-sm);
+  padding: 14px 16px;
+  margin: 0 0 20px;
+  max-width: 640px;
+}
+.v2-soft-return__title {
+  font-family: var(--v2-fhead);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--v2-text);
+  margin-bottom: 4px;
+}
+.v2-soft-return__body {
+  font-size: .95rem;
+  color: var(--v2-text-2);
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* Honest streak chip in the top nav */
+.v2-streak-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 99px;
+  background: rgba(10,13,24,.04);
+  border: 1px solid var(--v2-border);
+  font-family: var(--v2-fbody);
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--v2-text-2);
+  line-height: 1;
+}
+.v2-streak-chip__num { color: var(--v2-text); font-weight: 800; }
+.v2-streak-chip__num--green { color: var(--v2-green); }
+.v2-streak-chip__sep { color: var(--v2-border-2); }
+.v2-streak-chip__label { color: var(--v2-muted); font-weight: 500; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; }
+
 /* Agent Mode intro banner */
 .v2-agent-intro {
   background: var(--v2-blue-wash);
@@ -10400,6 +10454,22 @@ body.v2-body::before {
   border-color: var(--v2-border-2);
 }
 .v2-btn--ghost:hover { border-color: var(--v2-blue); color: var(--v2-blue); background: var(--v2-blue-wash); }
+
+/* Quiet inline link-style action — for secondary "did it / dismiss" affordances. */
+.v2-link-btn {
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  font-family: var(--v2-fbody);
+  font-size: .9rem;
+  font-weight: 500;
+  color: var(--v2-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--v2-border-2);
+  text-underline-offset: 3px;
+}
+.v2-link-btn:hover { color: var(--v2-blue); text-decoration-color: var(--v2-blue); }
 
 .v2-btn--danger {
   background: rgba(220,38,38,.08);

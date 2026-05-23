@@ -39,11 +39,15 @@ export async function signOut() {
 
 export function authErrorMessage(error) {
   const code = String(error?.code || '');
-  if (code.includes('invalid-email')) return 'Invalid email format.';
-  if (code.includes('user-not-found')) return 'User not found.';
-  if (code.includes('wrong-password') || code.includes('invalid-credential')) return 'Invalid email or password.';
-  if (code.includes('too-many-requests')) return 'Too many attempts. Try later.';
-  return String(error?.message || 'Authentication failed.');
+  if (code.includes('invalid-email'))         return 'That email doesn’t look right.';
+  if (code.includes('email-already-in-use'))  return 'This email is already registered. Try signing in instead.';
+  if (code.includes('weak-password'))         return 'Password is too short. Use at least 6 characters.';
+  if (code.includes('user-not-found'))        return 'No account with this email. Create one?';
+  if (code.includes('wrong-password') || code.includes('invalid-credential')) return 'Wrong email or password.';
+  if (code.includes('too-many-requests'))     return 'Too many attempts. Wait a minute and try again.';
+  if (code.includes('network-request-failed')) return 'Network hiccup. Check your connection and retry.';
+  if (code.includes('user-disabled'))         return 'This account has been disabled.';
+  return 'Could not sign you in. Try again, or use Forgot password.';
 }
 
 export async function sendPasswordReset(email) {

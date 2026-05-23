@@ -5,7 +5,6 @@ export const V2_ROUTES = new Set([
   '/landing',
   '/auth',
   '/onboarding',
-  '/confirm-track',
   '/plan-preview',
   '/today',
   '/agent',

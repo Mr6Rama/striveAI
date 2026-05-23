@@ -55,12 +55,14 @@ export function render(container, _state, actions) {
   const errEl      = container.querySelector('#v2-auth-error');
   const okEl       = container.querySelector('#v2-auth-success');
 
+  const pwInput = container.querySelector('#v2-auth-password');
   function setMode(m) {
     mode = m;
     tabSignin.className = `v2-tab${m === 'signin' ? ' v2-tab--active' : ''}`;
     tabSignup.className = `v2-tab${m === 'signup' ? ' v2-tab--active' : ''}`;
     submitBtn.textContent   = m === 'signin' ? 'Sign in' : 'Create account';
     resetLink.style.display = m === 'signin' ? 'inline-flex' : 'none';
+    if (pwInput) pwInput.setAttribute('autocomplete', m === 'signin' ? 'current-password' : 'new-password');
     if (errEl) errEl.textContent = '';
     if (okEl)  okEl.textContent  = '';
   }

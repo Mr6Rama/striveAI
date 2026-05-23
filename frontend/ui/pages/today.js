@@ -1,5 +1,8 @@
 // v2 Today's Action screen — primary daily execution screen.
 import { renderRoadmap } from '../components/roadmap.js';
+import { buildMorningBrief } from '../../domain/morning-brief.js';
+import { computeStreaks, consecutiveMissedDays } from '../../domain/streak.js';
+import { isoDateNow } from '../../core/state-model.js';
 
 const STATUS_CLASS = Object.freeze({
   done:        'v2-badge--done',
@@ -78,15 +81,21 @@ export function render(container, state, actions) {
 // ── Active (pending / in_progress) ────────────────────────────────────────
 
 function renderActive(container, track, today, dayPlan, state, actions) {
-  const dayNum  = dayPlan.dayNumber || 1;
-  const status  = today.status || 'pending';
-  const insight = state.ui?.insight || '';
-  const tgNote  = buildTgNote(state.telegram);
+  const dayNum   = dayPlan.dayNumber || 1;
+  const status   = today.status || 'pending';
+  const insight  = state.ui?.insight || '';
+  const tgNote   = buildTgNote(state.telegram);
+  const todayIso = isoDateNow();
+  const streaks  = computeStreaks(state.history, track.id, todayIso);
+  const missGap  = consecutiveMissedDays(state.history, track.id, todayIso);
+  const brief    = buildMorningBrief({ user: state.user, track, today, history: state.history, streaks });
+  const softReturn = missGap >= 2;
 
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
       ${topBar(dayNum, status, track.goal, track)}
+      ${softReturn ? softReturnBanner(missGap) : `<p class="v2-morning-brief">${esc(brief)}</p>`}
       ${actionCard(dayPlan)}
       ${insight ? `<div class="v2-insight">${esc(insight)}</div>` : ''}
 
@@ -94,14 +103,15 @@ function renderActive(container, track, today, dayPlan, state, actions) {
         Start with Agent →
       </button>
 
-      <div class="v2-row v2-row--mb">
-        <button id="td-kit"  class="v2-btn v2-btn--secondary" style="flex:1">Action Kit</button>
-        <button id="td-done" class="v2-btn v2-btn--secondary" style="flex:1">I already did it</button>
+      <button id="td-kit" class="v2-btn v2-btn--secondary v2-btn--full" style="margin-bottom:18px">Action Kit</button>
+
+      <div class="v2-row" style="margin-bottom:16px">
+        <button id="td-blocked" class="v2-btn v2-btn--ghost" style="flex:1">I’m stuck</button>
+        <button id="td-skip"    class="v2-btn v2-btn--ghost" style="flex:1">Skip today</button>
       </div>
 
-      <div class="v2-row" style="margin-bottom:20px">
-        <button id="td-blocked" class="v2-btn v2-btn--ghost" style="flex:1">I'm blocked</button>
-        <button id="td-skip"    class="v2-btn v2-btn--ghost" style="flex:1">Skip today</button>
+      <div style="text-align:center;margin-bottom:20px">
+        <button id="td-done" class="v2-link-btn">I already did it — submit proof</button>
       </div>
 
       ${tgNote}
@@ -249,6 +259,15 @@ function buildTgNote(telegram) {
   const h      = telegram.pingHour ?? 9;
   const period = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
   return `<p class="v2-muted-text" style="margin-bottom:16px">Telegram check-in: ${period} · ${h}:00 UTC</p>`;
+}
+
+function softReturnBanner(missGap) {
+  const days = missGap === 1 ? 'a day' : `${missGap} days`;
+  return `
+    <div class="v2-soft-return">
+      <div class="v2-soft-return__title">Welcome back.</div>
+      <p class="v2-soft-return__body">It’s been ${days}. You don’t need to catch up — the plan adjusts to where you are now. Today’s task is sized for a real return.</p>
+    </div>`;
 }
 
 function setText(id, value) {
