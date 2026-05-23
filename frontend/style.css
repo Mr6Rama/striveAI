@@ -9924,7 +9924,7 @@ select{
   /* ── Typography ── */
   --v2-fhead:  'Manrope','Geist','Inter',system-ui,sans-serif;
   --v2-fbody:  'Manrope','Geist','Inter',system-ui,sans-serif;
-  --v2-fmono:  'JetBrains Mono','Geist Mono',ui-monospace,monospace;
+  --v2-fmono:  'Manrope','Geist','Inter',system-ui,sans-serif;
   --v2-fitalic: 'Cormorant Garamond','Fraunces',Georgia,serif;
 
   /* ── Radii ── */
@@ -9937,6 +9937,8 @@ select{
 body.v2-body {
   font-family: var(--v2-fbody);
   color: var(--v2-text);
+  font-size: 16px;
+  line-height: 1.55;
   background: var(--v2-bg) !important;
   background-image:
     radial-gradient(900px 600px at 88% -10%, rgba(42,54,200,.08), transparent 60%),
@@ -10126,10 +10128,10 @@ body.v2-body::before {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--v2-fmono);
-  font-size: .68rem;
-  font-weight: 500;
-  letter-spacing: .16em;
+  font-family: var(--v2-fbody);
+  font-size: .82rem;
+  font-weight: 600;
+  letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--v2-muted);
   margin-bottom: 12px;
@@ -10181,28 +10183,82 @@ body.v2-body::before {
 }
 
 .v2-body-text {
-  font-size: .9rem;
+  font-size: 1rem;
   color: var(--v2-text-2);
   line-height: 1.65;
   margin: 0;
 }
 
 .v2-muted-text {
-  font-size: .8rem;
+  font-size: .9rem;
   color: var(--v2-muted);
   line-height: 1.55;
   margin: 0;
 }
 
 .v2-section-label {
-  font-family: var(--v2-fmono);
-  font-size: .65rem;
-  font-weight: 500;
-  letter-spacing: .18em;
+  font-family: var(--v2-fbody);
+  font-size: .78rem;
+  font-weight: 600;
+  letter-spacing: .12em;
   text-transform: uppercase;
   color: var(--v2-dim);
   margin-bottom: 8px;
 }
+
+/* Morning Brief — short coach greeting on /today */
+.v2-morning-brief {
+  font-family: var(--v2-fbody);
+  font-size: 1.02rem;
+  line-height: 1.55;
+  color: var(--v2-text-2);
+  margin: 0 0 18px;
+  max-width: 640px;
+}
+
+/* Soft return — shown after 2+ missed days, replaces the brief */
+.v2-soft-return {
+  background: var(--v2-blue-wash);
+  border: 1px solid rgba(42,54,200,.16);
+  border-left: 3px solid var(--v2-blue);
+  border-radius: var(--v2-r-sm);
+  padding: 14px 16px;
+  margin: 0 0 20px;
+  max-width: 640px;
+}
+.v2-soft-return__title {
+  font-family: var(--v2-fhead);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--v2-text);
+  margin-bottom: 4px;
+}
+.v2-soft-return__body {
+  font-size: .95rem;
+  color: var(--v2-text-2);
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* Honest streak chip in the top nav */
+.v2-streak-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 99px;
+  background: rgba(10,13,24,.04);
+  border: 1px solid var(--v2-border);
+  font-family: var(--v2-fbody);
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--v2-text-2);
+  line-height: 1;
+}
+.v2-streak-chip__num { color: var(--v2-text); font-weight: 800; }
+.v2-streak-chip__num--green { color: var(--v2-green); }
+.v2-streak-chip__sep { color: var(--v2-border-2); }
+.v2-streak-chip__label { color: var(--v2-muted); font-weight: 500; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; }
 
 /* Agent Mode intro banner */
 .v2-agent-intro {
@@ -10235,19 +10291,26 @@ body.v2-body::before {
 /* 7-day SVG roadmap */
 .v2-roadmap {
   width: 100%;
-  margin: 0 0 18px;
+  margin: 0 auto 22px;
   overflow: visible;
 }
-.v2-roadmap--compact { max-width: 720px; }
-.v2-roadmap--full    { margin-bottom: 24px; }
-.v2-roadmap svg { display: block; max-width: 100%; height: auto; }
+.v2-roadmap--compact {
+  max-width: 860px;
+  height: 170px;
+}
+.v2-roadmap--full {
+  max-width: 920px;
+  height: 230px;
+  margin-bottom: 28px;
+}
+.v2-roadmap svg { display: block; width: 100%; height: 100%; }
 
 /* Mission card meta line — plain readable text, not monospace caps */
 .v2-mission-meta {
   font-family: var(--v2-fbody);
-  font-size: .85rem;
+  font-size: .95rem;
   color: var(--v2-muted);
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -10333,14 +10396,14 @@ body.v2-body::before {
 
 /* ── Done criteria pill ── */
 .v2-done-criteria {
-  font-family: var(--v2-fmono);
-  font-size: .75rem;
+  font-family: var(--v2-fbody);
+  font-size: .92rem;
   color: var(--v2-blue);
   background: var(--v2-blue-wash);
   border: 1px solid rgba(42,54,200,.18);
   border-radius: var(--v2-r-sm);
-  padding: 7px 12px;
-  line-height: 1.45;
+  padding: 9px 14px;
+  line-height: 1.5;
 }
 
 /* ── Buttons ── */
@@ -10391,6 +10454,22 @@ body.v2-body::before {
   border-color: var(--v2-border-2);
 }
 .v2-btn--ghost:hover { border-color: var(--v2-blue); color: var(--v2-blue); background: var(--v2-blue-wash); }
+
+/* Quiet inline link-style action — for secondary "did it / dismiss" affordances. */
+.v2-link-btn {
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  font-family: var(--v2-fbody);
+  font-size: .9rem;
+  font-weight: 500;
+  color: var(--v2-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--v2-border-2);
+  text-underline-offset: 3px;
+}
+.v2-link-btn:hover { color: var(--v2-blue); text-decoration-color: var(--v2-blue); }
 
 .v2-btn--danger {
   background: rgba(220,38,38,.08);
@@ -10560,10 +10639,10 @@ body.v2-body::before {
 
 /* ── Today page ── */
 .v2-today-action {
-  font-family: var(--v2-fmono);
-  font-size: .65rem;
-  font-weight: 500;
-  letter-spacing: .18em;
+  font-family: var(--v2-fbody);
+  font-size: .8rem;
+  font-weight: 700;
+  letter-spacing: .12em;
   text-transform: uppercase;
   color: var(--v2-blue);
   margin-bottom: 10px;

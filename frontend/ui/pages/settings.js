@@ -1,22 +1,4 @@
-let bound = false;
-
-export function bindSettingsHandlers({ onSave, onRebuild }) {
-  if (bound) return;
-  bound = true;
-
-  document.getElementById('set-save-btn')?.addEventListener('click', () => {
-    const name          = String(document.getElementById('set-name-in')?.value || '').trim();
-    const goal          = String(document.getElementById('set-goal-in')?.value || '').trim();
-    const deadline      = String(document.getElementById('set-deadline-in')?.value || '').trim();
-    const niche         = String(document.getElementById('set-niche-in')?.value || '').trim();
-    const executionStyle = String(document.getElementById('set-style-in')?.value || '').trim();
-    onSave({ name, goal, deadline, niche, executionStyle });
-  });
-
-  document.getElementById('set-rebuild-btn')?.addEventListener('click', onRebuild);
-}
-
-// v2 render
+// Settings — /settings
 export function render(container, state, actions) {
   const user     = state.user;
   const telegram = state.telegram;
@@ -32,7 +14,7 @@ export function render(container, state, actions) {
         <div class="v2-card">
           <div class="v2-meta-row">
             <span class="v2-muted-text">Email</span>
-            <span class="v2-body-text" style="font-family:var(--v2-fmono);font-size:.82rem">${escHtml(user.email || '—')}</span>
+            <span class="v2-body-text">${escHtml(user.email || '—')}</span>
           </div>
           <div class="v2-meta-row">
             <span class="v2-muted-text">Experience level</span>
@@ -53,6 +35,7 @@ export function render(container, state, actions) {
               ? `<button id="v2-tg-disconnect" class="v2-btn v2-btn--ghost v2-btn--sm">Disconnect</button>`
               : `<button id="v2-tg-connect"    class="v2-btn v2-btn--primary v2-btn--sm">Connect</button>`}
           </div>
+          <p id="v2-tg-note" class="v2-muted-text" style="margin-top:8px"></p>
         </div>
       </section>
 
@@ -85,35 +68,24 @@ export function render(container, state, actions) {
     el.addEventListener('click', () => actions.onNavigate?.(el.getAttribute('data-route')));
   });
   container.querySelector('#v2-signout')?.addEventListener('click', () => actions.onSignOut?.());
-  container.querySelector('#v2-tg-connect')?.addEventListener('click', () => actions.onNavigate?.('/today'));
+
+  container.querySelector('#v2-tg-connect')?.addEventListener('click', async () => {
+    const note = container.querySelector('#v2-tg-note');
+    if (note) note.textContent = 'Opening Telegram…';
+    try {
+      await actions.onTelegramLink?.();
+      if (note) note.textContent = 'Opened. Once you’ve connected, return here and the status will update.';
+      setTimeout(() => actions.onTelegramRefresh?.(), 3000);
+    } catch (err) {
+      if (note) note.textContent = String(err?.message || 'Could not start connection.');
+    }
+  });
+
   container.querySelector('#v2-tg-disconnect')?.addEventListener('click', () => actions.onTelegramDisconnect?.());
   container.querySelector('#v2-reset-progress')?.addEventListener('click', () => {
     const ok = window.confirm('This will erase your current 7-day track and all progress. Your account stays. Continue?');
     if (ok) actions.onResetProgress?.();
   });
-}
-
-export function renderSettings(state) {
-  setText('set-name', state.user.name || '—');
-  setText('set-proj', state.user.project || '—');
-  setText('set-plan', state.user.planType || 'Free');
-  setInput('set-name-in', state.user.name || '');
-  setInput('set-goal-in', state.plan.goal || '');
-  setInput('set-deadline-in', state.plan.deadline || '');
-  setInput('set-niche-in', state.plan.niche || '');
-  setInput('set-style-in', state.plan.executionStyle || '');
-  setText('set-status', state.ui.message || '');
-  setText('set-error', state.ui.error || '');
-}
-
-function setText(id, value) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = value || '';
-}
-
-function setInput(id, value) {
-  const el = document.getElementById(id);
-  if (el && document.activeElement !== el) el.value = value || '';
 }
 
 function escHtml(s) {

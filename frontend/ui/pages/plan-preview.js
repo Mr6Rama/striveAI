@@ -69,9 +69,9 @@ export function render(container, state, actions) {
       <button id="pp-start" class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full" style="margin-bottom:10px">
         Start Day 1 →
       </button>
-      <button data-route="/settings" class="v2-btn v2-btn--ghost v2-btn--full">
-        Connect Telegram in Settings
-      </button>
+      ${tg.connected ? '' : `<button data-route="/settings" class="v2-btn v2-btn--ghost v2-btn--full">
+        Connect Telegram for daily check-ins
+      </button>`}
 
     </div>`;
 

@@ -57,7 +57,7 @@ export function render(container, _state, actions) {
               <span class="v2-landing-preview__route">/today</span>
               <span class="v2-landing-preview__live">
                 <span class="v2-landing-preview__live-dot"></span>
-                live preview
+                product preview
               </span>
             </div>
 
@@ -72,7 +72,7 @@ export function render(container, _state, actions) {
 
               <div class="v2-card v2-card--focus v2-bracketed v2-landing-preview__card">
                 <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
-                <div class="v2-today-action">// Today's mission</div>
+                <div class="v2-today-action">Today's mission</div>
                 <h2 class="v2-today-title">
                   Send 5 feedback DMs <em>for</em> your MVP.
                 </h2>
@@ -98,7 +98,7 @@ export function render(container, _state, actions) {
                 <span class="v2-btn v2-btn--secondary">Action Kit</span>
               </div>
               <div class="v2-landing-preview__btns v2-landing-preview__btns--ghost">
-                <span class="v2-btn v2-btn--ghost">I'm blocked</span>
+                <span class="v2-btn v2-btn--ghost">I’m stuck</span>
                 <span class="v2-btn v2-btn--ghost">Proof</span>
               </div>
 
