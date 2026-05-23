@@ -2,6 +2,7 @@
 // Shown when track.status === 'complete'.
 
 let reflectionRequestedFor = '';
+let revealedFor            = '';
 
 export function render(container, state, actions) {
   const { track, history, telegram, ui } = state;
@@ -20,6 +21,26 @@ export function render(container, state, actions) {
 
   container.innerHTML = buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram, state.user, state.history);
   wireEvents(container, state, actions, track, recapText, patterns);
+
+  // Sequential reveal — but only the first time per track (so navigating away
+  // and back doesn't keep re-animating). If the user has already seen it,
+  // everything appears immediately.
+  if (revealedFor === track.id) {
+    container.querySelectorAll('.v2-reveal').forEach((el) => el.classList.add('is-in'));
+  } else {
+    revealedFor = track.id;
+    const groups = new Map();
+    container.querySelectorAll('.v2-reveal').forEach((el) => {
+      const step = Number(el.getAttribute('data-reveal') || 0);
+      if (!groups.has(step)) groups.set(step, []);
+      groups.get(step).push(el);
+    });
+    Array.from(groups.entries())
+      .sort((a, b) => a[0] - b[0])
+      .forEach(([step, els], i) => {
+        setTimeout(() => els.forEach((el) => el.classList.add('is-in')), i * 240);
+      });
+  }
 
   // Auto-trigger reflection generation on first visit per track.
   if (!recapText && !recapLoading && reflectionRequestedFor !== track.id) {
@@ -42,16 +63,16 @@ function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoa
       <div class="v2-kicker" style="margin-bottom:8px">
         <span class="v2-badge v2-badge--done">Week complete</span>
       </div>
-      <h1 class="v2-h1" style="margin-bottom:6px">Your 7-day track is complete.</h1>
-      <p class="v2-sub" style="margin-bottom:${why ? '14px' : '24px'}">${esc(track.goal || '')}${weekGoal ? ` · By Day 7: ${esc(weekGoal)}` : ''}</p>
-      ${why ? `<blockquote class="v2-recap-why">${esc(why)}</blockquote>` : ''}
+      <h1 class="v2-h1 v2-reveal" data-reveal="0" style="margin-bottom:6px">Your 7-day track is complete.</h1>
+      <p class="v2-sub v2-reveal" data-reveal="0" style="margin-bottom:${why ? '14px' : '24px'}">${esc(track.goal || '')}${weekGoal ? ` · By Day 7: ${esc(weekGoal)}` : ''}</p>
+      ${why ? `<blockquote class="v2-recap-why v2-reveal" data-reveal="1">${esc(why)}</blockquote>` : ''}
 
-      ${renderResultGrid(stats)}
-      ${patternSummary ? renderPatternCard(patternSummary) : ''}
-      ${bestFormat     ? renderFormatCard(bestFormat)      : ''}
-      ${renderAIReflection(recapText, recapLoading)}
-      ${timeline}
-      ${renderCTAs(continuing, telegram)}
+      <div class="v2-reveal" data-reveal="2">${renderResultGrid(stats)}</div>
+      ${patternSummary ? `<div class="v2-reveal" data-reveal="3">${renderPatternCard(patternSummary)}</div>` : ''}
+      ${bestFormat     ? `<div class="v2-reveal" data-reveal="3">${renderFormatCard(bestFormat)}</div>`      : ''}
+      <div class="v2-reveal" data-reveal="4">${renderAIReflection(recapText, recapLoading)}</div>
+      <div class="v2-reveal" data-reveal="5">${timeline}</div>
+      <div class="v2-reveal" data-reveal="6">${renderCTAs(continuing, telegram)}</div>
 
     </div>`;
 }
