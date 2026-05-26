@@ -52,20 +52,21 @@ export function render(container, state, actions) {
 
   const { steps, currentStepIndex, outcome, proofNote } = session;
   const insight = buildInsight(state.history?.failurePatterns);
+  const user    = state.user || {};
 
   if (outcome === 'done') { actions.onNavigate?.('/today'); return; }
 
   if (outcome === 'partial' || outcome === 'blocked') {
-    renderVerdict(container, dayPlan, track, outcome, proofNote, insight, actions);
+    renderVerdict(container, dayPlan, track, outcome, proofNote, insight, actions, user);
     return;
   }
 
   if (currentStepIndex >= steps.length) {
-    renderProofInput(container, dayPlan, track, insight, loading, actions);
+    renderProofInput(container, dayPlan, track, insight, loading, actions, user);
     return;
   }
 
-  renderExecution(container, dayPlan, track, today, session, insight, loading, actions);
+  renderExecution(container, dayPlan, track, today, session, insight, loading, actions, user);
 }
 
 // ── Loading ────────────────────────────────────────────────────────────────
@@ -84,7 +85,7 @@ function renderLoading(container, actions) {
 
 // ── Main execution view ────────────────────────────────────────────────────
 
-function renderExecution(container, dayPlan, track, today, session, insight, loading, actions) {
+function renderExecution(container, dayPlan, track, today, session, insight, loading, actions, user) {
   const { steps, currentStepIndex } = session;
 
   container.innerHTML = `
@@ -92,7 +93,7 @@ function renderExecution(container, dayPlan, track, today, session, insight, loa
       <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start">
 
         <div style="flex:0 0 260px;min-width:220px;max-width:280px;position:sticky;top:1.5rem">
-          ${contextPanel(dayPlan, track, today, insight)}
+          ${contextPanel(dayPlan, track, today, insight, user)}
         </div>
 
         <div style="flex:1;min-width:260px">
@@ -130,7 +131,7 @@ function renderExecution(container, dayPlan, track, today, session, insight, loa
 
 // ── Proof input ────────────────────────────────────────────────────────────
 
-function renderProofInput(container, dayPlan, track, insight, loading, actions) {
+function renderProofInput(container, dayPlan, track, insight, loading, actions, user) {
   const placeholder = PROOF_PLACEHOLDERS[proofType] || PROOF_PLACEHOLDERS.text;
 
   container.innerHTML = `
@@ -138,7 +139,7 @@ function renderProofInput(container, dayPlan, track, insight, loading, actions) 
       <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start">
 
         <div style="flex:0 0 260px;min-width:220px;max-width:280px;position:sticky;top:1.5rem">
-          ${contextPanel(dayPlan, track, null, insight)}
+          ${contextPanel(dayPlan, track, null, insight, user)}
         </div>
 
         <div style="flex:1;min-width:260px">
@@ -180,7 +181,7 @@ function renderProofInput(container, dayPlan, track, insight, loading, actions) 
   container.querySelectorAll('[data-ptype]').forEach((btn) => {
     btn.addEventListener('click', () => {
       proofType = btn.getAttribute('data-ptype');
-      renderProofInput(container, dayPlan, track, insight, loading, actions);
+      renderProofInput(container, dayPlan, track, insight, loading, actions, user);
     });
   });
 
@@ -197,7 +198,7 @@ function renderProofInput(container, dayPlan, track, insight, loading, actions) 
 
 // ── Verdict (partial / blocked) ────────────────────────────────────────────
 
-function renderVerdict(container, dayPlan, track, outcome, proofNote, insight, actions) {
+function renderVerdict(container, dayPlan, track, outcome, proofNote, insight, actions, user) {
   const isPartial = outcome === 'partial';
   const heading   = isPartial ? 'Good progress — one more thing' : "Proof doesn't show completion";
   const note      = proofNote || (isPartial
@@ -209,7 +210,7 @@ function renderVerdict(container, dayPlan, track, outcome, proofNote, insight, a
       <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start">
 
         <div style="flex:0 0 260px;min-width:220px;max-width:280px;position:sticky;top:1.5rem">
-          ${contextPanel(dayPlan, track, null, insight)}
+          ${contextPanel(dayPlan, track, null, insight, user)}
         </div>
 
         <div style="flex:1;min-width:260px">
@@ -259,20 +260,21 @@ function renderVerdict(container, dayPlan, track, outcome, proofNote, insight, a
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
-function contextPanel(dayPlan, track, today, insight) {
-  const status = today?.status || 'pending';
-  const dayNum = dayPlan.dayNumber || 1;
+function contextPanel(dayPlan, track, today, insight, user) {
+  const dayNum  = dayPlan.dayNumber || 1;
+  const project = String(user?.currentProject || '').trim();
+  const focus   = project || String(track.goal || '');
   return `
     <div class="v2-context-panel">
       <div class="v2-kicker v2-kicker--muted" style="margin-bottom:8px">
         Day ${dayNum} of 7
       </div>
-      <p class="v2-muted-text" style="margin-bottom:10px">${esc(track.goal || '')}</p>
+      <p class="v2-muted-text" style="margin-bottom:10px">${esc(project ? `Working on: ${focus}` : focus)}</p>
       <p class="v2-h3" style="margin-bottom:8px">${esc(dayPlan.title || '—')}</p>
       ${dayPlan.successCriteria
         ? `<div class="v2-done-criteria" style="margin-bottom:8px">Done: ${esc(dayPlan.successCriteria)}</div>`
         : ''}
-      <p class="v2-muted-text">${dayPlan.estimateMinutes || 60} min · ${esc(dayPlan.category || 'task')}</p>
+      <p class="v2-muted-text">${dayPlan.estimateMinutes || 60} min</p>
       ${insight ? `<div class="v2-insight" style="margin-top:12px;margin-bottom:0">${esc(insight)}</div>` : ''}
     </div>`;
 }
@@ -325,12 +327,17 @@ function stepList(steps, currentIndex, note, loading) {
     }
 
     if (i === currentIndex) {
-      const isLast = i === steps.length - 1;
-      const cta = isLast ? "Finish today's task →" : "Done, next step →";
+      const isLast    = i === steps.length - 1;
+      const cta       = isLast ? "Finish today's task →" : "Done, next step →";
+      const expected  = String(step.output || '').trim();
+      const hint      = String(step.hint   || '').trim();
+      const noteLabel = expected ? `Paste / log: ${expected}` : 'Log output (optional)';
+      const notePh    = expected || 'Link, filename, or one line of what you made';
       parts.push(`<div class="v2-step-card--active v2-bracketed" style="overflow:visible">
         <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
         <div class="v2-today-action" style="margin-bottom:10px">Step ${i + 1} of ${steps.length}${stepTag(step.text) ? ` · ${stepTag(step.text)}` : ''}</div>
-        <p class="v2-h2" style="margin-bottom:18px">${esc(step.text)}</p>
+        <p class="v2-h2" style="margin-bottom:${hint ? '10px' : '18px'}">${esc(step.text)}</p>
+        ${hint ? `<div class="v2-step-hint" style="margin-bottom:14px">${esc(hint)}</div>` : ''}
         <div class="v2-row" style="margin-bottom:12px">
           <button id="ag-complete" ${loading ? 'disabled' : ''} class="v2-btn v2-btn--primary" style="flex:1">
             ${loading ? 'Saving…' : cta}
@@ -338,8 +345,8 @@ function stepList(steps, currentIndex, note, loading) {
           <button id="ag-stuck" class="v2-btn v2-btn--ghost" title="Flag as blocked and get help">I'm stuck</button>
         </div>
         <div class="v2-field">
-          <label class="v2-label" style="font-size:.75rem;opacity:.65">Log output (optional)</label>
-          <textarea id="ag-note" rows="2" placeholder="Link, filename, or one line of what you made" class="v2-textarea" style="min-height:52px"></textarea>
+          <label class="v2-label" style="font-size:.75rem;opacity:.65">${esc(noteLabel)}</label>
+          <textarea id="ag-note" rows="2" placeholder="${esc(notePh)}" class="v2-textarea" style="min-height:52px"></textarea>
         </div>
       </div>`);
       return;

@@ -28,6 +28,9 @@ export function render(container, state, actions) {
   const total    = days.length;
   const pct      = total ? Math.round((done / total) * 100) : 0;
 
+  const user      = state.user || {};
+  const weekGoal  = String(user.weekGoal || '').trim();
+
   container.innerHTML = `
     <div class="v2-page">
 
@@ -36,6 +39,7 @@ export function render(container, state, actions) {
           <div class="v2-kicker v2-kicker--muted">7-Day Track</div>
           <h1 class="v2-h1" style="margin-bottom:4px">Your progress</h1>
           <p class="v2-sub" style="margin:0">${esc(track.goal || '')}</p>
+          ${weekGoal ? `<p class="v2-muted-text" style="margin:4px 0 0">By Day 7: ${esc(weekGoal)}</p>` : ''}
         </div>
         ${track.status === 'complete'
           ? `<button data-route="/recap" class="v2-btn v2-btn--primary">View Recap →</button>`
@@ -72,6 +76,7 @@ export function render(container, state, actions) {
   });
 
   wireRoadmapLabels(container);
+  wireExpandableDays(container);
 }
 
 // Toggle milestone title on node click — one label visible at a time
@@ -102,25 +107,104 @@ function buildDayRows(track, entries) {
   });
 }
 
-function renderDayCard({ day, status, isToday }) {
-  const meta = STATUS_META[status] || STATUS_META.pending;
+function renderDayCard({ day, status, isToday, histEntry }) {
+  const meta      = STATUS_META[status] || STATUS_META.pending;
   const todayCls  = isToday ? ' v2-day-card--today' : '';
   const statusCls = meta.cardCls ? ` ${meta.cardCls}` : '';
   const bracketEl = isToday ? '<span class="v2-br-tr"></span><span class="v2-br-bl"></span>' : '';
+  const expandable = Boolean(histEntry && (histEntry.proofValue || (histEntry.agentSteps || []).length));
+  const interactiveCls = expandable ? ' v2-day-card--clickable' : '';
+  const completed = histEntry?.createdAt
+    ? new Date(histEntry.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    : '';
 
   return `
-    <div class="v2-day-card${todayCls}${statusCls}${isToday ? ' v2-bracketed' : ''}" style="overflow:visible">
+    <div class="v2-day-card${todayCls}${statusCls}${interactiveCls}${isToday ? ' v2-bracketed' : ''}"
+         data-day-card="${day.dayNumber}"
+         ${expandable ? 'role="button" tabindex="0" aria-expanded="false"' : ''}
+         style="overflow:visible">
       ${bracketEl}
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px">
         <div style="display:flex;align-items:center;gap:8px">
           <span class="v2-section-label" style="margin:0">Day ${day.dayNumber}</span>
           <span class="v2-badge ${meta.cls}">${esc(meta.label)}</span>
         </div>
-        ${isToday ? `<span class="v2-badge v2-badge--today">Today</span>` : ''}
+        ${isToday ? `<span class="v2-badge v2-badge--today">Today</span>`
+                  : expandable ? `<span class="v2-day-card__chevron" aria-hidden="true">▾</span>` : ''}
       </div>
       <p class="v2-body-text" style="margin:0">${esc(day.title || '—')}</p>
       ${day.date ? `<p class="v2-muted-text" style="margin:4px 0 0">${esc(day.date)}</p>` : ''}
+      ${expandable ? `
+        <div class="v2-day-card__details" data-day-details="${day.dayNumber}" hidden>
+          ${day.successCriteria
+            ? `<div class="v2-done-criteria" style="margin-top:12px;margin-bottom:10px">Done means: ${esc(day.successCriteria)}</div>`
+            : ''}
+          ${renderArtifactProof(histEntry)}
+          ${renderArtifactSteps(histEntry)}
+          ${completed ? `<p class="v2-muted-text" style="margin:10px 0 0;font-size:.78rem">Completed ${esc(completed)}</p>` : ''}
+        </div>` : ''}
     </div>`;
+}
+
+function renderArtifactProof(entry) {
+  const value = String(entry?.proofValue || '').trim();
+  if (!value) return '';
+  const type = entry.proofType || 'text';
+  const isLink = type === 'link' && /^https?:\/\//i.test(value);
+  const body = isLink
+    ? `<a href="${esc(value)}" target="_blank" rel="noopener" class="v2-link">${esc(value)}</a>`
+    : `<p class="v2-body-text" style="margin:0;white-space:pre-wrap">${esc(value)}</p>`;
+  return `
+    <div class="v2-day-artifact">
+      <div class="v2-section-label" style="margin-bottom:6px">Proof</div>
+      ${body}
+    </div>`;
+}
+
+function renderArtifactSteps(entry) {
+  const steps = Array.isArray(entry?.agentSteps) ? entry.agentSteps : [];
+  if (!steps.length) return '';
+  return `
+    <div class="v2-day-artifact">
+      <div class="v2-section-label" style="margin-bottom:6px">Agent steps</div>
+      <ol class="v2-day-artifact__steps">
+        ${steps.map((s) => `
+          <li>
+            <div>${esc(s.text || '')}</div>
+            ${s.userOutput ? `<div class="v2-day-artifact__note">${esc(s.userOutput)}</div>` : ''}
+          </li>
+        `).join('')}
+      </ol>
+    </div>`;
+}
+
+function wireExpandableDays(container) {
+  container.querySelectorAll('[data-day-card]').forEach((card) => {
+    if (!card.hasAttribute('role')) return;
+    const dayNum  = card.getAttribute('data-day-card');
+    const details = container.querySelector(`[data-day-details="${dayNum}"]`);
+    if (!details) return;
+    const toggle = () => {
+      const open = details.hasAttribute('hidden') ? false : true;
+      if (open) {
+        details.setAttribute('hidden', '');
+        card.setAttribute('aria-expanded', 'false');
+        card.classList.remove('v2-day-card--open');
+      } else {
+        details.removeAttribute('hidden');
+        card.setAttribute('aria-expanded', 'true');
+        card.classList.add('v2-day-card--open');
+      }
+    };
+    card.addEventListener('click', (e) => {
+      // Don't toggle on link clicks inside the details
+      if (e.target.closest('a')) return;
+      toggle();
+    });
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
+  });
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────

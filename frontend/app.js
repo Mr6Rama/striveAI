@@ -175,16 +175,7 @@ async function handleGenerate(draft) {
     await saveDomains(domains, { userId: currentUser?.uid, db: getDb() });
     replaceState({ ...getState(), ...domains, ui: { ...getState().ui, loading: false, trackGenerating: false, error: '' } });
 
-    if (state.telegram.connected && typeof draft.pingHour === 'number') {
-      try {
-        const token = await currentUser?.getIdToken();
-        await fetch('/api/v2/telegram/schedule', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ pingHour: draft.pingHour, timezone: 'UTC', enabled: true }),
-        });
-      } catch (_e) { /* non-fatal */ }
-    }
+    await scheduleTelegramPing(getState(), typeof draft.pingHour === 'number' ? draft.pingHour : null);
 
     navigate('/plan-preview', handleRouteChange, true);
   } catch (err) {
@@ -193,18 +184,45 @@ async function handleGenerate(draft) {
 }
 
 async function handleStartDay1() {
-  const state = getState();
-  if (state.telegram?.connected && typeof state.telegram.pingHour === 'number') {
-    try {
-      const token = await currentUser?.getIdToken();
-      await fetch('/api/v2/telegram/schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ pingHour: state.telegram.pingHour, timezone: 'UTC', enabled: true }),
-      });
-    } catch (_e) { /* non-fatal */ }
-  }
+  await scheduleTelegramPing(getState(), null);
   navigate('/today', handleRouteChange, true);
+}
+
+// Schedule the next Telegram check-in for the current track + day.
+// Endpoint requires trackId + actionTitle + done criteria; bail out silently
+// if the track isn't ready or Telegram isn't connected. Optional override
+// pingHour (e.g. just-picked value from onboarding) takes priority over state.
+async function scheduleTelegramPing(state, overrideHour) {
+  if (!state?.telegram?.connected) return;
+  if (!currentUser) return;
+  const track = state.track;
+  if (!track?.id || !Array.isArray(track.days) || !track.days.length) return;
+
+  const dayNum  = track.currentDayNumber || 1;
+  const dayPlan = track.days.find((d) => d.dayNumber === dayNum) || track.days[0];
+  if (!dayPlan) return;
+
+  const hour = Number.isFinite(overrideHour) ? overrideHour
+             : Number.isFinite(state.telegram.pingHour) ? state.telegram.pingHour : 9;
+  const localPingTime = `${String(Math.max(0, Math.min(23, Math.floor(hour)))).padStart(2, '0')}:00`;
+
+  try {
+    const token = await currentUser.getIdToken();
+    await fetch('/api/v2/telegram/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        trackId:          track.id,
+        dayIndex:         dayNum,
+        goalTitle:        String(track.goal || '').slice(0, 200),
+        actionTitle:      String(dayPlan.title || '').slice(0, 200),
+        doneCriteria:     String(dayPlan.successCriteria || '').slice(0, 200),
+        estimatedMinutes: Number(dayPlan.estimateMinutes) || 60,
+        timezone:         'UTC',
+        localPingTime,
+      }),
+    });
+  } catch (_e) { /* non-fatal */ }
 }
 
 async function handleTelegramLink() {
@@ -266,15 +284,24 @@ async function handleKitGenerate() {
 
 async function handleAgentInit() {
   const state  = getState();
-  const { track, today, history } = state;
+  const { track, today, history, user } = state;
   const dayNum  = track.currentDayNumber || today.dayNumber || 1;
   const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
 
   updateState((s) => { s.ui.agentLoading = true; return s; });
   try {
-    const rawSteps = await generateAgentSteps(dayPlan, track, history.failurePatterns);
+    const rawSteps = await generateAgentSteps(dayPlan, track, history.failurePatterns, user);
     const session  = {
-      steps:            rawSteps.map((s, i) => ({ index: i, text: String(s.text || ''), status: 'pending', stuckNote: '', completedAt: '' })),
+      steps:            rawSteps.map((s, i) => ({
+        index:       i,
+        text:        String(s.text || ''),
+        output:      String(s.output || ''),
+        hint:        String(s.hint || ''),
+        status:      'pending',
+        stuckNote:   '',
+        userOutput:  '',
+        completedAt: '',
+      })),
       currentStepIndex: 0,
       startedAt:        new Date().toISOString(),
       closedAt:         '',
@@ -292,7 +319,11 @@ async function handleAgentStepDone({ stepIndex, note }) {
   updateState((s) => {
     if (!s.today.agentSession) return s;
     const step = s.today.agentSession.steps[stepIndex];
-    if (step) { step.status = 'done'; step.stuckNote = note || ''; step.completedAt = new Date().toISOString(); }
+    if (step) {
+      step.status      = 'done';
+      step.userOutput  = String(note || '');
+      step.completedAt = new Date().toISOString();
+    }
     s.today.agentSession.currentStepIndex = stepIndex + 1;
     return s;
   });
@@ -478,6 +509,18 @@ async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
   const now     = new Date().toISOString();
   const outcome = fromRescue ? 'rescued' : 'done';
 
+  // Snapshot agent steps with user outputs so /progress and /recap can show
+  // what the user actually produced for this day.
+  const sessionSnapshot = today.agentSession
+    ? today.agentSession.steps
+        .filter((s) => s.status === 'done')
+        .map((s) => ({
+          text:       String(s.text       || '').slice(0, 240),
+          output:     String(s.output     || '').slice(0, 160),
+          userOutput: String(s.userOutput || '').slice(0, 600),
+        }))
+    : [];
+
   const entry = {
     date:            today.date,
     dayNumber:       dayNum,
@@ -485,6 +528,8 @@ async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
     outcome,
     taskTitle:       dayPlan.title || '',
     proofType:       proofType || 'text',
+    proofValue:      String(proofValue || '').slice(0, 800),
+    agentSteps:      sessionSnapshot,
     agentUsed:       Boolean(fromAgent),
     rescueOffered:   Boolean(fromRescue),
     rescueCompleted: Boolean(fromRescue),
@@ -622,17 +667,7 @@ async function handleRecapContinue({ recapText }) {
       ui: { ...getState().ui, trackContinuing: false, recapLoading: false },
     });
 
-    // Re-schedule Telegram ping if connected
-    if (state.telegram?.connected && typeof state.telegram.pingHour === 'number') {
-      try {
-        const token = await currentUser?.getIdToken();
-        await fetch('/api/v2/telegram/schedule', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ pingHour: state.telegram.pingHour, timezone: 'UTC', enabled: true }),
-        });
-      } catch (_e) { /* non-fatal */ }
-    }
+    await scheduleTelegramPing(getState(), null);
 
     navigate('/plan-preview', handleRouteChange, true);
   } catch (_e) {

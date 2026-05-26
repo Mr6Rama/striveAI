@@ -10697,6 +10697,104 @@ body.v2-body::before {
 .v2-day-card--missed::before { background: var(--v2-red); }
 .v2-day-card--skipped::before{ background: var(--v2-dim); }
 
+.v2-day-card--clickable {
+  cursor: pointer;
+}
+.v2-day-card--clickable:hover {
+  border-color: rgba(42,54,200,.35);
+}
+.v2-day-card--clickable:focus-visible {
+  outline: 2px solid var(--v2-blue);
+  outline-offset: 2px;
+}
+.v2-day-card__chevron {
+  color: var(--v2-muted);
+  font-size: .85rem;
+  transition: transform .18s ease;
+  user-select: none;
+}
+.v2-day-card--open .v2-day-card__chevron {
+  transform: rotate(180deg);
+}
+.v2-day-card__details {
+  margin-top: 4px;
+  border-top: 1px dashed var(--v2-border);
+  padding-top: 10px;
+}
+.v2-day-artifact {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(0,0,0,.025);
+  border-radius: var(--v2-r-sm);
+}
+.v2-day-artifact__steps {
+  list-style: decimal;
+  margin: 0;
+  padding-left: 1.25em;
+  font-size: .9rem;
+  line-height: 1.6;
+  color: var(--v2-text);
+}
+.v2-day-artifact__steps li + li {
+  margin-top: 6px;
+}
+.v2-day-artifact__note {
+  margin-top: 3px;
+  font-size: .8rem;
+  color: var(--v2-text-2);
+  border-left: 2px solid var(--v2-border-2);
+  padding-left: 8px;
+  white-space: pre-wrap;
+}
+
+/* ── Recap personalization + timeline ── */
+.v2-recap-why {
+  margin: 12px 0 16px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--v2-blue);
+  background: rgba(42,54,200,.05);
+  font-family: var(--v2-fbody);
+  font-style: italic;
+  color: var(--v2-text);
+  border-radius: 0 var(--v2-r-sm) var(--v2-r-sm) 0;
+}
+.v2-recap-timeline {
+  display: grid;
+  gap: 10px;
+}
+.v2-recap-day {
+  position: relative;
+  padding: 12px 14px;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-r-sm);
+  background: var(--v2-surface);
+}
+.v2-recap-day__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.v2-recap-day__status {
+  font-family: var(--v2-fbody);
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--v2-muted);
+}
+.v2-recap-day--done    { border-left: 3px solid var(--v2-green); }
+.v2-recap-day--rescued { border-left: 3px solid var(--v2-blue-l); }
+.v2-recap-day--missed  { border-left: 3px solid var(--v2-red); }
+.v2-recap-day--blocked { border-left: 3px solid var(--v2-amber); }
+.v2-recap-day--skipped { border-left: 3px solid var(--v2-dim); }
+.v2-recap-day__proof {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--v2-border);
+  font-size: .9rem;
+  color: var(--v2-text-2);
+}
+
 /* ── Stats grid ── */
 .v2-stats-grid {
   display: grid;
@@ -10844,6 +10942,18 @@ body.v2-body::before {
   padding: 10px 0;
   opacity: .55;
   border-bottom: 1px solid var(--v2-border);
+}
+
+.v2-step-hint {
+  font-family: var(--v2-fbody);
+  font-size: .875rem;
+  line-height: 1.55;
+  color: var(--v2-text-2);
+  background: rgba(42,54,200,.06);
+  border-left: 2px solid var(--v2-blue);
+  padding: 8px 12px;
+  border-radius: var(--v2-r-sm);
+  white-space: pre-wrap;
 }
 
 /* ── Proof type option (radio label) ── */

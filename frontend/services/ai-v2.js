@@ -1,12 +1,21 @@
 // StriveAI v2 AI service.
 // All v2 AI calls go through this module. UI components must not call AI directly.
 
+import { getAuthToken } from './auth.js';
+
 // ── Network layer ──────────────────────────────────────────────────────────
+
+async function authHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = await getAuthToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
 
 async function requestJson({ action, prompt, systemCtx = '', schema, maxTokens }) {
   const res = await fetch('/api/openai/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({
       action,
       prompt,
@@ -23,7 +32,7 @@ async function requestJson({ action, prompt, systemCtx = '', schema, maxTokens }
 async function requestText({ action, prompt, systemCtx = '', maxTokens }) {
   const res = await fetch('/api/openai/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ action, prompt, systemCtx, maxTokens, opts: {} }),
   });
   const payload = await res.json().catch(() => ({}));
@@ -117,8 +126,10 @@ function stepsSchema() {
           type: 'object',
           required: ['index', 'text'],
           properties: {
-            index: { type: 'integer' },
-            text:  { type: 'string', maxLength: 140 },
+            index:  { type: 'integer' },
+            text:   { type: 'string', maxLength: 160 },
+            output: { type: 'string', maxLength: 120 },
+            hint:   { type: 'string', maxLength: 180 },
           },
         },
       },
@@ -193,11 +204,37 @@ Personalize every task to the user's actual goal — never produce generic categ
 If a current project or week outcome is provided, reference it directly in every task title.
 Return JSON only.`;
 
-const STEPS_CTX = `You are an execution assistant. Break one task into ordered micro-steps.
-Each step must be concrete, specific, and completable in 15–45 minutes.
-Steps must be tailored to THIS specific task — do not generate generic steps.
-The steps must collectively satisfy the task's done condition.
-No motivational filler. No generic advice. Steps only.
+const STEPS_CTX = `You are an execution assistant. Break one task into 3–5 ordered micro-steps.
+
+Hard rules:
+- Each step is a concrete physical action with a specific, namable output.
+- Each step is completable in 10–30 minutes.
+- The first step is the LOWEST-FRICTION real action — never "prepare", "decide", or "review".
+- Step 1 must produce something tangible by itself (a list, a paragraph, a commit).
+- Use the user's actual project/tools by name when given.
+- Reference the day's done condition — the last step makes the criterion checkable.
+
+NEVER write steps that:
+- start with "Open", "Re-read", "Decide", "Think", "Consider", "Plan", "Define"
+- send the user out of the app to "their workspace" with no concrete instruction
+- restate the task or coach motivation
+- are meta ("write down the most important sub-task")
+
+GOOD examples for a "Build login page for MyNotion" task:
+- "Run npx create-next-app@latest mynotion --typescript --tailwind in your project folder"
+- "Add /login/page.tsx with email + password fields and a Submit button"
+- "Wire the Submit handler to call supabase.auth.signInWithPassword and console.log the result"
+
+BAD examples (NEVER do this):
+- "Open your workspace and re-read the task"  ← meta, no output
+- "Decide what's most important"               ← vague, no action
+- "Work on the main thing"                     ← no object, no done condition
+
+For each step provide:
+- text: the action (≤160 chars)
+- output: what should exist when the step is done (≤120 chars) — required when concrete
+- hint: optional template, snippet, or example to paste/adapt (≤180 chars)
+
 Return JSON only.`;
 
 const RESCUE_CTX = `The user is blocked. Generate a rescue action: a smaller, more accessible version of the original task.
@@ -223,18 +260,23 @@ export async function generateExecutionTrack(onboardingInput) {
   }
 }
 
-export async function generateAgentSteps(day, track, failureMemory) {
+export async function generateAgentSteps(day, track, failureMemory, user) {
   try {
     const data = await requestJson({
       action: 'agent_steps',
-      prompt: buildAgentStepsPrompt(day, track, failureMemory),
+      prompt: buildAgentStepsPrompt(day, track, failureMemory, user),
       systemCtx: STEPS_CTX,
       schema: stepsSchema(),
-      maxTokens: 600,
+      maxTokens: 700,
     });
     const steps = Array.isArray(data?.steps) ? data.steps : [];
     if (!steps.length) throw new Error('empty steps');
-    return steps;
+    return steps.map((s, i) => ({
+      index:  Number.isInteger(s.index) ? s.index : i,
+      text:   String(s.text || '').slice(0, 160),
+      output: String(s.output || '').slice(0, 120),
+      hint:   String(s.hint   || '').slice(0, 180),
+    }));
   } catch (_e) {
     return fallbackSteps(day);
   }
@@ -383,26 +425,42 @@ Biggest blocker: ${blocker}
 ${extra}
 
 Generate a 7-day execution track tailored to this specific person and their goal.
-Use the user's own words and context — never substitute generic placeholders like "your project" or "the skill".
-If currentProject is provided, every task title must name that project specifically.
-If weekGoal is provided, every day must visibly advance that specific outcome.
-Day 1 must be the lowest-friction start possible — achievable in under 2 hours.
-Each day builds directly on the previous day's concrete output.
-Day 7 must produce a concrete artifact or shareable proof point.
+
+Hard constraints:
+- Use the user's actual words and context. Never write "your project", "the skill",
+  "the plan", "the topic" — always name the specific thing.
+- If currentProject is provided, every task title must reference that project by name.
+- If weekGoal is provided, every day's task must visibly advance that exact outcome.
+- The week has an arc: Day 1 is setup / lowest-friction start, Days 2–5 build the core,
+  Day 6 validates or polishes, Day 7 ships / produces a shareable artifact.
+- Each day builds on the previous day's concrete output.
+- Sum of estimateMinutes ≈ 7 × user's daily minute target. Day 1 ≤ 60 min.
+
+Vague verbs forbidden in title — never start with: define, plan, work on, think about,
+think through, consider, decide, explore, research (without a named subject),
+understand, get started on, learn about, look into.
 
 Field rules:
-- title: action-verb start, specific to this goal (name the subject, tool, or deliverable), max 80 chars.
-- why: one sentence connecting this day to the goal, max 120 chars.
-- successCriteria: the concrete done condition the user can verify, max 120 chars.
+- title: action-verb start, names the specific subject/tool/deliverable, max 80 chars.
+- why: one sentence connecting THIS day to THIS user's goal (name the project or week target if given), max 120 chars.
+- successCriteria: written as "X exists" or "Y is true" — concretely verifiable, max 120 chars.
 - estimateMinutes: one of 30 | 45 | 60 | 90 | 120.
 - category: research | build | outreach | review | test | write | practice | other.
 - blockerRisk: one phrase for the most likely obstacle on this day, max 100 chars.
 
-Bad titles: "Research market", "Work on project", "Study the concept", "Define your goal"
-Good titles: "Interview 3 coffee-shop owners about their biggest inventory frustration",
-             "Write the first 200-word draft of your cold email to design agencies",
-             "Build the login page for [their app name] and run it end-to-end",
-             "Solve 5 calculus chain-rule problems from Chapter 4 without notes"`;
+Bad titles (never produce these):
+- "Research market"           ← no subject
+- "Work on project"           ← no action, no object
+- "Study the concept"         ← which concept?
+- "Define your goal"          ← that already happened in onboarding
+- "Plan your week"            ← meta, no output
+
+Good titles (this is the bar):
+- "Interview 3 coffee-shop owners about their biggest inventory frustration"
+- "Write the first 200-word draft of your cold email to design agencies"
+- "Build the login page for ${project || '[their project]'} and run it end-to-end locally"
+- "Solve 5 calculus chain-rule problems from Chapter 4 without notes"
+- "Record a 60-second video walking through your ${project ? `${project} ` : ''}demo"`;
 }
 
 function buildTrackContinuePrompt(previousTrack, previousDays, recap, choice) {
@@ -432,24 +490,44 @@ Design around the patterns that caused missed days.
 Day 1 of this new track should start from the current progress point.`;
 }
 
-function buildAgentStepsPrompt(day, track, failureMemory) {
+function buildAgentStepsPrompt(day, track, failureMemory, user) {
   const title    = String(day?.title || '').trim();
   const criteria = String(day?.successCriteria || '').trim();
+  const why      = String(day?.why || '').trim();
+  const minutes  = Number(day?.estimateMinutes) || 60;
   const goal     = String(track?.goal || '').trim();
-  const category = String(track?.goalCategory || 'other').trim();
+  const category = String(day?.category || track?.goalCategory || 'other').trim();
   const patterns = buildPatternSummary(failureMemory);
 
+  const project    = String(user?.currentProject || '').trim();
+  const weekGoal   = String(user?.weekGoal       || '').trim();
+  const experience = String(user?.experienceLevel || 'intermediate').trim();
+  const tried      = String(user?.triedBefore    || '').trim();
+
+  const userContext = [
+    project    ? `Their project: ${project}`                : '',
+    weekGoal   ? `Week 7-day target: ${weekGoal}`           : '',
+    experience ? `Experience level: ${experience}`          : '',
+    tried      ? `What they have tried before: ${tried}`    : '',
+  ].filter(Boolean).join('\n');
+
   return `Today's task: ${title}
-${criteria ? `Done when: ${criteria}` : ''}
+${criteria ? `Done when: ${criteria}`     : ''}
+${why      ? `Why this matters: ${why}`   : ''}
 Goal: ${goal}
 Category: ${category}
-Failure patterns so far: ${patterns}
+Time budget: ${minutes} minutes total
+Recurring blockers: ${patterns}
+${userContext ? `\n${userContext}` : ''}
 
-Break this task into 3–5 sequential micro-steps.
-Each step: one sentence, action-verb start, specific output expected.
-Steps must directly lead to satisfying the done condition.
-Steps must be completable in 15–45 minutes each.
-No summaries or introductions — steps only.`;
+Generate 3–5 sequential micro-steps tailored to THIS user's situation.
+
+Constraints:
+- Step 1 is the lowest-friction concrete action that produces something real (10–15 min).
+- Each step names the actual object/tool/output. If their project is given, name it.
+- Steps collectively make the "done when" criterion verifiable by the last step.
+- Total time across all steps ≈ the budget above.
+- Do not include meta steps. No "open your workspace". No "decide what to do".`;
 }
 
 function buildProofCheckPrompt(day, proofInput, track) {
@@ -606,12 +684,57 @@ function fallbackTrack(input) {
 }
 
 function fallbackSteps(day) {
-  const title = String(day?.title || 'your task').slice(0, 60);
-  return [
-    { index: 0, text: `Open your workspace and re-read the task: "${title}"` },
-    { index: 1, text: 'Write down the single most important sub-task to complete first.' },
-    { index: 2, text: 'Complete that sub-task and record the output before stopping.' },
+  const title    = String(day?.title || 'your task').slice(0, 80);
+  const criteria = String(day?.successCriteria || '').slice(0, 100);
+  const category = String(day?.category || 'other');
+
+  const byCategory = {
+    build: [
+      `Write 2-3 bullets describing exactly what "${title}" looks like when done.`,
+      'Identify the single smallest piece you can build first — name it explicitly.',
+      'Build that smallest piece end-to-end and run it once.',
+    ],
+    research: [
+      `Write down 3 questions you need answered for "${title}".`,
+      'Find one source per question — paste the link or quote.',
+      'Summarise the answers in 4–6 bullet points you can use tomorrow.',
+    ],
+    write: [
+      `Write a 3-line outline of "${title}" — beginning, middle, end.`,
+      'Draft the opening paragraph (or first 100 words). No editing.',
+      'Finish a complete first draft. Length over polish.',
+    ],
+    outreach: [
+      'Make a list of 5 specific people or accounts to reach today.',
+      'Draft one message template (≤6 sentences) personalised for one of them.',
+      'Send at least 3 messages. Log the responses you get back.',
+    ],
+    review: [
+      `List what you produced this week related to "${title}".`,
+      'For each item, write one sentence: what worked, what did not.',
+      'Pick one specific change for tomorrow based on the review.',
+    ],
+    test: [
+      `Write 3 specific scenarios you want to verify for "${title}".`,
+      'Run scenario 1 yourself or with one tester. Record what happened.',
+      'Run the remaining scenarios. Write up the one issue you most want to fix.',
+    ],
+    practice: [
+      `Set a 25-minute timer for focused practice on "${title}".`,
+      'Do the practice — actively, not passively. Capture one specific thing you noticed.',
+      'Identify the single weakest area and plan tomorrow around it.',
+    ],
+  };
+
+  const steps = byCategory[category] || [
+    `Write the first 2–3 bullet points describing what "${title}" looks like done.`,
+    'Do the single smallest concrete action that moves you toward that — 10–25 minutes.',
+    criteria
+      ? `Check your output against this: "${criteria}". Save the result before stopping.`
+      : 'Capture your output (a link, a file, a paragraph) so it exists outside your head.',
   ];
+
+  return steps.map((text, i) => ({ index: i, text }));
 }
 
 function fallbackProofCheck() {
