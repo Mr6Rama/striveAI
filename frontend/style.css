@@ -10846,6 +10846,18 @@ body.v2-body::before {
   border-bottom: 1px solid var(--v2-border);
 }
 
+.v2-step-hint {
+  font-family: var(--v2-fbody);
+  font-size: .875rem;
+  line-height: 1.55;
+  color: var(--v2-text-2);
+  background: rgba(42,54,200,.06);
+  border-left: 2px solid var(--v2-blue);
+  padding: 8px 12px;
+  border-radius: var(--v2-r-sm);
+  white-space: pre-wrap;
+}
+
 /* ── Proof type option (radio label) ── */
 .v2-proof-type-option {
   display: flex;

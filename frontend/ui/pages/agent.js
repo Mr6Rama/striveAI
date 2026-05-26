@@ -325,12 +325,17 @@ function stepList(steps, currentIndex, note, loading) {
     }
 
     if (i === currentIndex) {
-      const isLast = i === steps.length - 1;
-      const cta = isLast ? "Finish today's task →" : "Done, next step →";
+      const isLast    = i === steps.length - 1;
+      const cta       = isLast ? "Finish today's task →" : "Done, next step →";
+      const expected  = String(step.output || '').trim();
+      const hint      = String(step.hint   || '').trim();
+      const noteLabel = expected ? `Paste / log: ${expected}` : 'Log output (optional)';
+      const notePh    = expected || 'Link, filename, or one line of what you made';
       parts.push(`<div class="v2-step-card--active v2-bracketed" style="overflow:visible">
         <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
         <div class="v2-today-action" style="margin-bottom:10px">Step ${i + 1} of ${steps.length}${stepTag(step.text) ? ` · ${stepTag(step.text)}` : ''}</div>
-        <p class="v2-h2" style="margin-bottom:18px">${esc(step.text)}</p>
+        <p class="v2-h2" style="margin-bottom:${hint ? '10px' : '18px'}">${esc(step.text)}</p>
+        ${hint ? `<div class="v2-step-hint" style="margin-bottom:14px">${esc(hint)}</div>` : ''}
         <div class="v2-row" style="margin-bottom:12px">
           <button id="ag-complete" ${loading ? 'disabled' : ''} class="v2-btn v2-btn--primary" style="flex:1">
             ${loading ? 'Saving…' : cta}
@@ -338,8 +343,8 @@ function stepList(steps, currentIndex, note, loading) {
           <button id="ag-stuck" class="v2-btn v2-btn--ghost" title="Flag as blocked and get help">I'm stuck</button>
         </div>
         <div class="v2-field">
-          <label class="v2-label" style="font-size:.75rem;opacity:.65">Log output (optional)</label>
-          <textarea id="ag-note" rows="2" placeholder="Link, filename, or one line of what you made" class="v2-textarea" style="min-height:52px"></textarea>
+          <label class="v2-label" style="font-size:.75rem;opacity:.65">${esc(noteLabel)}</label>
+          <textarea id="ag-note" rows="2" placeholder="${esc(notePh)}" class="v2-textarea" style="min-height:52px"></textarea>
         </div>
       </div>`);
       return;

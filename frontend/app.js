@@ -284,15 +284,24 @@ async function handleKitGenerate() {
 
 async function handleAgentInit() {
   const state  = getState();
-  const { track, today, history } = state;
+  const { track, today, history, user } = state;
   const dayNum  = track.currentDayNumber || today.dayNumber || 1;
   const dayPlan = track.days.find((d) => d.dayNumber === dayNum) ?? track.days[0] ?? {};
 
   updateState((s) => { s.ui.agentLoading = true; return s; });
   try {
-    const rawSteps = await generateAgentSteps(dayPlan, track, history.failurePatterns);
+    const rawSteps = await generateAgentSteps(dayPlan, track, history.failurePatterns, user);
     const session  = {
-      steps:            rawSteps.map((s, i) => ({ index: i, text: String(s.text || ''), status: 'pending', stuckNote: '', completedAt: '' })),
+      steps:            rawSteps.map((s, i) => ({
+        index:       i,
+        text:        String(s.text || ''),
+        output:      String(s.output || ''),
+        hint:        String(s.hint || ''),
+        status:      'pending',
+        stuckNote:   '',
+        userOutput:  '',
+        completedAt: '',
+      })),
       currentStepIndex: 0,
       startedAt:        new Date().toISOString(),
       closedAt:         '',
@@ -310,7 +319,11 @@ async function handleAgentStepDone({ stepIndex, note }) {
   updateState((s) => {
     if (!s.today.agentSession) return s;
     const step = s.today.agentSession.steps[stepIndex];
-    if (step) { step.status = 'done'; step.stuckNote = note || ''; step.completedAt = new Date().toISOString(); }
+    if (step) {
+      step.status      = 'done';
+      step.userOutput  = String(note || '');
+      step.completedAt = new Date().toISOString();
+    }
     s.today.agentSession.currentStepIndex = stepIndex + 1;
     return s;
   });

@@ -263,13 +263,16 @@ function validateAgentSession(raw) {
 }
 
 function validateAgentStep(raw) {
-  const empty = { index: 0, text: '', status: 'pending', stuckNote: '', completedAt: '' };
+  const empty = { index: 0, text: '', output: '', hint: '', status: 'pending', stuckNote: '', userOutput: '', completedAt: '' };
   if (!raw || typeof raw !== 'object') return empty;
   return {
     index:       Number(raw.index)  || 0,
-    text:        String(raw.text        || ''),
+    text:        String(raw.text       || '').slice(0, 240),
+    output:      String(raw.output     || '').slice(0, 160),
+    hint:        String(raw.hint       || '').slice(0, 240),
     status:      ['pending', 'done', 'skipped'].includes(raw.status) ? raw.status : 'pending',
-    stuckNote:   String(raw.stuckNote   || ''),
+    stuckNote:   String(raw.stuckNote  || ''),
+    userOutput:  String(raw.userOutput || '').slice(0, 600),
     completedAt: String(raw.completedAt || ''),
   };
 }
