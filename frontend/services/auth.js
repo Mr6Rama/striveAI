@@ -58,3 +58,14 @@ export async function sendPasswordReset(email) {
 export function getDb() {
   return firebaseDb;
 }
+
+// Returns a fresh Firebase ID token for the signed-in user, or '' if signed out.
+export async function getAuthToken() {
+  const user = firebaseAuth?.currentUser;
+  if (!user) return '';
+  try {
+    return await user.getIdToken();
+  } catch (_e) {
+    return '';
+  }
+}

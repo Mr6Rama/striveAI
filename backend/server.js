@@ -476,18 +476,6 @@ function buildV2PlaintextFallback(action, prompt) {
   }
   return '';
 }
-app.post('/api/goals/:id/complete', async (req, res) => {
-  const { id } = req.params;
-  const trace = createRequestTrace();
-  try {
-    logInfo(trace, `Marking goal ${id} as completed`);
-    // DB logic will go here
-    res.status(200).json({ success: true, message: 'Goal marked as completed' });
-  } catch (error) {
-    logError(trace, 'Error completing goal', normalizeError(error));
-    res.status(500).json({ error: 'Failed to update goal status' });
-  }
-});
 function approxInputTokens(charCount) {
   return Math.max(1, Math.round(charCount / 4));
 }
@@ -1751,13 +1739,35 @@ function logAIRequest(fields) {
   logInfo(payload);
 }
 
+// Per-user rate limit on AI proxy. Keyed by verified Firebase uid (set by
+// requireAIAuth below); falls back to IP only when Firebase Admin is not
+// configured at all (dev/CI without service account).
 const aiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 40,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests. Please try again later.' },
+  keyGenerator: (req) => req.firebaseUser?.uid || `ip:${req.ip}`,
 });
+
+// Auth gate for /api/openai/generate. Requires a Firebase ID token unless the
+// server is unconfigured (no service account) — in that case the route still
+// works for local dev but is heavily IP-rate-limited above.
+async function requireAIAuth(req, res, next) {
+  const adminApp = getFirebaseAdmin();
+  if (!adminApp) {
+    // Dev / unconfigured: allow but log.
+    return next();
+  }
+  try {
+    req.firebaseUser = await verifyFirebaseIdToken(req);
+    return next();
+  } catch (err) {
+    const status = err.status || 401;
+    return res.status(status).json({ error: 'Authentication required for AI requests' });
+  }
+}
 
 app.use(express.json({ limit: '100kb' }));
 app.use(express.static(frontendDir));
@@ -1774,7 +1784,7 @@ app.get('/api/config', (_req, res) => {
   });
 });
 
-app.post('/api/openai/generate', aiLimiter, async (req, res) => {
+app.post('/api/openai/generate', requireAIAuth, aiLimiter, async (req, res) => {
   const startedAt = Date.now();
   const requestId = createRequestId();
   const sessionId = String(req.get('x-session-id') || req.get('x-strive-session-id') || '').slice(0, 120);

@@ -1,12 +1,21 @@
 // StriveAI v2 AI service.
 // All v2 AI calls go through this module. UI components must not call AI directly.
 
+import { getAuthToken } from './auth.js';
+
 // ── Network layer ──────────────────────────────────────────────────────────
+
+async function authHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = await getAuthToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
 
 async function requestJson({ action, prompt, systemCtx = '', schema, maxTokens }) {
   const res = await fetch('/api/openai/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({
       action,
       prompt,
@@ -23,7 +32,7 @@ async function requestJson({ action, prompt, systemCtx = '', schema, maxTokens }
 async function requestText({ action, prompt, systemCtx = '', maxTokens }) {
   const res = await fetch('/api/openai/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ action, prompt, systemCtx, maxTokens, opts: {} }),
   });
   const payload = await res.json().catch(() => ({}));
@@ -606,12 +615,57 @@ function fallbackTrack(input) {
 }
 
 function fallbackSteps(day) {
-  const title = String(day?.title || 'your task').slice(0, 60);
-  return [
-    { index: 0, text: `Open your workspace and re-read the task: "${title}"` },
-    { index: 1, text: 'Write down the single most important sub-task to complete first.' },
-    { index: 2, text: 'Complete that sub-task and record the output before stopping.' },
+  const title    = String(day?.title || 'your task').slice(0, 80);
+  const criteria = String(day?.successCriteria || '').slice(0, 100);
+  const category = String(day?.category || 'other');
+
+  const byCategory = {
+    build: [
+      `Write 2-3 bullets describing exactly what "${title}" looks like when done.`,
+      'Identify the single smallest piece you can build first — name it explicitly.',
+      'Build that smallest piece end-to-end and run it once.',
+    ],
+    research: [
+      `Write down 3 questions you need answered for "${title}".`,
+      'Find one source per question — paste the link or quote.',
+      'Summarise the answers in 4–6 bullet points you can use tomorrow.',
+    ],
+    write: [
+      `Write a 3-line outline of "${title}" — beginning, middle, end.`,
+      'Draft the opening paragraph (or first 100 words). No editing.',
+      'Finish a complete first draft. Length over polish.',
+    ],
+    outreach: [
+      'Make a list of 5 specific people or accounts to reach today.',
+      'Draft one message template (≤6 sentences) personalised for one of them.',
+      'Send at least 3 messages. Log the responses you get back.',
+    ],
+    review: [
+      `List what you produced this week related to "${title}".`,
+      'For each item, write one sentence: what worked, what did not.',
+      'Pick one specific change for tomorrow based on the review.',
+    ],
+    test: [
+      `Write 3 specific scenarios you want to verify for "${title}".`,
+      'Run scenario 1 yourself or with one tester. Record what happened.',
+      'Run the remaining scenarios. Write up the one issue you most want to fix.',
+    ],
+    practice: [
+      `Set a 25-minute timer for focused practice on "${title}".`,
+      'Do the practice — actively, not passively. Capture one specific thing you noticed.',
+      'Identify the single weakest area and plan tomorrow around it.',
+    ],
+  };
+
+  const steps = byCategory[category] || [
+    `Write the first 2–3 bullet points describing what "${title}" looks like done.`,
+    'Do the single smallest concrete action that moves you toward that — 10–25 minutes.',
+    criteria
+      ? `Check your output against this: "${criteria}". Save the result before stopping.`
+      : 'Capture your output (a link, a file, a paragraph) so it exists outside your head.',
   ];
+
+  return steps.map((text, i) => ({ index: i, text }));
 }
 
 function fallbackProofCheck() {
