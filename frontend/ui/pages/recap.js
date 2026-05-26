@@ -18,7 +18,7 @@ export function render(container, state, actions) {
   const recapLoading   = Boolean(ui?.recapLoading);
   const continuing     = Boolean(ui?.trackContinuing);
 
-  container.innerHTML = buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram);
+  container.innerHTML = buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram, state.user, entries, days);
   wireEvents(container, state, actions, track, recapText, patterns);
 
   // Auto-trigger reflection generation on first visit per track.
@@ -30,7 +30,10 @@ export function render(container, state, actions) {
 
 // ── Page builder ──────────────────────────────────────────────────────────────
 
-function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram) {
+function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram, user, entries, days) {
+  const why      = String(user?.whyItMatters || '').trim();
+  const weekGoal = String(user?.weekGoal     || '').trim();
+
   return `
     <div class="v2-page">
 
@@ -39,13 +42,42 @@ function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoa
       </div>
       <h1 class="v2-h1" style="margin-bottom:6px">Your 7-day track is complete.</h1>
       <p class="v2-sub">${esc(track.goal || '')}</p>
+      ${weekGoal ? `<p class="v2-muted-text" style="margin-top:4px">By Day 7 you wanted: ${esc(weekGoal)}</p>` : ''}
+      ${why ? `<blockquote class="v2-recap-why">${esc(why)}</blockquote>` : ''}
 
       ${renderResultGrid(stats)}
       ${patternSummary ? renderPatternCard(patternSummary) : ''}
       ${bestFormat     ? renderFormatCard(bestFormat)      : ''}
       ${renderAIReflection(recapText, recapLoading)}
+      ${renderTimeline(days, entries, track)}
       ${renderCTAs(continuing, telegram)}
 
+    </div>`;
+}
+
+function renderTimeline(days, entries, track) {
+  const rows = days.map((day) => {
+    const entry = entries.find((e) => e.trackId === track.id && e.dayNumber === day.dayNumber);
+    const status = entry?.outcome || day.status || 'pending';
+    const proof  = String(entry?.proofValue || '').trim();
+    const isLink = entry?.proofType === 'link' && /^https?:\/\//i.test(proof);
+    const proofBlock = !proof ? '' : isLink
+      ? `<a href="${esc(proof)}" target="_blank" rel="noopener" class="v2-link">${esc(proof)}</a>`
+      : `<p class="v2-body-text" style="margin:0;white-space:pre-wrap">${esc(proof)}</p>`;
+    return `
+      <div class="v2-recap-day v2-recap-day--${esc(status)}">
+        <div class="v2-recap-day__head">
+          <span class="v2-section-label">Day ${day.dayNumber}</span>
+          <span class="v2-recap-day__status">${esc(status)}</span>
+        </div>
+        <p class="v2-body-text" style="margin:6px 0 0;font-weight:600">${esc(day.title || '—')}</p>
+        ${proofBlock ? `<div class="v2-recap-day__proof">${proofBlock}</div>` : ''}
+      </div>`;
+  }).join('');
+  return `
+    <div class="v2-card" style="margin-bottom:16px">
+      <div class="v2-section-label" style="margin-bottom:12px">Your week, day by day</div>
+      <div class="v2-recap-timeline">${rows}</div>
     </div>`;
 }
 

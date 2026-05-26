@@ -509,6 +509,18 @@ async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
   const now     = new Date().toISOString();
   const outcome = fromRescue ? 'rescued' : 'done';
 
+  // Snapshot agent steps with user outputs so /progress and /recap can show
+  // what the user actually produced for this day.
+  const sessionSnapshot = today.agentSession
+    ? today.agentSession.steps
+        .filter((s) => s.status === 'done')
+        .map((s) => ({
+          text:       String(s.text       || '').slice(0, 240),
+          output:     String(s.output     || '').slice(0, 160),
+          userOutput: String(s.userOutput || '').slice(0, 600),
+        }))
+    : [];
+
   const entry = {
     date:            today.date,
     dayNumber:       dayNum,
@@ -516,6 +528,8 @@ async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
     outcome,
     taskTitle:       dayPlan.title || '',
     proofType:       proofType || 'text',
+    proofValue:      String(proofValue || '').slice(0, 800),
+    agentSteps:      sessionSnapshot,
     agentUsed:       Boolean(fromAgent),
     rescueOffered:   Boolean(fromRescue),
     rescueCompleted: Boolean(fromRescue),

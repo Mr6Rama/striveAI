@@ -223,19 +223,23 @@ function renderInactive(container, track, today, dayPlan, status, actions) {
 // ── Shared components ──────────────────────────────────────────────────────
 
 function topBar(dayNum, status, goal, track) {
-  const cls   = STATUS_CLASS[status] || 'v2-badge--pending';
-  const label = STATUS_LABEL[status] || String(status).toUpperCase();
   const days  = Array.isArray(track?.days) ? track.days.map((d) => ({
     dayNumber: d.dayNumber,
     status: d.status || 'pending',
     title: d.title,
   })) : [];
   const roadmap = days.length ? renderRoadmap({ days, currentDay: dayNum, variant: 'compact' }) : '';
+  // Hide the redundant "PENDING" badge on Today — when the page is in its
+  // active state the context already says "do this now". Only show a badge
+  // for non-default outcomes (done / rescued / blocked / skipped / missed).
+  const showBadge = status && status !== 'pending' && status !== 'in_progress';
+  const cls   = STATUS_CLASS[status] || 'v2-badge--pending';
+  const label = STATUS_LABEL[status] || String(status).toUpperCase();
   return `
     ${roadmap}
     <div class="v2-kicker" style="margin-bottom:6px">
       <span>Day ${dayNum} of 7</span>
-      <span class="v2-badge ${cls}">${esc(label)}</span>
+      ${showBadge ? `<span class="v2-badge ${cls}">${esc(label)}</span>` : ''}
     </div>
     <p class="v2-muted-text" style="margin-bottom:16px">${esc(goal || '')}</p>`;
 }
@@ -248,9 +252,9 @@ function actionCard(dayPlan) {
       <h2 class="v2-today-title">${esc(dayPlan.title || 'No task assigned')}</h2>
       ${dayPlan.why ? `<p class="v2-body-text" style="margin-bottom:12px">${esc(dayPlan.why)}</p>` : ''}
       ${dayPlan.successCriteria
-        ? `<div class="v2-done-criteria" style="margin-bottom:10px">Done means: ${esc(dayPlan.successCriteria)}</div>`
+        ? `<div class="v2-done-criteria" style="margin-bottom:10px">You're done when ${esc(dayPlan.successCriteria)}</div>`
         : ''}
-      <p class="v2-mission-meta">${dayPlan.estimateMinutes || 60} min${dayPlan.category ? ` · ${esc(dayPlan.category)}` : ''}</p>
+      <p class="v2-mission-meta">${dayPlan.estimateMinutes || 60} min</p>
     </div>`;
 }
 

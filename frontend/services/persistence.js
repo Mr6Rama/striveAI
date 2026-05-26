@@ -297,6 +297,13 @@ function validateHistoryEntry(raw) {
   if (!['done', 'blocked', 'skipped', 'missed', 'rescued'].includes(outcome)) return null;
   const date = String(raw.date || '').slice(0, 10);
   if (!date) return null;
+  const agentSteps = Array.isArray(raw.agentSteps)
+    ? raw.agentSteps.slice(0, 5).map((s) => ({
+        text:       String(s?.text       || '').slice(0, 240),
+        output:     String(s?.output     || '').slice(0, 160),
+        userOutput: String(s?.userOutput || '').slice(0, 600),
+      }))
+    : [];
   return {
     date,
     dayNumber:       Number(raw.dayNumber)    || 1,
@@ -304,6 +311,8 @@ function validateHistoryEntry(raw) {
     outcome,
     taskTitle:       String(raw.taskTitle     || ''),
     proofType:       ['text', 'link', 'statement', ''].includes(raw.proofType) ? raw.proofType : '',
+    proofValue:      String(raw.proofValue    || '').slice(0, 800),
+    agentSteps,
     agentUsed:       Boolean(raw.agentUsed),
     rescueOffered:   Boolean(raw.rescueOffered),
     rescueCompleted: Boolean(raw.rescueCompleted),
