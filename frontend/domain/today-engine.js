@@ -301,6 +301,53 @@ export function isTrackComplete(track) {
   );
 }
 
+// ── Pace warning (Track only, no AI) ──────────────────────────────────────
+//
+// Compares actual done/rescued days against a 70% expected completion rate.
+// Only fires after Day 7 to avoid false alarms early in the track.
+// Returns { level: 'ok'|'yellow'|'red', message, daysDeficit }.
+
+export function computePaceWarning(track, history) {
+  if (track?.kind === 'spark') return { level: 'ok', message: '', daysDeficit: 0 };
+
+  const elapsed = track?.currentDayNumber || 1;
+  if (elapsed < 8) return { level: 'ok', message: '', daysDeficit: 0 };
+
+  const entries    = Array.isArray(history?.entries) ? history.entries : [];
+  const workDays   = (track.days || []).filter((d) => !d.isRestDay);
+  const passed     = workDays.filter((d) => d.dayNumber < elapsed);
+  const expected   = Math.floor(passed.length * 0.70);
+  const actualDone = entries.filter(
+    (e) => e.trackId === track.id && (e.outcome === 'done' || e.outcome === 'rescued')
+  ).length;
+  const deficit = expected - actualDone;
+
+  if (deficit <= 0) return { level: 'ok', message: '', daysDeficit: 0 };
+  if (deficit <= 2) return {
+    level:      'yellow',
+    message:    `You're ${deficit} day${deficit > 1 ? 's' : ''} behind pace. Review your progress →`,
+    daysDeficit: deficit,
+  };
+  return {
+    level:      'red',
+    message:    `Your plan needs attention — ${deficit} days behind. Adjust now →`,
+    daysDeficit: deficit,
+  };
+}
+
+// ── Week boundary check ────────────────────────────────────────────────────
+//
+// Returns true if the just-completed day is the last active day of a week
+// (i.e. the week boundary checkpoint should trigger).
+
+export function isWeekBoundary(track, completedDayNumber) {
+  if (track?.kind === 'spark') return false;
+  const totalDays = track?.totalDays || 28;
+  if (completedDayNumber >= totalDays) return false;
+  // Week boundary = day number is a multiple of 7
+  return completedDayNumber > 0 && completedDayNumber % 7 === 0;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function deepClone(obj) {

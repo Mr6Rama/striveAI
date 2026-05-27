@@ -5,8 +5,8 @@ import { getState, replaceState, subscribe, updateState } from './core/store.js'
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain, clearProgressData } from './services/persistence.js';
 import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay, generateDay7Recap, generateContinuationWeek, generateSparkToTrackExtend } from './services/ai-v2.js';
-import { sharpenGoal } from './services/ai-v2-coaching.js';
-import { rolloverIfNeeded, analyzePatterns, deriveInsight, shouldTriggerAdaptation, applyAdaptResult, isTrackComplete } from './domain/today-engine.js';
+import { sharpenGoal, generateWeekRecap } from './services/ai-v2-coaching.js';
+import { rolloverIfNeeded, analyzePatterns, deriveInsight, shouldTriggerAdaptation, applyAdaptResult, isTrackComplete, isWeekBoundary } from './domain/today-engine.js';
 import { resetProofState } from './ui/pages/proof.js';
 import { resetBlockedState } from './ui/pages/blocked.js';
 import { initRouter, navigate, normalizeRoute } from './ui/router.js';
@@ -620,6 +620,9 @@ async function handleDayDone({ proofType, proofValue, fromAgent, fromRescue }) {
   // Trigger next-day adaptation (non-blocking, non-fatal)
   await maybeAdaptNextDay(outcome);
 
+  // Weekly ship checkpoint (Track only, non-blocking)
+  maybeWeekCheckpoint(dayNum).catch(() => {});
+
   navigate('/today', handleRouteChange, true);
 }
 
@@ -649,6 +652,41 @@ async function maybeAdaptNextDay(outcome) {
   } catch (_e) {
     // Adaptation is best-effort; never crash the main flow
   }
+}
+
+// ── Weekly ship checkpoint ─────────────────────────────────────────────────
+
+async function maybeWeekCheckpoint(dayNum) {
+  const state = getState();
+  const { track, history, user } = state;
+  if (!isWeekBoundary(track, dayNum)) return;
+
+  const weekNum  = Math.ceil(dayNum / 7);
+  const phase    = Array.isArray(track.phases) ? track.phases.find((p) => p.weekNumber === weekNum) : null;
+  const weekDays = (track.days || []).filter(
+    (d) => d.dayNumber > (weekNum - 1) * 7 && d.dayNumber <= weekNum * 7
+  );
+  const daysThisWeek = weekDays.map((d) => {
+    const entry = history.entries.find((e) => e.trackId === track.id && e.dayNumber === d.dayNumber);
+    return { dayNumber: d.dayNumber, outcome: entry?.outcome || d.status || 'pending', taskTitle: d.title || '' };
+  });
+
+  const result = await generateWeekRecap({
+    weekNumber:   weekNum,
+    phaseName:    phase?.name || '',
+    goal:         track.goal || '',
+    goalArtifact: user.goalArtifact || '',
+    daysThisWeek,
+  });
+
+  updateState((s) => {
+    s.ui.weekRecapData = { weekNumber: weekNum, phaseName: phase?.name || '', ...result };
+    return s;
+  });
+}
+
+function handleWeekRecapDismiss() {
+  updateState((s) => { s.ui.weekRecapData = null; return s; });
 }
 
 // ── Recap handlers ─────────────────────────────────────────────────────────
@@ -945,6 +983,7 @@ function renderApp(state) {
     onRecapContinue:          handleRecapContinue,
     onRecapNewTrack:          handleRecapNewTrack,
     onResetProgress:          handleResetProgress,
+    onWeekRecapDismiss:       handleWeekRecapDismiss,
   };
 
   const publicRoutes = new Set(['/', '/landing', '/auth']);

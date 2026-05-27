@@ -2,6 +2,10 @@
 import { buildMorningBrief } from '../../domain/morning-brief.js';
 import { computeStreaks, consecutiveMissedDays } from '../../domain/streak.js';
 import { isoDateNow } from '../../core/state-model.js';
+import { computePaceWarning } from '../../domain/today-engine.js';
+
+// Session-only set of track IDs whose pace banner the user dismissed this session.
+const _dismissedPace = new Set();
 
 const STATUS_CLASS = Object.freeze({
   done:        'v2-badge--done',
@@ -90,10 +94,16 @@ function renderActive(container, track, today, dayPlan, state, actions) {
   const brief    = buildMorningBrief({ user: state.user, track, today, history: state.history, streaks });
   const softReturn = missGap >= 2;
 
+  const paceWarn      = computePaceWarning(track, state.history);
+  const weekRecapData = state.ui?.weekRecapData;
+  const showPace      = paceWarn.level !== 'ok' && status === 'pending' && !_dismissedPace.has(track.id);
+
   container.innerHTML = `
     <div class="v2-page v2-page-center">
 
       ${topBar(dayNum, status, track.goal, track)}
+      ${weekRecapData ? weekRecapCard(weekRecapData) : ''}
+      ${showPace ? paceBanner(paceWarn) : ''}
       ${softReturn ? softReturnBanner(missGap) : `<p class="v2-morning-brief">${esc(brief)}</p>`}
       ${actionCard(dayPlan)}
       ${insight ? `<div class="v2-insight">${esc(insight)}</div>` : ''}
@@ -105,7 +115,7 @@ function renderActive(container, track, today, dayPlan, state, actions) {
       <button id="td-kit" class="v2-btn v2-btn--secondary v2-btn--full" style="margin-bottom:18px">Action Kit</button>
 
       <div class="v2-row" style="margin-bottom:16px">
-        <button id="td-blocked" class="v2-btn v2-btn--ghost" style="flex:1">I’m stuck</button>
+        <button id="td-blocked" class="v2-btn v2-btn--ghost" style="flex:1">I'm stuck</button>
         <button id="td-skip"    class="v2-btn v2-btn--ghost" style="flex:1">Skip today</button>
       </div>
 
@@ -122,6 +132,15 @@ function renderActive(container, track, today, dayPlan, state, actions) {
   container.querySelector('#td-done')?.addEventListener('click', () => actions.onNavigate?.('/proof?source=main'));
   container.querySelector('#td-blocked')?.addEventListener('click', () => actions.onNavigate?.('/blocked?type=blocked'));
   container.querySelector('#td-skip')?.addEventListener('click', () => actions.onNavigate?.('/blocked?type=skipped'));
+
+  container.querySelector('#td-pace-dismiss')?.addEventListener('click', () => {
+    _dismissedPace.add(track.id);
+    renderActive(container, track, today, dayPlan, state, actions);
+  });
+  container.querySelector('#td-pace-nav')?.addEventListener('click', () => actions.onNavigate?.('/progress'));
+  container.querySelector('#td-week-recap-dismiss')?.addEventListener('click', () => {
+    actions.onWeekRecapDismiss?.();
+  });
 }
 
 // ── Complete (done / rescued) ──────────────────────────────────────────────
@@ -219,6 +238,39 @@ function renderInactive(container, track, today, dayPlan, status, actions) {
   container.querySelector('#td-agent-r')?.addEventListener('click', () => actions.onNavigate?.('/agent'));
 }
 
+// ── Pace banner ────────────────────────────────────────────────────────────
+
+function paceBanner(pw) {
+  const isRed = pw.level === 'red';
+  const color  = isRed ? 'var(--v2-red)'   : 'var(--v2-amber)';
+  const bg     = isRed ? 'rgba(220,38,38,.08)' : 'rgba(245,158,11,.08)';
+  return `
+    <div style="background:${bg};border:1px solid ${color};border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <button id="td-pace-nav" class="v2-body-text" style="color:${color};font-size:.85rem;cursor:pointer;background:none;border:none;padding:0;text-align:left">${esc(pw.message)}</button>
+      <button id="td-pace-dismiss" class="v2-btn v2-btn--ghost v2-btn--sm" style="flex-shrink:0;padding:2px 8px;font-size:.78rem">✕</button>
+    </div>`;
+}
+
+// ── Week recap card ────────────────────────────────────────────────────────
+
+function weekRecapCard(data) {
+  const onTrackColor = data.onTrack ? 'var(--v2-green)' : 'var(--v2-amber)';
+  const onTrackLabel = data.onTrack ? 'On track' : 'Behind';
+  const heading      = data.phaseName
+    ? `Week ${data.weekNumber} complete — ${esc(data.phaseName)}`
+    : `Week ${data.weekNumber} complete`;
+  return `
+    <div class="v2-card v2-card--blue" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">
+        <div class="v2-section-label">${heading}</div>
+        <span style="font-size:.78rem;font-weight:700;color:${onTrackColor};flex-shrink:0">${esc(onTrackLabel)}</span>
+      </div>
+      <p class="v2-body-text" style="margin-bottom:6px">You shipped: ${esc(data.shipped)}</p>
+      <p class="v2-muted-text" style="margin-bottom:10px;font-size:.82rem">Next week focus: ${esc(data.nextWeekFocus)}</p>
+      <button id="td-week-recap-dismiss" class="v2-btn v2-btn--ghost v2-btn--sm">Got it →</button>
+    </div>`;
+}
+
 // ── Shared components ──────────────────────────────────────────────────────
 
 function topBar(dayNum, status, goal, track) {
@@ -271,7 +323,7 @@ function softReturnBanner(missGap) {
   return `
     <div class="v2-soft-return">
       <div class="v2-soft-return__title">Welcome back.</div>
-      <p class="v2-soft-return__body">It’s been ${days}. You don’t need to catch up — the plan adjusts to where you are now. Today’s task is sized for a real return.</p>
+      <p class="v2-soft-return__body">It's been ${days}. You don't need to catch up — the plan adjusts to where you are now. Today's task is sized for a real return.</p>
     </div>`;
 }
 
