@@ -66,7 +66,9 @@ export function render(container, state, actions) {
     return;
   }
 
-  renderExecution(container, dayPlan, track, today, session, insight, loading, actions, user);
+  const agentHint        = state.ui?.agentHint        || null;
+  const agentHintLoading = Boolean(state.ui?.agentHintLoading);
+  renderExecution(container, dayPlan, track, today, session, insight, loading, actions, user, agentHint, agentHintLoading);
 }
 
 // ── Loading ────────────────────────────────────────────────────────────────
@@ -85,7 +87,7 @@ function renderLoading(container, actions) {
 
 // ── Main execution view ────────────────────────────────────────────────────
 
-function renderExecution(container, dayPlan, track, today, session, insight, loading, actions, user) {
+function renderExecution(container, dayPlan, track, today, session, insight, loading, actions, user, agentHint, agentHintLoading) {
   const { steps, currentStepIndex } = session;
 
   container.innerHTML = `
@@ -99,10 +101,10 @@ function renderExecution(container, dayPlan, track, today, session, insight, loa
         <div style="flex:1;min-width:260px">
           <div class="v2-agent-intro">
             <strong>Agent walks you through ${steps.length} short steps.</strong>
-            Do each one in your own tools, drop a quick note, then mark it done — that's how today's task gets finished.
+            Do each one in your own tools, drop a quick note, then mark it done.
           </div>
           ${progressPills(steps, currentStepIndex)}
-          ${stepList(steps, currentStepIndex, stepNote, loading)}
+          ${stepList(steps, currentStepIndex, stepNote, loading, agentHint, agentHintLoading)}
           <button data-route="/today" class="v2-btn v2-btn--ghost" style="margin-top:6px">← Back to Today</button>
         </div>
 
@@ -124,6 +126,11 @@ function renderExecution(container, dayPlan, track, today, session, insight, loa
 
   container.querySelector('#ag-stuck')?.addEventListener('click', () => {
     actions.onNavigate?.('/blocked?type=blocked');
+  });
+
+  container.querySelector('#ag-hint-btn')?.addEventListener('click', () => {
+    const step = steps[currentStepIndex];
+    if (step) actions.onAgentHint?.({ stepText: step.text, taskTitle: dayPlan.title || '' });
   });
 
   wireNav(container, actions);
@@ -313,7 +320,7 @@ function stepTag(text) {
   return VERBS[first] || '';
 }
 
-function stepList(steps, currentIndex, note, loading) {
+function stepList(steps, currentIndex, note, loading, agentHint, agentHintLoading) {
   const parts = [];
   let addedComingUp = false;
 
@@ -338,16 +345,22 @@ function stepList(steps, currentIndex, note, loading) {
       const hint      = String(step.hint   || '').trim();
       const noteLabel = expected ? `Paste / log: ${expected}` : 'Log output (optional)';
       const notePh    = expected || 'Link, filename, or one line of what you made';
+      const hintBtnLabel = agentHintLoading ? 'Getting help…' : 'Help with this step →';
+      const hintBlock = agentHint
+        ? `<div class="v2-insight" style="margin-top:10px;font-size:.83rem;line-height:1.5">${esc(agentHint)}</div>`
+        : '';
       parts.push(`<div class="v2-step-card--active v2-bracketed" style="overflow:visible">
         <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
         <div class="v2-today-action" style="margin-bottom:10px">Step ${i + 1} of ${steps.length}${stepTag(step.text) ? ` · ${stepTag(step.text)}` : ''}</div>
-        <p class="v2-h2" style="margin-bottom:${hint ? '10px' : '18px'}">${esc(step.text)}</p>
-        ${hint ? `<div class="v2-step-hint" style="margin-bottom:14px">${esc(hint)}</div>` : ''}
+        <p class="v2-h2" style="margin-bottom:${hint ? '10px' : '16px'}">${esc(step.text)}</p>
+        ${hint ? `<div class="v2-step-hint" style="margin-bottom:12px">${esc(hint)}</div>` : ''}
+        ${hintBlock}
+        <button id="ag-hint-btn" ${agentHintLoading ? 'disabled' : ''} class="v2-btn v2-btn--ghost" style="font-size:.78rem;padding:4px 10px;margin-bottom:14px">${hintBtnLabel}</button>
         <div class="v2-row" style="margin-bottom:12px">
           <button id="ag-complete" ${loading ? 'disabled' : ''} class="v2-btn v2-btn--primary" style="flex:1">
             ${loading ? 'Saving…' : cta}
           </button>
-          <button id="ag-stuck" class="v2-btn v2-btn--ghost" title="Flag as blocked and get help">I'm stuck</button>
+          <button id="ag-stuck" class="v2-btn v2-btn--ghost" title="Flag as blocked and get help">Blocked</button>
         </div>
         <div class="v2-field">
           <label class="v2-label" style="font-size:.75rem;opacity:.65">${esc(noteLabel)}</label>

@@ -128,6 +128,8 @@ export function createInitialState() {
       recapLoading:      false,
       trackContinuing:   false,
       weekRecapData:     null,  // { weekNumber, shipped, onTrack, nextWeekFocus } — session-only
+      agentHint:         null,  // string | null — inline hint for current agent step
+      agentHintLoading:  false, // boolean — hint fetch in flight
     },
   };
 }

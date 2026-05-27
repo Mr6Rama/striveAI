@@ -5,7 +5,7 @@ import { getState, replaceState, subscribe, updateState } from './core/store.js'
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain, clearProgressData } from './services/persistence.js';
 import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay, generateDay7Recap, generateContinuationWeek, generateSparkToTrackExtend } from './services/ai-v2.js';
-import { sharpenGoal, generateWeekRecap, getStepFeedback } from './services/ai-v2-coaching.js';
+import { sharpenGoal, generateWeekRecap, getStepFeedback, getAgentHint } from './services/ai-v2-coaching.js';
 import { rolloverIfNeeded, analyzePatterns, deriveInsight, shouldTriggerAdaptation, applyAdaptResult, isTrackComplete, isWeekBoundary } from './domain/today-engine.js';
 import { resetProofState } from './ui/pages/proof.js';
 import { resetBlockedState } from './ui/pages/blocked.js';
@@ -386,6 +386,9 @@ async function handleAgentStepDone({ stepIndex, note }) {
       step.completedAt = new Date().toISOString();
     }
     s.today.agentSession.currentStepIndex = stepIndex + 1;
+    // Clear hint state for next step
+    s.ui.agentHint        = null;
+    s.ui.agentHintLoading = false;
     return s;
   });
   await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
@@ -436,6 +439,16 @@ async function handleAgentRetry() {
     return s;
   });
   await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
+}
+
+async function handleAgentHint({ stepText, taskTitle }) {
+  updateState((s) => { s.ui.agentHintLoading = true; s.ui.agentHint = null; return s; });
+  try {
+    const hint = await getAgentHint(String(stepText || ''), String(taskTitle || ''));
+    updateState((s) => { s.ui.agentHint = hint || null; s.ui.agentHintLoading = false; return s; });
+  } catch (_e) {
+    updateState((s) => { s.ui.agentHintLoading = false; return s; });
+  }
 }
 
 // ── Standalone proof handlers (/proof route) ───────────────────────────────
@@ -909,8 +922,9 @@ function buildShellNav(state, route) {
   ).join('');
 
   const streakChip = hasTrack ? buildStreakChip(state) : '';
+  const totalDays  = state.track?.totalDays || 7;
   const dayChip    = hasTrack && day
-    ? `<span class="v2-badge v2-badge--today">Day ${day} of 7</span>`
+    ? `<span class="v2-badge v2-badge--today">Day ${day} of ${totalDays}</span>`
     : '';
 
   return `<header class="v2-nav">
@@ -988,6 +1002,7 @@ function renderApp(state) {
     onAgentStepDone:          handleAgentStepDone,
     onAgentProofSubmit:       handleAgentProofSubmit,
     onAgentRetry:             handleAgentRetry,
+    onAgentHint:              handleAgentHint,
     onProofSubmit:            handleProofSubmit,
     onProofReset:             handleProofReset,
     onBlockerDiagnose:        handleBlockerDiagnose,

@@ -12,6 +12,17 @@ async function authHeaders() {
   return headers;
 }
 
+async function requestText({ action, prompt }) {
+  const res = await fetch('/api/openai/generate', {
+    method: 'POST',
+    headers: await authHeaders(),
+    body: JSON.stringify({ action, prompt, opts: {} }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok || payload.error) throw new Error(payload.error || 'AI request failed');
+  return String(payload.text || '').trim();
+}
+
 async function requestJson({ action, prompt, schema }) {
   const res = await fetch('/api/openai/generate', {
     method: 'POST',
@@ -96,6 +107,27 @@ export async function getStepFeedback(step, userNote) {
   try {
     const result = await requestJson({ action: 'agent_step_feedback', prompt, schema });
     return { ok: Boolean(result.ok), tip: String(result.tip || '').slice(0, 120) };
+  } catch (_e) { return null; }
+}
+
+// ── Inline step hint ──────────────────────────────────────────────────────────
+// Called when user taps "Help with this step" in Agent Mode.
+// Returns a short plain-text hint string or null on failure.
+
+export async function getAgentHint(stepText, taskTitle) {
+  if (!stepText) return null;
+  const prompt = [
+    `Task: ${String(taskTitle || '').slice(0, 100)}`,
+    `Current step: ${String(stepText).slice(0, 150)}`,
+    '',
+    'The user is stuck on this step. Give one specific, actionable hint in 2-3 sentences.',
+    'Name a concrete action, command, or example they can try right now.',
+    'Do not repeat the step text. Do not give general advice.',
+  ].join('\n');
+
+  try {
+    const text = await requestText({ action: 'agent_hint', prompt });
+    return text || null;
   } catch (_e) { return null; }
 }
 

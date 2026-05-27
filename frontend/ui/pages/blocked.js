@@ -94,7 +94,7 @@ function renderReasonPicker(selId) {
   return `
     <div class="v2-reason-grid">${pills}</div>
     <button id="blocked-next" ${selId ? '' : 'disabled'} class="v2-btn v2-btn--amber v2-btn--lg v2-btn--full">
-      Get rescue action →
+      Find a way through →
     </button>`;
 }
 
@@ -114,7 +114,7 @@ function renderDiagnosis() {
           style="resize:none;font-size:.9rem">${esc(diagnosis.tried)}</textarea>
       </div>
       <button id="diag-next" ${canNext ? '' : 'disabled'} class="v2-btn v2-btn--amber v2-btn--lg v2-btn--full">
-        Get rescue action →
+        Find a way through →
       </button>
     </div>`;
 }
@@ -122,7 +122,7 @@ function renderDiagnosis() {
 function renderLoading() {
   return `<div class="v2-loading-center">
     <div class="v2-spin" style="border-top-color:var(--v2-amber)"></div>
-    <p class="v2-muted-text">Finding a smaller action for you…</p>
+    <p class="v2-muted-text">Working on your specific blocker…</p>
   </div>`;
 }
 

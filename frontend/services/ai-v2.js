@@ -152,25 +152,33 @@ Return JSON only.`;
 const STEPS_CTX = `You are an execution assistant. Break one task into 3–5 ordered micro-steps.
 
 Hard rules:
-- Each step is a concrete physical action with a specific, namable output.
+- Each step is one concrete physical action with a specific, nameable output.
 - Each step is completable in 10–30 minutes.
-- The first step is the LOWEST-FRICTION real action — never "prepare", "decide", or "review".
-- Step 1 must produce something tangible by itself (a list, a paragraph, a commit).
-- Use the user's actual project/tools by name when given.
-- Reference the day's done condition — the last step makes the criterion checkable.
+- The first step is the LOWEST-FRICTION real action — it must produce something tangible immediately.
+- Use the user's actual project name, tool names, and file names when given.
+- Name exact commands, exact file names, exact URLs — never say "your tool" or "the platform".
+- Reference the day done condition — the last step makes the success criterion checkable.
 
-NEVER write steps that start with "Open", "Re-read", "Decide", "Think", "Consider", "Plan", "Define", or that restate the task, coach motivation, or are meta ("write down the most important sub-task").
+NEVER start steps with: "Open", "Re-read", "Decide", "Think", "Consider", "Plan", "Define", "Set up your", "Get familiar with", "Review".
+NEVER write meta steps like "identify the most important sub-task" or "decide what to build first".
 
-GOOD examples for a "Build login page for MyNotion" task:
-- "Run npx create-next-app@latest mynotion --typescript --tailwind in your project folder"
-- "Add /login/page.tsx with email + password fields and a Submit button"
-- "Wire the Submit handler to call supabase.auth.signInWithPassword and console.log the result"
+GOOD examples for "Build login page for MyApp":
+- "Create src/pages/login.tsx with a form containing email + password inputs and a Submit button"
+- "Import useForm from react-hook-form and wire it to the form fields with required validation"
+- "Add handleSubmit that calls POST /api/auth/login and console.log the response"
 
-For each step provide: text (≤160), output (what exists when done, ≤120), hint (optional template/snippet, ≤180).
+BAD examples (too vague — never do this):
+- "Set up your development environment"
+- "Write the main component"
+- "Test the feature with users"
+
+For each step provide:
+  text: action-verb start, names the specific file/command/tool/output, max 160 chars
+  output: what concretely exists when done, max 120 chars
+  hint: actual code snippet, CLI command, or template the user can copy — not advice, max 180 chars
 Return JSON only.`;
 
-const RESCUE_CTX = `The user is blocked. Generate a rescue action: a smaller, more accessible version of the original task.
-The rescue must be completable in 5–30 minutes. Steps must be concrete — no advice or motivation. Return JSON only.`;
+const RESCUE_CTX = `The user is blocked. If they described exactly where they got stuck, answer that specific problem directly — give the command, code, or next concrete action that unblocks them. Otherwise generate a smaller, more accessible version of the original task completable in 5–30 minutes. Steps must be concrete — no advice or motivation. Return JSON only.`;
 
 // ── Exported functions ─────────────────────────────────────────────────────
 
@@ -384,23 +392,34 @@ Continue from where the previous track left off. Do not repeat completed tasks. 
 }
 
 function buildAgentStepsPrompt(day, track, failureMemory, user) {
+  const category = String(day?.category || track?.goalCategory || 'other').trim();
   const ctx = [
-    user?.currentProject  ? `Their project: ${user.currentProject}` : '',
+    user?.currentProject  ? `Project name: ${user.currentProject}` : '',
     user?.weekGoal        ? `Week target: ${user.weekGoal}` : '',
     user?.experienceLevel ? `Experience: ${user.experienceLevel}` : '',
     user?.triedBefore     ? `Already tried: ${user.triedBefore}` : '',
   ].filter(Boolean).join('\n');
 
-  return `Today's task: ${String(day?.title || '').trim()}
+  const toolLine = ({
+    build:    'Tools likely in use: VS Code, terminal, npm/yarn, git. Steps must name exact commands and file paths.',
+    write:    'Tools likely in use: text editor or Google Docs. Steps must name exact filenames and word counts.',
+    research: 'Tools likely in use: browser. Steps must name exact search queries or sources to check.',
+    outreach: 'Tools likely in use: email or DM. Steps must include exact message templates or scripts.',
+    test:     'Tools likely in use: terminal, browser DevTools. Steps must name exact test commands or checks.',
+    practice: 'Steps must include exact exercises, reps, or drills with a measurable success signal.',
+  })[category] || 'Steps must name the exact tool, file, or medium — never generic descriptions.';
+
+  return `Today\'s task: ${String(day?.title || '').trim()}
 ${day?.successCriteria ? `Done when: ${day.successCriteria}` : ''}
-${day?.why ? `Why this matters: ${day.why}` : ''}
+${day?.why ? `Why: ${day.why}` : ''}
 Goal: ${String(track?.goal || '').trim()}
-Category: ${String(day?.category || track?.goalCategory || 'other').trim()}
-Time budget: ${Number(day?.estimateMinutes) || 60} minutes
+Category: ${category}
+Time budget: ${Number(day?.estimateMinutes) || 60} min
 Recurring blockers: ${buildPatternSummary(failureMemory)}
 ${ctx ? `\n${ctx}` : ''}
+${toolLine}
 
-Generate 3–5 sequential micro-steps. Step 1 = lowest-friction concrete action producing something real (10–15 min). Each step names the actual object/tool/output. Steps together make the "done when" criterion verifiable. No meta steps. No "open your workspace". No "decide what to do".`;
+Generate 3-5 sequential micro-steps. Step 1 = lowest-friction action producing something real in 10-15 min. Hints must be actual code, commands, or templates — not generic advice.`;
 }
 
 function buildProofCheckPrompt(day, proofInput, track) {
@@ -414,15 +433,19 @@ Be practical. Partial credit is fine if genuine progress is visible. Return JSON
 }
 
 function buildRescuePrompt(day, blockerReason, track, failureMemory, diagnosis) {
-  const diagCtx = diagnosis?.stuckAt
+  const hasDiag = Boolean(diagnosis?.stuckAt);
+  const diagCtx = hasDiag
     ? `\nWhere they got stuck: ${String(diagnosis.stuckAt).slice(0, 200)}\nWhat they tried: ${String(diagnosis.tried || 'nothing mentioned').slice(0, 200)}`
     : '';
+  const instruction = hasDiag
+    ? 'Answer the specific blocker directly — give the exact next action, command, or snippet that unblocks them. The rescue title should reflect what they asked. Steps must directly address where they got stuck.'
+    : 'Generate a rescue action completable in 5-30 minutes — smaller and more accessible than the original.';
   return `Original task: ${String(day?.title || '').trim()}
 Goal: ${String(track?.goal || '').trim()}
 Blocker: ${String(blockerReason || 'not specified').trim()}${diagCtx}
 Past blocker patterns: ${buildPatternSummary(failureMemory)}
 
-Generate a rescue action completable in 5–30 minutes — smaller and more accessible than the original. Steps must be concrete, no advice or motivation.`;
+${instruction} Steps must be concrete, no advice or motivation.`;
 }
 
 function buildActionKitPrompt(day, track) {

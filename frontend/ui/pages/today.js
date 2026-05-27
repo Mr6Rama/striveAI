@@ -97,6 +97,7 @@ function renderActive(container, track, today, dayPlan, state, actions) {
   const paceWarn      = computePaceWarning(track, state.history);
   const weekRecapData = state.ui?.weekRecapData;
   const showPace      = paceWarn.level !== 'ok' && status === 'pending' && !_dismissedPace.has(track.id);
+  const firstStep     = today.agentSession?.steps?.[0]?.text || null;
 
   container.innerHTML = `
     <div class="v2-page v2-page-center">
@@ -105,7 +106,7 @@ function renderActive(container, track, today, dayPlan, state, actions) {
       ${weekRecapData ? weekRecapCard(weekRecapData) : ''}
       ${showPace ? paceBanner(paceWarn) : ''}
       ${softReturn ? softReturnBanner(missGap) : `<p class="v2-morning-brief">${esc(brief)}</p>`}
-      ${actionCard(dayPlan)}
+      ${actionCard(dayPlan, firstStep)}
       ${insight ? `<div class="v2-insight">${esc(insight)}</div>` : ''}
 
       <button id="td-agent" class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full" style="margin-bottom:10px">
@@ -166,7 +167,7 @@ function renderComplete(container, track, today, dayPlan, status, actions) {
 
       ${isLast
         ? `<button id="td-recap" class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full" style="margin-bottom:10px">
-             Go to Day 7 Recap →
+             ${track.kind === 'spark' ? 'Go to Spark Recap →' : 'Go to Track Recap →'}
            </button>`
         : `<p class="v2-muted-text" style="text-align:center;padding:14px 0">
              Day ${dayNum} complete. Come back tomorrow for Day ${dayNum + 1}.
@@ -297,7 +298,7 @@ function topBar(dayNum, status, goal, track) {
     <p class="v2-muted-text" style="margin-bottom:16px">${esc(goal || '')}</p>`;
 }
 
-function actionCard(dayPlan) {
+function actionCard(dayPlan, firstStep) {
   return `
     <div class="v2-card v2-card--focus v2-bracketed" style="margin-bottom:20px;overflow:visible">
       <span class="v2-br-tr"></span><span class="v2-br-bl"></span>
@@ -305,9 +306,15 @@ function actionCard(dayPlan) {
       <h2 class="v2-today-title">${esc(dayPlan.title || 'No task assigned')}</h2>
       ${dayPlan.why ? `<p class="v2-body-text" style="margin-bottom:12px">${esc(dayPlan.why)}</p>` : ''}
       ${dayPlan.successCriteria
-        ? `<div class="v2-done-criteria" style="margin-bottom:10px">You're done when ${esc(dayPlan.successCriteria)}</div>`
+        ? `<div class="v2-done-criteria" style="margin-bottom:10px">Done when ${esc(dayPlan.successCriteria)}</div>`
         : ''}
-      <p class="v2-mission-meta">${dayPlan.estimateMinutes || 60} min</p>
+      ${firstStep
+        ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--v2-border)">
+             <span style="font-size:.72rem;color:var(--v2-muted);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px">Start with</span>
+             <p style="margin:0;font-size:.85rem;color:var(--v2-text);line-height:1.5">${esc(firstStep)}</p>
+           </div>`
+        : ''}
+      <p class="v2-mission-meta" style="margin-top:${firstStep ? '10px' : '0'}">${dayPlan.estimateMinutes || 60} min</p>
     </div>`;
 }
 
