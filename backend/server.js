@@ -128,6 +128,7 @@ const AI_ACTIONS = new Set([
   'spark_generate', 'track_generate_30',         // new generation actions
   'spark_to_track_extend', 'track_continue_30',  // new continuation actions
   'agent_steps', 'agent_hint', 'rescue_action', 'action_kit', 'day7_recap', 'adapt_day', 'v2_proof_check',
+  'sharpen_goal', 'agent_step_feedback', 'week_recap',
 ]);
 const ACTION_AI_CONFIG = Object.freeze({
   default: {
@@ -323,6 +324,30 @@ const ACTION_AI_CONFIG = Object.freeze({
     topP: 1,
     contextLimits: { promptChars: 6000, systemChars: 1600, totalChars: 7400 },
   },
+  sharpen_goal: {
+    model: OPENAI_MODEL,
+    maxCompletionTokens: 250,
+    reasoningEffort: 'minimal',
+    temperature: 0.7,
+    topP: 1,
+    contextLimits: { promptChars: 1200, systemChars: 400, totalChars: 1600 },
+  },
+  agent_step_feedback: {
+    model: OPENAI_MODEL,
+    maxCompletionTokens: 80,
+    reasoningEffort: 'minimal',
+    temperature: 0.5,
+    topP: 1,
+    contextLimits: { promptChars: 800, systemChars: 300, totalChars: 1100 },
+  },
+  week_recap: {
+    model: OPENAI_MODEL,
+    maxCompletionTokens: 200,
+    reasoningEffort: 'minimal',
+    temperature: 0.7,
+    topP: 1,
+    contextLimits: { promptChars: 1500, systemChars: 500, totalChars: 2000 },
+  },
 });
 const OPENAI_RESPONSE_CACHE_TTL_MS = 15 * 60 * 1000;
 const OPENAI_RESPONSE_CACHE_MAX_SIZE = 200;
@@ -334,6 +359,7 @@ const V2_JSON_ACTIONS = new Set([
   'spark_generate', 'track_generate_30',
   'spark_to_track_extend', 'track_continue_30',
   'agent_steps', 'rescue_action', 'action_kit', 'adapt_day', 'v2_proof_check',
+  'sharpen_goal', 'agent_step_feedback', 'week_recap',
 ]);
 // v2 actions that return plain text
 const V2_PLAINTEXT_ACTIONS = new Set(['agent_hint', 'day7_recap']);
@@ -503,6 +529,19 @@ function buildV2Fallback(action, prompt) {
       verdict: 'partial',
       note: 'Automatic verification unavailable. Check your work against the success criteria manually.',
     };
+  }
+
+  if (action === 'sharpen_goal') {
+    const goal = parseV2PromptField(safePrompt, 'Goal') || 'your goal';
+    return { sharpenedGoal: goal, artifactStatement: '', whyItMatters: '' };
+  }
+
+  if (action === 'agent_step_feedback') {
+    return { ok: true, tip: 'Good progress on this step.' };
+  }
+
+  if (action === 'week_recap') {
+    return { shipped: 'Another week of progress made', onTrack: true, nextWeekFocus: 'Keep building momentum' };
   }
 
   return {};

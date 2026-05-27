@@ -34,6 +34,7 @@ export function createDefaultUserV2() {
     whyItMatters:     '',
     triedBefore:      '',
     preferredRestDay: null,   // 1–7: position within each 7-day week (1=first day, 7=last). null = no rest day (Spark).
+    goalArtifact:     '',     // The one concrete artifact the user commits to building (set during goal sharpening)
   };
 }
 
@@ -125,6 +126,7 @@ export function createInitialState() {
       proofLoading:      false,
       recapLoading:      false,
       trackContinuing:   false,
+      weekRecapData:     null,  // { weekNumber, shipped, onTrack, nextWeekFocus } — session-only
     },
   };
 }

@@ -5,6 +5,7 @@ import { getState, replaceState, subscribe, updateState } from './core/store.js'
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain, clearProgressData } from './services/persistence.js';
 import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay, generateDay7Recap, generateContinuationWeek, generateSparkToTrackExtend } from './services/ai-v2.js';
+import { sharpenGoal } from './services/ai-v2-coaching.js';
 import { rolloverIfNeeded, analyzePatterns, deriveInsight, shouldTriggerAdaptation, applyAdaptResult, isTrackComplete } from './domain/today-engine.js';
 import { resetProofState } from './ui/pages/proof.js';
 import { resetBlockedState } from './ui/pages/blocked.js';
@@ -179,6 +180,7 @@ async function handleGenerate(draft) {
         whyItMatters:     draft.whyItMatters || state.user.whyItMatters || '',
         triedBefore:      draft.triedBefore || state.user.triedBefore || '',
         preferredRestDay: restDayPosition,
+        goalArtifact:     draft.goalArtifact || state.user.goalArtifact || '',
       },
       track,
       today,
@@ -195,6 +197,17 @@ async function handleGenerate(draft) {
   } catch (err) {
     updateState((s) => { s.ui.loading = false; s.ui.trackGenerating = false; s.ui.error = 'Failed to generate your plan — please try again.'; return s; });
   }
+}
+
+async function handleSharpenGoal(draftInput) {
+  try {
+    return await sharpenGoal({
+      goal:           String(draftInput?.specificGoal || draftInput?.goal || ''),
+      category:       draftInput?.goalCategory || 'other',
+      weekGoal:       draftInput?.weekGoal     || '',
+      currentProject: draftInput?.currentProject || '',
+    });
+  } catch (_e) { return null; }
 }
 
 async function handleStartDay1() {
@@ -911,6 +924,7 @@ function renderApp(state) {
       catch (err) { throw new Error(authErrorMessage(err)); }
     },
     onGenerate:               handleGenerate,
+    onSharpenGoal:            handleSharpenGoal,
     onStartDay1:              handleStartDay1,
     onTelegramLink:           handleTelegramLink,
     onTelegramRefresh:        handleTelegramRefresh,

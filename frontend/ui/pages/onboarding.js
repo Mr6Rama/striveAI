@@ -82,6 +82,7 @@ function defaultDraft() {
     pingHour:       9,
     trackKind:      'track', // 'spark' | 'track'
     restDayPosition: 6,      // 1–7: which day position within each 7-day week is rest
+    goalArtifact:   '',      // set when user accepts a sharpened goal
     // kept for API compat — not shown in UI
     escalationRule: 'none',
     whyItMatters:   '',
@@ -116,14 +117,20 @@ export function clearOnboardingDraft() {
     localStorage.removeItem(DRAFT_KEY);
     localStorage.removeItem(STEP_KEY);
   } catch (_e) {}
-  draft = defaultDraft();
-  currentStep = 1;
+  draft        = defaultDraft();
+  currentStep  = 1;
+  sharpenState = 'idle';
+  sharpenResult = null;
 }
 
-let draft       = loadDraft();
-let currentStep = loadStep();
-let lastState   = null;
-let lastActions = null;
+let draft         = loadDraft();
+let currentStep   = loadStep();
+let lastState     = null;
+let lastActions   = null;
+let lastContainer = null;
+// Goal sharpening state machine — 'idle' | 'loading' | 'ready' | 'accepted' | 'skipped'
+let sharpenState  = 'idle';
+let sharpenResult = null;
 
 export function render(container, state, actions) {
   lastState   = state;
@@ -392,11 +399,46 @@ function renderRestDay(container) {
 
 // ── Step 7: Setup + Confirm ────────────────────────────────────────────────
 
-function renderSetup(container) {
-  const tg      = lastState?.telegram || {};
-  const loading = Boolean(lastState?.ui?.trackGenerating || lastState?.ui?.loading);
-  const errText = String(lastState?.ui?.error || '');
-
+function renderSharpenSection() {
+  if (sharpenState === 'loading') {
+    return `<div class="v2-card" style="margin-bottom:20px">
+      <div class="v2-loading-center" style="padding:20px">
+        <div class="v2-spin"></div>
+        <p class="v2-muted-text" style="margin-top:8px">Refining your goal…</p>
+      </div>
+    </div>`;
+  }
+  if (sharpenState === 'ready' && sharpenResult) {
+    return `<div class="v2-card" style="margin-bottom:20px">
+      <div class="v2-section-label" style="margin-bottom:10px">Goal refinement</div>
+      <p class="v2-muted-text" style="margin-bottom:3px;font-size:.78rem">Original</p>
+      <p class="v2-body-text" style="margin-bottom:12px;opacity:.5">${esc(draft.specificGoal.slice(0, 120))}</p>
+      <p class="v2-muted-text" style="margin-bottom:3px;font-size:.78rem">Sharpened</p>
+      <p class="v2-h3" style="margin-bottom:6px">${esc(sharpenResult.sharpenedGoal)}</p>
+      ${sharpenResult.artifactStatement
+        ? `<p class="v2-muted-text" style="margin-bottom:12px;font-size:.82rem">Artifact: ${esc(sharpenResult.artifactStatement)}</p>`
+        : ''}
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="ob-sharpen-accept" class="v2-btn v2-btn--primary v2-btn--sm" style="flex:1">Looks good →</button>
+        <button id="ob-sharpen-skip"   class="v2-btn v2-btn--ghost v2-btn--sm">Keep original</button>
+      </div>
+    </div>`;
+  }
+  if (sharpenState === 'accepted' && sharpenResult) {
+    return `<div class="v2-card" style="margin-bottom:20px">
+      <div class="v2-section-label" style="margin-bottom:6px">Your sharpened goal</div>
+      <p class="v2-body-text" style="font-weight:600;margin:0">${esc(sharpenResult.sharpenedGoal)}</p>
+      ${sharpenResult.artifactStatement
+        ? `<p class="v2-muted-text" style="margin-top:4px;font-size:.82rem">Artifact: ${esc(sharpenResult.artifactStatement)}</p>`
+        : ''}
+    </div>`;
+  }
+  // skipped or idle — show static summary card
+  const row = (label, value) =>
+    `<div class="v2-meta-row">
+      <span class="v2-muted-text" style="flex-shrink:0">${esc(label)}</span>
+      <span class="v2-body-text" style="text-align:right">${esc(String(value))}</span>
+    </div>`;
   const catLabel  = CATEGORIES.find((c) => c.id === draft.goalCategory)?.label || draft.goalCategory;
   const blkLabel  = BLOCKERS.find((b) => b.id === draft.blocker)?.label || draft.blocker;
   const intLabel  = INTENSITIES.find((i) => i.id === draft.dailyHours)?.label || draft.dailyHours;
@@ -404,6 +446,39 @@ function renderSetup(container) {
   const restLabel = draft.trackKind === 'track'
     ? (REST_DAY_OPTIONS.find((r) => r.id === draft.restDayPosition)?.label || `Day ${draft.restDayPosition}`)
     : null;
+  return `<div class="v2-card" style="margin-bottom:20px">
+    ${row('Category',     catLabel)}
+    ${row('Goal',         (draft.specificGoal || '—').slice(0, 80))}
+    ${row('Target',       (draft.weekGoal     || '—').slice(0, 80))}
+    ${draft.currentProject ? row('Starting from', draft.currentProject.slice(0, 80)) : ''}
+    ${row('Main obstacle', blkLabel)}
+    ${row('Daily time',    intLabel)}
+    ${row('Track type',   kindLabel)}
+    ${restLabel ? row('Rest day', `${restLabel} each week`) : ''}
+  </div>`;
+}
+
+function renderSetup(container) {
+  lastContainer = container;
+  const tg      = lastState?.telegram || {};
+  const loading = Boolean(lastState?.ui?.trackGenerating || lastState?.ui?.loading);
+  const errText = String(lastState?.ui?.error || '');
+
+  // Auto-trigger goal sharpening on first visit to step 7
+  if (sharpenState === 'idle' && draft.specificGoal.trim()) {
+    sharpenState = 'loading';
+    (async () => {
+      try {
+        const result = await lastActions?.onSharpenGoal?.({ ...draft });
+        if (!lastContainer?.isConnected) return;
+        if (result?.sharpenedGoal) { sharpenResult = result; sharpenState = 'ready'; }
+        else sharpenState = 'skipped';
+      } catch (_e) {
+        sharpenState = 'skipped';
+      }
+      if (lastContainer?.isConnected) renderSetup(lastContainer);
+    })();
+  }
 
   const pingCards = PING_OPTIONS.map((opt) => {
     const on = draft.pingSelection === opt.id;
@@ -413,25 +488,16 @@ function renderSetup(container) {
     </button>`;
   }).join('');
 
-  const row = (label, value) =>
-    `<div class="v2-meta-row">
-      <span class="v2-muted-text" style="flex-shrink:0">${esc(label)}</span>
-      <span class="v2-body-text" style="text-align:right">${esc(String(value))}</span>
-    </div>`;
+  // Generate button is disabled until sharpening completes (or goal is empty)
+  const goalExists  = Boolean(draft.specificGoal.trim());
+  const sharpenDone = !goalExists || sharpenState === 'accepted' || sharpenState === 'skipped';
+  const genLabel    = loading ? 'Building your track…' :
+    draft.trackKind === 'spark' ? 'Build my 7-day Spark →' : 'Build my 28-day Track →';
 
   container.innerHTML = wrap(`
     ${hdr(7, 'Review and generate')}
 
-    <div class="v2-card" style="margin-bottom:20px">
-      ${row('Category',     catLabel)}
-      ${row('Goal',         (draft.specificGoal || '—').slice(0, 80))}
-      ${row('Target',       (draft.weekGoal     || '—').slice(0, 80))}
-      ${draft.currentProject ? row('Starting from', draft.currentProject.slice(0, 80)) : ''}
-      ${row('Main obstacle', blkLabel)}
-      ${row('Daily time',    intLabel)}
-      ${row('Track type',   kindLabel)}
-      ${restLabel ? row('Rest day', `${restLabel} each week`) : ''}
-    </div>
+    ${renderSharpenSection()}
 
     <div class="v2-section-label" style="margin-bottom:10px">Telegram check-ins <span class="v2-muted-text">(optional)</span></div>
     <div class="v2-sel-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px">
@@ -452,9 +518,23 @@ function renderSetup(container) {
          </div>`}
 
     ${errText ? `<p class="v2-err" style="margin-bottom:12px">${esc(errText)}</p>` : ''}
-    ${nextBtn(loading ? 'Building your track…' :
-      draft.trackKind === 'spark' ? 'Build my 7-day Spark →' : 'Build my 28-day Track →', loading)}
+    ${nextBtn(genLabel, loading || !sharpenDone)}
     ${backBtn()}`);
+
+  // Sharpening accept / skip
+  container.querySelector('#ob-sharpen-accept')?.addEventListener('click', () => {
+    if (sharpenResult) {
+      draft.specificGoal = sharpenResult.sharpenedGoal;
+      draft.goalArtifact = sharpenResult.artifactStatement || '';
+      saveDraft();
+    }
+    sharpenState = 'accepted';
+    renderSetup(container);
+  });
+  container.querySelector('#ob-sharpen-skip')?.addEventListener('click', () => {
+    sharpenState = 'skipped';
+    renderSetup(container);
+  });
 
   container.querySelectorAll('[data-ping]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -472,13 +552,9 @@ function renderSetup(container) {
   });
 
   container.querySelector('#ob-tg-connect')?.addEventListener('click', async () => {
-    const note = container.querySelector('#ob-tg-note');
     try {
       await lastActions?.onTelegramLink?.();
-      if (note) note.textContent = "Opened. Click 'I connected →' to refresh.";
-    } catch (err) {
-      if (note) note.textContent = String(err?.message || 'Could not start connection.');
-    }
+    } catch (_err) {}
   });
 
   container.querySelector('#ob-tg-refresh')?.addEventListener('click', async () => {
@@ -503,7 +579,6 @@ function renderSetup(container) {
   });
 
   container.querySelector('#ob-back')?.addEventListener('click', () => {
-    // If Spark was chosen, step 6 was skipped — go back to step 5
     go(draft.trackKind === 'spark' ? 5 : 6, container);
   });
 }
