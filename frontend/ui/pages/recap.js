@@ -1,5 +1,6 @@
 // Day 7 Recap — /recap
 // Shown when track.status === 'complete'.
+import { renderJournal, wireJournal } from '../components/journal.js';
 
 let reflectionRequestedFor = '';
 
@@ -31,53 +32,40 @@ export function render(container, state, actions) {
 // ── Page builder ──────────────────────────────────────────────────────────────
 
 function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram, user, entries, days) {
-  const why      = String(user?.whyItMatters || '').trim();
-  const weekGoal = String(user?.weekGoal     || '').trim();
+  const why       = String(user?.whyItMatters || '').trim();
+  const weekGoal  = String(user?.weekGoal     || '').trim();
+  const isSpark   = track.kind === 'spark';
+  const totalDays = track.totalDays || (isSpark ? 7 : 28);
+  const typeLabel = isSpark ? '7-day Spark' : `${totalDays}-day Track`;
 
   return `
     <div class="v2-page">
 
       <div class="v2-kicker" style="margin-bottom:8px">
-        <span class="v2-badge v2-badge--done">Week complete</span>
+        <span class="v2-badge v2-badge--done">${isSpark ? 'Spark complete' : 'Track complete'}</span>
       </div>
-      <h1 class="v2-h1" style="margin-bottom:6px">Your 7-day track is complete.</h1>
+      <h1 class="v2-h1" style="margin-bottom:6px">Your ${typeLabel} is complete.</h1>
       <p class="v2-sub">${esc(track.goal || '')}</p>
-      ${weekGoal ? `<p class="v2-muted-text" style="margin-top:4px">By Day 7 you wanted: ${esc(weekGoal)}</p>` : ''}
+      ${weekGoal ? `<p class="v2-muted-text" style="margin-top:4px">By Day ${totalDays} you wanted: ${esc(weekGoal)}</p>` : ''}
       ${why ? `<blockquote class="v2-recap-why">${esc(why)}</blockquote>` : ''}
 
       ${renderResultGrid(stats)}
       ${patternSummary ? renderPatternCard(patternSummary) : ''}
       ${bestFormat     ? renderFormatCard(bestFormat)      : ''}
       ${renderAIReflection(recapText, recapLoading)}
+      ${renderArtifactPortfolio(entries, track, user, isSpark)}
       ${renderTimeline(days, entries, track)}
-      ${renderCTAs(continuing, telegram)}
+      ${renderCTAs(continuing, telegram, isSpark)}
 
     </div>`;
 }
 
 function renderTimeline(days, entries, track) {
-  const rows = days.map((day) => {
-    const entry = entries.find((e) => e.trackId === track.id && e.dayNumber === day.dayNumber);
-    const status = entry?.outcome || day.status || 'pending';
-    const proof  = String(entry?.proofValue || '').trim();
-    const isLink = entry?.proofType === 'link' && /^https?:\/\//i.test(proof);
-    const proofBlock = !proof ? '' : isLink
-      ? `<a href="${esc(proof)}" target="_blank" rel="noopener" class="v2-link">${esc(proof)}</a>`
-      : `<p class="v2-body-text" style="margin:0;white-space:pre-wrap">${esc(proof)}</p>`;
-    return `
-      <div class="v2-recap-day v2-recap-day--${esc(status)}">
-        <div class="v2-recap-day__head">
-          <span class="v2-section-label">Day ${day.dayNumber}</span>
-          <span class="v2-recap-day__status">${esc(status)}</span>
-        </div>
-        <p class="v2-body-text" style="margin:6px 0 0;font-weight:600">${esc(day.title || '—')}</p>
-        ${proofBlock ? `<div class="v2-recap-day__proof">${proofBlock}</div>` : ''}
-      </div>`;
-  }).join('');
+  const isSpark = track.kind === 'spark';
   return `
-    <div class="v2-card" style="margin-bottom:16px">
-      <div class="v2-section-label" style="margin-bottom:12px">Your week, day by day</div>
-      <div class="v2-recap-timeline">${rows}</div>
+    <div style="margin-bottom:16px">
+      <div class="v2-section-label" style="margin-bottom:12px">${isSpark ? 'Your week, day by day' : 'Your journey, week by week'}</div>
+      ${renderJournal({ track, entries, currentDayNumber: track.currentDayNumber || days.length, variant: 'full' })}
     </div>`;
 }
 
@@ -86,7 +74,7 @@ function renderTimeline(days, entries, track) {
 function computeStats(track, entries, days) {
   const te = entries.filter((e) => e.trackId === track.id);
   return {
-    total:         days.length || 7,
+    total:         days.length || track.totalDays || 7,
     daysReturned:  te.length,
     done:          te.filter((e) => e.outcome === 'done').length,
     rescued:       te.filter((e) => e.outcome === 'rescued').length,
@@ -170,6 +158,57 @@ function renderFormatCard(text) {
     </div>`;
 }
 
+// ── Artifact portfolio ────────────────────────────────────────────────────────
+
+function renderArtifactPortfolio(entries, track, user, isSpark) {
+  const proofEntries = (Array.isArray(entries) ? entries : [])
+    .filter((e) => e.trackId === track.id && String(e.proofValue || '').trim().length > 10)
+    .sort((a, b) => (a.dayNumber || 0) - (b.dayNumber || 0));
+
+  if (!proofEntries.length) return '';
+
+  const goalArtifact = String(user?.goalArtifact || '').trim();
+
+  // Group by week for Track; flat for Spark
+  let bodyHtml;
+  if (isSpark || !track.phases) {
+    bodyHtml = proofEntries.map((e) => proofItem(e)).join('');
+  } else {
+    const weeks = {};
+    proofEntries.forEach((e) => {
+      const w = Math.ceil((e.dayNumber || 1) / 7);
+      if (!weeks[w]) weeks[w] = [];
+      weeks[w].push(e);
+    });
+    bodyHtml = Object.entries(weeks).map(([w, items]) => {
+      const phase = Array.isArray(track.phases) ? track.phases.find((p) => p.weekNumber === Number(w)) : null;
+      const label = phase?.name ? `Week ${w} — ${phase.name}` : `Week ${w}`;
+      return `<p class="v2-muted-text" style="font-size:.78rem;margin:10px 0 4px;text-transform:uppercase;letter-spacing:.06em">${esc(label)}</p>
+              ${items.map((e) => proofItem(e)).join('')}`;
+    }).join('');
+  }
+
+  return `
+    <div class="v2-card" style="margin-bottom:16px" id="recap-portfolio">
+      <div class="v2-section-label" style="margin-bottom:10px">What you built</div>
+      ${goalArtifact ? `<p class="v2-muted-text" style="margin-bottom:10px;font-size:.85rem">You set out to: ${esc(goalArtifact)}</p>` : ''}
+      ${bodyHtml}
+      <button id="recap-portfolio-export" class="v2-btn v2-btn--ghost v2-btn--sm" style="margin-top:12px">Export portfolio →</button>
+    </div>`;
+}
+
+function proofItem(e) {
+  const proof = String(e.proofValue || '').trim().slice(0, 200);
+  const isUrl = /^https?:\/\//.test(proof);
+  const proofHtml = isUrl
+    ? `<a href="${esc(proof)}" target="_blank" rel="noopener" style="color:var(--v2-blue);font-size:.82rem;word-break:break-all">${esc(proof.slice(0, 80))}…</a>`
+    : `<span style="font-size:.82rem">${esc(proof)}</span>`;
+  return `<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px">
+    <span class="v2-muted-text" style="flex-shrink:0;font-size:.78rem;padding-top:1px">Day ${e.dayNumber}</span>
+    <div><span class="v2-body-text" style="font-size:.82rem;display:block">${esc(String(e.taskTitle || '').slice(0, 70))}</span>${proofHtml}</div>
+  </div>`;
+}
+
 // ── AI reflection ─────────────────────────────────────────────────────────────
 
 function renderAIReflection(text, loading) {
@@ -200,14 +239,19 @@ function renderAIReflection(text, loading) {
 
 // ── CTAs ──────────────────────────────────────────────────────────────────────
 
-function renderCTAs(continuing, telegram) {
+function renderCTAs(continuing, telegram, isSpark) {
+  const continueLbl = continuing
+    ? (isSpark ? 'Building your 28-day Track…' : 'Generating next 30 days…')
+    : (isSpark ? 'Continue → 28-day Track' : 'Extend +30 days →');
+  const newLbl = isSpark ? 'Start something new' : 'Pivot to new goal';
+
   return `
     <div class="v2-row v2-row--col" style="gap:10px;margin-bottom:12px">
       <button id="recap-continue" ${continuing ? 'disabled' : ''} class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full">
-        ${esc(continuing ? 'Generating next week…' : 'Continue this goal — next 7 days →')}
+        ${esc(continueLbl)}
       </button>
       <button id="recap-new" class="v2-btn v2-btn--secondary v2-btn--full">
-        Start a new 7-day track
+        ${esc(newLbl)}
       </button>
     </div>
 
@@ -232,6 +276,8 @@ function wireEvents(container, state, actions, track, recapText, patterns) {
     el.addEventListener('click', () => actions.onNavigate?.(el.getAttribute('data-route')));
   });
 
+  wireJournal(container);
+
   container.querySelector('#recap-continue')?.addEventListener('click', () => {
     if (state.ui?.trackContinuing) return;
     actions.onRecapContinue?.({ recapText });
@@ -247,6 +293,17 @@ function wireEvents(container, state, actions, track, recapText, patterns) {
       if (btn) {
         btn.textContent = 'Copied to clipboard';
         setTimeout(() => { btn.textContent = 'Export my pattern'; }, 2000);
+      }
+    }).catch(() => {});
+  });
+
+  container.querySelector('#recap-portfolio-export')?.addEventListener('click', () => {
+    const text = buildPortfolioExportText(track, state.history?.entries || [], state.user);
+    navigator.clipboard?.writeText(text).then(() => {
+      const btn = container.querySelector('#recap-portfolio-export');
+      if (btn) {
+        btn.textContent = 'Copied ✓';
+        setTimeout(() => { btn.textContent = 'Export portfolio →'; }, 2000);
       }
     }).catch(() => {});
   });
@@ -272,8 +329,9 @@ function buildExportText(track, history) {
     return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} (×${n})`).join(', ');
   })();
 
+  const exportKind = track.kind === 'spark' ? '7-day Spark' : `${track.totalDays || 28}-day Track`;
   return [
-    'StriveAI — 7-Day Pattern Export',
+    `StriveAI — ${exportKind} Export`,
     `Goal: ${track.goal || '—'}`,
     `Category: ${track.goalCategory || '—'}`,
     `Start: ${track.startDate || '—'}`,
@@ -283,6 +341,27 @@ function buildExportText(track, history) {
     '',
     'Generated by StriveAI',
   ].join('\n');
+}
+
+function buildPortfolioExportText(track, entries, user) {
+  const proofEntries = (Array.isArray(entries) ? entries : [])
+    .filter((e) => e.trackId === track.id && String(e.proofValue || '').trim().length > 10)
+    .sort((a, b) => (a.dayNumber || 0) - (b.dayNumber || 0));
+
+  const goalArtifact = String(user?.goalArtifact || '').trim();
+  const exportKind   = track.kind === 'spark' ? '7-day Spark' : `${track.totalDays || 28}-day Track`;
+
+  const lines = [
+    `StriveAI — Portfolio Export`,
+    `${exportKind}: ${track.goal || '—'}`,
+    goalArtifact ? `Artifact goal: ${goalArtifact}` : '',
+    '',
+    ...proofEntries.map((e) => `Day ${e.dayNumber} · ${e.taskTitle || ''} → ${String(e.proofValue || '').trim().slice(0, 300)}`),
+    '',
+    'Generated by StriveAI',
+  ].filter((l) => l !== undefined);
+
+  return lines.join('\n');
 }
 
 function esc(s) {

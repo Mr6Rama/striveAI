@@ -24,12 +24,14 @@ let phase      = 'reason';
 let selectedId = '';
 let rescueData = null;
 let repeating  = false;
+let diagnosis  = { stuckAt: '', tried: '' };
 
 export function resetBlockedState() {
   phase      = 'reason';
   selectedId = '';
   rescueData = null;
   repeating  = false;
+  diagnosis  = { stuckAt: '', tried: '' };
 }
 
 export function render(container, state, actions) {
@@ -73,9 +75,10 @@ function buildPage(phase, isSkip, dayNum, dayPlan, selId, rescue, repeating, ui)
       <h1 class="v2-h1" style="margin-bottom:6px">${esc(question)}</h1>
       <p class="v2-sub">${esc(dayPlan.title || '')}</p>
 
-      ${phase === 'reason'  ? renderReasonPicker(selId)               : ''}
-      ${phase === 'loading' ? renderLoading()                         : ''}
-      ${phase === 'rescue'  ? renderRescue(rescue, isSkip, repeating) : ''}
+      ${phase === 'reason'    ? renderReasonPicker(selId)               : ''}
+      ${phase === 'diagnosis' ? renderDiagnosis()                       : ''}
+      ${phase === 'loading'   ? renderLoading()                         : ''}
+      ${phase === 'rescue'    ? renderRescue(rescue, isSkip, repeating) : ''}
 
       <button data-route="/today" class="v2-btn v2-btn--ghost" style="margin-top:12px">← Back to Today</button>
 
@@ -93,6 +96,27 @@ function renderReasonPicker(selId) {
     <button id="blocked-next" ${selId ? '' : 'disabled'} class="v2-btn v2-btn--amber v2-btn--lg v2-btn--full">
       Get rescue action →
     </button>`;
+}
+
+function renderDiagnosis() {
+  const canNext = diagnosis.stuckAt.trim().length >= 10;
+  return `
+    <div style="margin-top:16px">
+      <div class="v2-field" style="margin-bottom:14px">
+        <label class="v2-label" style="margin-bottom:6px;display:block">Where exactly did you get stuck?</label>
+        <textarea id="diag-stuck" rows="3" class="v2-textarea" placeholder="e.g. I didn't know how to start the API call, got confused by the docs"
+          style="resize:none;font-size:.9rem">${esc(diagnosis.stuckAt)}</textarea>
+        <p class="v2-muted-text" style="font-size:.78rem;margin-top:3px">Required — at least 10 characters</p>
+      </div>
+      <div class="v2-field" style="margin-bottom:16px">
+        <label class="v2-label" style="margin-bottom:6px;display:block">What have you tried? <span class="v2-muted-text">(optional)</span></label>
+        <textarea id="diag-tried" rows="2" class="v2-textarea" placeholder="e.g. Tried searching StackOverflow, looked at docs for 20 min"
+          style="resize:none;font-size:.9rem">${esc(diagnosis.tried)}</textarea>
+      </div>
+      <button id="diag-next" ${canNext ? '' : 'disabled'} class="v2-btn v2-btn--amber v2-btn--lg v2-btn--full">
+        Get rescue action →
+      </button>
+    </div>`;
 }
 
 function renderLoading() {
@@ -159,12 +183,28 @@ function wireEvents(container, state, actions, isSkip, dayPlan) {
 
   container.querySelector('#blocked-next')?.addEventListener('click', () => {
     if (!selectedId) return;
+    diagnosis = { stuckAt: '', tried: '' };
+    phase = 'diagnosis';
+    render(container, state, actions);
+  });
+
+  // Diagnosis textareas
+  container.querySelector('#diag-stuck')?.addEventListener('input', (e) => {
+    diagnosis.stuckAt = e.target.value;
+    const btn = container.querySelector('#diag-next');
+    if (btn) btn.disabled = diagnosis.stuckAt.trim().length < 10;
+  });
+  container.querySelector('#diag-tried')?.addEventListener('input', (e) => {
+    diagnosis.tried = e.target.value;
+  });
+  container.querySelector('#diag-next')?.addEventListener('click', () => {
+    if (diagnosis.stuckAt.trim().length < 10) return;
     const reason     = REASONS.find((r) => r.id === selectedId);
     const reasonText = REASON_TEXT[selectedId] || reason?.label || selectedId;
     const category   = reason?.category || 'other';
     phase = 'loading';
     render(container, state, actions);
-    actions.onBlockerDiagnose?.({ reasonText, category, isSkip });
+    actions.onBlockerDiagnose?.({ reasonText, category, isSkip, diagnosis: { ...diagnosis } });
   });
 
   container.querySelector('#rescue-agent')?.addEventListener('click', () => actions.onNavigate?.('/agent'));

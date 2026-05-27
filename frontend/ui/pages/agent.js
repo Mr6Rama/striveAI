@@ -267,7 +267,7 @@ function contextPanel(dayPlan, track, today, insight, user) {
   return `
     <div class="v2-context-panel">
       <div class="v2-kicker v2-kicker--muted" style="margin-bottom:8px">
-        Day ${dayNum} of 7
+        Day ${dayNum} of ${track.totalDays || 7}
       </div>
       <p class="v2-muted-text" style="margin-bottom:10px">${esc(project ? `Working on: ${focus}` : focus)}</p>
       <p class="v2-h3" style="margin-bottom:8px">${esc(dayPlan.title || '—')}</p>
@@ -319,9 +319,14 @@ function stepList(steps, currentIndex, note, loading) {
 
   steps.forEach((step, i) => {
     if (i < currentIndex) {
+      const tip     = String(step.feedbackTip || '').trim();
+      const tipOk   = Boolean(step.feedbackOk);
+      const tipChip = tip
+        ? `<span style="font-size:.75rem;color:${tipOk ? 'var(--v2-green)' : 'var(--v2-amber)'};display:block;margin-top:2px">${tipOk ? '✓ ' : '→ '}${esc(tip)}</span>`
+        : '';
       parts.push(`<div class="v2-step-done-row">
         <span style="color:var(--v2-green);flex-shrink:0">✓</span>
-        <span style="color:var(--v2-muted)">${esc(step.text)}</span>
+        <div><span style="color:var(--v2-muted)">${esc(step.text)}</span>${tipChip}</div>
       </div>`);
       return;
     }

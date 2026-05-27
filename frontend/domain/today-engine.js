@@ -21,8 +21,8 @@ export function rolloverIfNeeded(state, nowIso) {
     return { state, didRollover: false, missedDayNumbers: [] };
   }
 
-  // Find all past-due days still pending
-  const overdue = track.days.filter((d) => d.date && d.date < now && d.status === 'pending');
+  // Find all past-due days still pending (exclude rest days — they never count as missed)
+  const overdue = track.days.filter((d) => d.date && d.date < now && d.status === 'pending' && !d.isRestDay);
 
   // Find what today's day plan should be
   const todayDayPlan = track.days.find((d) => d.date === now);
@@ -213,8 +213,11 @@ export function deriveInsight(history, adaptationNote) {
 // app.js checks nextDayPlan.adaptedAt before calling AI to prevent duplicates.
 
 export function shouldTriggerAdaptation(outcome, analysis, nextDayPlan) {
-  // No next day plan provided (Day 7 or end of track)
+  // No next day plan provided (end of track)
   if (!nextDayPlan) return { should: false, trigger: '' };
+
+  // Never adapt rest days
+  if (nextDayPlan.isRestDay || nextDayPlan.role === 'rest') return { should: false, trigger: '' };
 
   // Already adapted for this day — do not call AI again
   if (nextDayPlan.adaptedAt) return { should: false, trigger: 'already_adapted' };
@@ -294,8 +297,55 @@ export function buildPatternContext(history) {
 export function isTrackComplete(track) {
   if (!track?.days?.length) return false;
   return track.days.every((d) =>
-    ['done', 'rescued', 'missed', 'skipped', 'blocked'].includes(d.status)
+    ['done', 'rescued', 'missed', 'skipped', 'blocked', 'rest'].includes(d.status)
   );
+}
+
+// ── Pace warning (Track only, no AI) ──────────────────────────────────────
+//
+// Compares actual done/rescued days against a 70% expected completion rate.
+// Only fires after Day 7 to avoid false alarms early in the track.
+// Returns { level: 'ok'|'yellow'|'red', message, daysDeficit }.
+
+export function computePaceWarning(track, history) {
+  if (track?.kind === 'spark') return { level: 'ok', message: '', daysDeficit: 0 };
+
+  const elapsed = track?.currentDayNumber || 1;
+  if (elapsed < 8) return { level: 'ok', message: '', daysDeficit: 0 };
+
+  const entries    = Array.isArray(history?.entries) ? history.entries : [];
+  const workDays   = (track.days || []).filter((d) => !d.isRestDay);
+  const passed     = workDays.filter((d) => d.dayNumber < elapsed);
+  const expected   = Math.floor(passed.length * 0.70);
+  const actualDone = entries.filter(
+    (e) => e.trackId === track.id && (e.outcome === 'done' || e.outcome === 'rescued')
+  ).length;
+  const deficit = expected - actualDone;
+
+  if (deficit <= 0) return { level: 'ok', message: '', daysDeficit: 0 };
+  if (deficit <= 2) return {
+    level:      'yellow',
+    message:    `You're ${deficit} day${deficit > 1 ? 's' : ''} behind pace. Review your progress →`,
+    daysDeficit: deficit,
+  };
+  return {
+    level:      'red',
+    message:    `Your plan needs attention — ${deficit} days behind. Adjust now →`,
+    daysDeficit: deficit,
+  };
+}
+
+// ── Week boundary check ────────────────────────────────────────────────────
+//
+// Returns true if the just-completed day is the last active day of a week
+// (i.e. the week boundary checkpoint should trigger).
+
+export function isWeekBoundary(track, completedDayNumber) {
+  if (track?.kind === 'spark') return false;
+  const totalDays = track?.totalDays || 28;
+  if (completedDayNumber >= totalDays) return false;
+  // Week boundary = day number is a multiple of 7
+  return completedDayNumber > 0 && completedDayNumber % 7 === 0;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

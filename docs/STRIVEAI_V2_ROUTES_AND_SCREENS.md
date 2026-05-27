@@ -36,7 +36,7 @@ Each route maps to a render function in `frontend/ui/pages/`.
 |---|---|---|---|
 | `/landing` | public | `landing.js` | Marketing / product-native front door |
 | `/auth` | public | `auth.js` | Sign in / Create account |
-| `/onboarding` | auth | `onboarding.js` | 8-step setup wizard |
+| `/onboarding` | auth | `onboarding.js` | Multi-step setup wizard (includes Commitment + Rest day) |
 | `/confirm-track` | auth | `confirm-track.js` | Minimal "track ready" confirmation (overlaps with `/plan-preview`) |
 | `/plan-preview` | auth + track | `plan-preview.js` | Full plan preview after generation |
 | `/today` | auth + track | `today.js` | Primary daily screen |
@@ -44,8 +44,8 @@ Each route maps to a render function in `frontend/ui/pages/`.
 | `/action-kit` | auth + track | `action-kit.js` | AI-generated material for today's task |
 | `/proof` | auth + track | `proof.js` | Proof of Progress submission + AI verdict |
 | `/blocked` | auth + track | `blocked.js` | Blocker reason → Rescue Action |
-| `/progress` | auth + track | `progress.js` | 7-day timeline + stats + pattern |
-| `/recap` | auth | `recap.js` | Day 7 reflection + continuation choice |
+| `/progress` | auth + track | `progress.js` | Vertical Journal Spine + stats + pattern |
+| `/recap` | auth | `recap.js` | End-of-track recap (Spark or Track variant) |
 | `/settings` | auth | `settings.js` | Account + Telegram + sign out |
 | `/not-found` | public | `not-found.js` | 404 fallback |
 
@@ -78,8 +78,10 @@ generic SaaS marketing template.
 
 **Next route**: `/auth`.
 
-**Known gaps**: no inline goal capture; no social proof; secondary CTA only
-scrolls to the loop section.
+**Known gaps**: landing copy and preview still describe the 7-day model
+only — needs to surface both Spark and Track and let the user understand
+the two-tier offer before signup. No inline goal capture; no social proof;
+secondary CTA only scrolls to the loop section.
 
 ---
 
@@ -109,11 +111,16 @@ scrolls to the loop section.
 
 ---
 
-### `/onboarding` — Onboarding (8 steps)
+### `/onboarding` — Onboarding (multi-step)
 
-**Purpose**: Capture enough context for AI to build a meaningful Day 1.
+**Purpose**: Capture enough context for AI to build a meaningful Day 1,
+and let the user pick their commitment length (Spark vs Track).
 
-**Steps** (state persisted in `localStorage` key `sv2_onboarding_draft`):
+**Steps** (state persisted in `localStorage` key `sv2_onboarding_draft`).
+Step 6 (Rest day) is **conditionally rendered** — shown only when
+Step 5 Commitment was `track`; skipped when `spark`. Step numbers below
+assume Track is selected; with Spark, Step 6 is omitted and subsequent
+steps shift up by one.
 
 | Step | Title | Input |
 |---|---|---|
@@ -121,17 +128,24 @@ scrolls to the loop section.
 | 2 | Goal template + specific goal | Pick template card OR type specific goal |
 | 3 | Main blocker | One of 8 (procrastinate, forget, overwhelmed, no_start, motivation, avoid, no_time, too_big) |
 | 4 | Daily intensity | 10 / 25 / 45 / 60+ min per day |
-| 5 | If-then rules | Pick 2–4 of 6 fallback behaviors |
-| 6 | Telegram | Ping time (morning/afternoon/evening/custom) + optional bot connect |
-| 7 | Escalation | What happens after 2 missed days (stricter message / friend message / restart promise / Tiny Mode / none) |
-| 8 | Confirm | Setup summary + `Build my 7-day track →` |
+| **5 (NEW)** | **Commitment** | Two-card pill picker: **Spark** (7-day probe — "see if it fits, ship a first artifact") vs **Track** (30-day execution — "4 phases, weekly rest day, real artifact by week 4"). Writes `trackKind: 'spark' \| 'track'` to the draft. |
+| **6 (NEW, Track only)** | **Rest day** | Weekday picker (Sun … Sat as 7 pills). User picks the weekday they want as their weekly rest day. Writes `restDay: 0–6` to the draft. Hidden entirely when `trackKind === 'spark'`. |
+| 7 | If-then rules | Pick 2–4 of 6 fallback behaviors |
+| 8 | Telegram | Ping time (morning/afternoon/evening/custom) + optional bot connect |
+| 9 | Escalation | What happens after 2 missed days (stricter message / friend message / restart promise / Tiny Mode / none) |
+| 10 | Confirm | Setup summary + `Build my track →` (label switches per `trackKind`: "Build my 7-day Spark →" or "Build my 30-day Track →") |
 
-**Main UI elements**: 8-dot progress strip, kicker `Step N of 8`, large
-headline per step, `v2-sel-grid` of selection cards, error div, primary
-"Continue →" button, secondary "← Back" button.
+**Main UI elements**: progress strip sized to the active step count (9 dots
+for Spark, 10 for Track), kicker `Step N of M`, large headline per step,
+`v2-sel-grid` of selection cards, error div, primary "Continue →" button,
+secondary "← Back" button. Step 5 Commitment uses a two-card large pill
+layout (not the small `v2-sel-grid`) so the trade-off is obvious. Step 6
+Rest day uses a 7-pill row with weekday short names.
 
-**Primary CTA on Step 8**: `Build my 7-day track →` — fires
-`track_generate` AI action and navigates to `/plan-preview` on success.
+**Primary CTA on final step**: branches on `trackKind`:
+- `spark` → fires `spark_generate` and navigates to `/plan-preview`.
+- `track` → fires `track_generate_30` (with `preferredRestDay` injected
+  into the prompt) and navigates to `/plan-preview`.
 
 **Next route**: `/plan-preview`.
 
@@ -153,15 +167,24 @@ currently does not route to it from onboarding).
 
 ### `/plan-preview` — Plan Preview
 
-**Purpose**: Show the freshly generated 7-day plan and onboarding summary.
+**Purpose**: Show the freshly generated Spark (7-day) or Track (30-day) plan and onboarding summary.
 
 **Main UI elements**:
 
 - "Plan ready" badge + goal headline.
-- Setup summary card: Category, Blocker, Daily time, Telegram ping.
+- Setup summary card: Category, Blocker, Daily time, Commitment
+  (Spark / Track), Rest day (Track only), Telegram ping.
+- **Narrative arc** (Track only): a one-line "story arc" summary
+  describing the 30 days by phase. Example:
+  *"Week 1 you lay the skeleton; Week 2 you build the core; Week 3 you
+  validate with users; Week 4 you ship."*
+  Rendered above the Day 1 hero, with each phase name bolded.
 - Day 1 hero card (`v2-card--blue`): title, why, "Done when" pill, estimate.
 - Day 2 secondary card.
-- Days 3–7 as quiet rows in a single card.
+- Remaining-day outline (in a single card):
+  - **Spark**: Days 3–7 as quiet rows.
+  - **Track**: collapsed weekly groups (Week 1 expanded, Weeks 2–4
+    collapsed). Rest days are visually marked with a `Rest` chip.
 - "StriveAI helps you execute each day" promise block (5 bullets).
 - `Start Day 1 →` primary button.
 - `Connect Telegram in Settings` secondary button.
@@ -172,7 +195,8 @@ navigates to `/today`.
 **Next route**: `/today`.
 
 **Known gaps**: hardcoded blue tones on the Day 1 / Day 2 numbered circles
-(color drift); no AI-generated rationale for the 7-day arc.
+(color drift); `track_generate_30` must output the per-phase narrative line
+used by the Track arc summary.
 
 ---
 
@@ -182,7 +206,11 @@ navigates to `/today`.
 
 **Main UI elements** (active state):
 
-- Kicker: `Day {N} of 7` + status badge + goal as sub-text.
+- **Breadcrumb header** (replaces the old SVG roadmap on this page):
+  - Track: `Week {N} · Day {D} of {totalDays} — {phaseName}` (e.g.
+    "Week 2 · Day 9 of 30 — Build").
+  - Spark: `Day {D} of 7 — Spark`.
+  - Followed by status badge + goal as sub-text.
 - Bracketed focus card (`v2-card v2-card--focus v2-bracketed`):
   `// Today's mission` eyebrow, `v2-today-title`, why, `v2-done-criteria`
   pill, estimate + category meta.
@@ -191,13 +219,20 @@ navigates to `/today`.
 - Row 1: `Action Kit` | `I already did it`.
 - Row 2: `I'm blocked` | `Skip today`.
 - Telegram ping note (if connected).
+- Quiet footer link: `See the full journey →` → `/progress` (where the
+  Vertical Journal Spine now lives).
 
 **Variants**:
 
 - `done` / `rescued`: green/blue card, proof line if present,
-  "come back tomorrow" message or "Go to Day 7 Recap →" on Day 7.
+  "come back tomorrow" message — or, on the final day of the cycle,
+  `Go to Recap →` (Spark Day 7 or Track Day 30).
 - `blocked`: amber card + `Get Rescue Action →` + `Try Agent instead`.
 - `skipped` / `missed`: muted card + "track will adapt" message + retry CTA.
+- `rest` (Track only): cream/sand card, `// Rest day` eyebrow, short
+  "Recover and reflect" prompt, no action CTAs, optional `Open Journal →`
+  link to `/progress`. Day is not recorded as missed and does not impact
+  the streak.
 
 **Primary CTA**: `Start with Agent →` → `/agent`.
 
@@ -329,62 +364,126 @@ root-causes vs symptoms; no "switch tracks" CTA on repeating patterns.
 
 ---
 
-### `/progress` — Progress
+### `/progress` — Progress (Vertical Journal Spine)
 
-**Purpose**: Show the week's timeline, stats, and pattern.
+**Purpose**: Show the entire journey as a **Vertical Journal Spine** —
+collapsible weekly sections with always-visible day titles. Replaces the
+v2 SVG sinusoid roadmap component (and absorbs the old "7-Day Timeline"
+section).
 
 **Main UI elements**:
 
-- Section head: `7-Day Track` kicker + "Your progress" headline + goal
-  sub-text. `View Recap →` button if `track.status === 'complete'`.
-- Completion card: `v2-progress` bar + "X of Y days complete · N%".
-- Stats grid (`v2-stats-grid`): Days returned, Done, Rescued, Missed,
-  Skipped, Agent sessions.
-- 7-Day Timeline: `v2-day-card` rows with colored left-stripes (done /
-  rescued / blocked / missed / skipped / today). Today card is bracketed.
+- Section head:
+  - Track: `30-Day Track` kicker + "Your journey" headline + goal
+    sub-text + "Day {D} of 30 · Week {N} — {phaseName}" line.
+  - Spark: `7-Day Spark` kicker + "Your week" headline + goal sub-text.
+  - `View Recap →` button if `track.status === 'complete'`.
+- Completion card: `v2-progress` bar + "X of Y days complete · N%"
+  (rest days excluded from the denominator).
+- Stats grid (`v2-stats-grid`): Done, Rescued, Missed, Skipped,
+  Rest (Track only), Agent sessions.
+- **Vertical Journal Spine** (primary content):
+  - Track: 4 collapsible week sections. Each section header shows the
+    AI-generated phase name (`{phaseName}`), week number, role pill,
+    and per-week completion mini-bar. The **active week is expanded by
+    default**; past weeks are collapsed; future weeks are collapsed and
+    visually dimmed. Inside each section: one row per day with
+    always-visible day title, status chip, and a colored left-stripe
+    (done / rescued / blocked / missed / skipped / today / rest /
+    locked). Clicking a row expands an artifact panel underneath:
+    submitted proof text/link plus collapsed agent steps from that day.
+    The "today" row is bracketed.
+  - Spark: a single un-collapsible section (no phase header) containing
+    7 day rows in the same format. No rest rows (Spark has none).
 - Recurring-pattern amber card if 2+ patterns of the same category.
 - `← Back to Today` ghost.
 
-**Primary CTA**: `View Recap →` (Day 7) or `← Back to Today`.
+**Primary CTA**: `View Recap →` (end-of-cycle) or `← Back to Today`.
 
 **Next route**: `/recap` or `/today`.
 
-**Known gaps**: six different stat colors compete with the timeline;
-day cards are not clickable.
+**Known gaps**: artifact-panel expansion state is per-session only (not
+persisted); week-header mini-bars and stat-grid colors may compete and
+need a single muted palette.
 
 ---
 
-### `/recap` — Day 7 Recap
+### `/recap` — End-of-Track Recap
 
-**Purpose**: Reflect on the completed track, choose to continue or start
-fresh.
+**Purpose**: Reflect on the completed cycle and decide what's next. Two
+variants, selected by `track.kind`.
+
+---
+
+#### Variant A — Spark Recap (`track.kind === 'spark'`)
+
+Short layout. Designed to convert Spark → Track.
 
 **Main UI elements**:
 
-- "Week complete" badge + "Your 7-day track is complete." headline + goal.
-- Results grid (`v2-stats-grid`): Days returned, Done, Rescued, Missed,
-  Unanswered, Agent sessions.
+- "Spark complete" badge + "Your 7-day Spark is complete." headline + goal.
+- Results grid (`v2-stats-grid`): Done, Rescued, Missed, Skipped,
+  Agent sessions.
+- Top-pattern amber card if `failurePatterns` exist.
+- AI reflection card: generated on-demand via the `day7_recap` action
+  (Spark variant prompt).
+- **Track value-prop inline block** (short, 3 bullets): explains what a
+  30-day Track adds — 4 weekly phases, weekly rest day, shippable
+  artifact by week 4.
+- CTA stack:
+  - `Continue → 30-day Track` (primary) — fires `spark_to_track_extend`.
+    If `user.preferredRestDay` is null, first prompt for a weekday pick
+    inline before submitting.
+  - `Start something new` (secondary) — restarts `/onboarding` from Step 1.
+- Bottom row: `Export my pattern` (copies plain text), optional
+  `Adjust Telegram ping` if connected.
+- `View full journey →` link to `/progress`.
+
+**Primary CTA**: `Continue → 30-day Track`.
+
+**Next routes**: `/today` (after extension), `/onboarding` (start new),
+`/progress`, `/settings`.
+
+---
+
+#### Variant B — Track Recap (`track.kind === 'track'`)
+
+Full layout. Designed for a real "what now" decision after 30 days.
+
+**Main UI elements**:
+
+- "Track complete" badge + "Your 30-day Track is complete." headline + goal.
+- Results grid (`v2-stats-grid`): Done, Rescued, Missed, Skipped, Rest,
+  Agent sessions. Rest is shown for transparency and is excluded from
+  any "missed" calculation.
+- **Phase result cards** (4 cards in a row): one per week. Each shows
+  week number, AI-generated phase name, phase role pill, completion %,
+  and the top outcome ("strong week", "wobbled", "mostly missed").
+- **Artifact timeline grouped by week**: 4 collapsible groups, each
+  listing the submitted proofs (text + links) from that week's days,
+  ordered by day.
 - Top-pattern amber card if `failurePatterns` exist.
 - Best-working-format insight ("Agent mode helped you finish more days"
   / "Self-directed" / "Mixed").
-- AI reflection card: generated on-demand via the `day7_recap` action.
-  Empty state shows "Generate reflection →" ghost link.
+- AI reflection card: generated on-demand via the `day7_recap` action
+  (Track variant prompt — names the strongest and weakest phase).
 - CTA stack:
-  - `Continue this goal — next 7 days →` (primary) — fires
-    `track_continue`.
-  - `Start a new 7-day track` (secondary).
+  - `Extend +30 days` (primary) — fires `track_continue_30`.
+    Inherits the existing `restDayOfWeek`.
+  - `Pivot to a new goal` (secondary) — restarts `/onboarding` from
+    Step 1; Commitment defaults to Track.
+  - `Pause` (tertiary, ghost) — sets `track.status = 'paused'`.
 - Bottom row: `Export my pattern` (copies plain text), optional
   `Adjust Telegram ping` if connected.
-- `View full progress →` link to `/progress`.
+- `View full journey →` link to `/progress`.
 
-**Primary CTA**: `Continue this goal — next 7 days →`.
+**Primary CTA**: `Extend +30 days`.
 
-**Next routes**: `/today` (continuation), `/onboarding` (new track),
-`/progress`, `/settings`.
+**Next routes**: `/today` (extension or paused state), `/onboarding`
+(pivot), `/progress`, `/settings`.
 
-**Known gaps**: continue / new-track presented equally; "Generate
-reflection" is a weak ghost link; no structured "What changed about you"
-insight.
+**Known gaps**: variant switching is internal to `recap.js`; "Generate
+reflection" still a weak ghost link in early implementations.
 
 ---
 
@@ -429,14 +528,18 @@ The authenticated app shell (`buildShellNav` in `frontend/app.js`) renders
 a top nav on every authenticated route:
 
 ```
-[StriveAI logo]    [Today] [Track] [Settings]    [Day N of 7] [avatar]
+[StriveAI logo]    [Today] [Journey] [Settings]    [Day N of {totalDays} · {phaseName}] [avatar]
 ```
 
 - `Today` tab is active for `/today`, `/agent`, `/action-kit`, `/proof`,
   `/blocked`, `/recap`, `/onboarding`, `/confirm-track`, `/plan-preview`.
-- `Track` tab is active for `/progress`.
+- `Journey` tab is active for `/progress` (label updated from `Track` to
+  reflect the Vertical Journal Spine model).
 - `Settings` tab is active for `/settings`.
-- The `Day N of 7` chip is shown when a track exists.
+- The day chip shows:
+  - Track: `Day {N} of 30 · {phaseName}` (e.g., "Day 9 of 30 · Build").
+  - Spark: `Day {N} of 7 · Spark`.
+  Chip is shown when a track exists.
 
 Public routes (`/landing`, `/auth`) render without the nav shell.
 

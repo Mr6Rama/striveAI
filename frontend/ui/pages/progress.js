@@ -1,16 +1,6 @@
 // Progress — /progress
-// 7-day track timeline with polished cards and stats.
-import { renderRoadmap } from '../components/roadmap.js';
-
-const STATUS_META = Object.freeze({
-  done:        { label: 'Done',        cls: 'v2-badge--done',     cardCls: 'v2-day-card--done'    },
-  rescued:     { label: 'Rescued',     cls: 'v2-badge--rescued',  cardCls: 'v2-day-card--rescued' },
-  blocked:     { label: 'Blocked',     cls: 'v2-badge--blocked',  cardCls: 'v2-day-card--blocked' },
-  skipped:     { label: 'Skipped',     cls: 'v2-badge--skipped',  cardCls: 'v2-day-card--skipped' },
-  missed:      { label: 'Missed',      cls: 'v2-badge--missed',   cardCls: 'v2-day-card--missed'  },
-  in_progress: { label: 'In progress', cls: 'v2-badge--in-prog',  cardCls: ''                     },
-  pending:     { label: 'Pending',     cls: 'v2-badge--pending',  cardCls: ''                     },
-});
+// Vertical Journal Spine + completion bar + stats + recurring-pattern note.
+import { renderJournal, wireJournal } from '../components/journal.js';
 
 export function render(container, state, actions) {
   const { track, history, telegram } = state;
@@ -23,34 +13,39 @@ export function render(container, state, actions) {
   const entries  = Array.isArray(history?.entries) ? history.entries : [];
   const patterns = Array.isArray(history?.failurePatterns) ? history.failurePatterns : [];
   const stats    = computeStats(track, entries, telegram);
-  const days     = buildDayRows(track, entries);
-  const done     = days.filter((d) => d.status === 'done' || d.status === 'rescued').length;
-  const total    = days.length;
-  const pct      = total ? Math.round((done / total) * 100) : 0;
+
+  // Completion excludes rest days from the denominator
+  const workDays  = track.days.filter((d) => !d.isRestDay);
+  const total     = workDays.length || track.days.length;
+  const done      = workDays.filter((d) => d.status === 'done' || d.status === 'rescued').length;
+  const pct       = total ? Math.round((done / total) * 100) : 0;
 
   const user      = state.user || {};
   const weekGoal  = String(user.weekGoal || '').trim();
+  const isSpark   = track.kind === 'spark';
+  const totalDays = track.totalDays || (isSpark ? 7 : 28);
+  const trackType = isSpark ? '7-Day Spark' : `${totalDays}-Day Track`;
+  const currentDay = track.currentDayNumber || 1;
+
+  const phaseLine = !isSpark
+    ? buildPhaseLine(track, currentDay, totalDays)
+    : '';
 
   container.innerHTML = `
     <div class="v2-page">
 
       <div class="v2-section-head" style="margin-bottom:20px">
         <div>
-          <div class="v2-kicker v2-kicker--muted">7-Day Track</div>
-          <h1 class="v2-h1" style="margin-bottom:4px">Your progress</h1>
+          <div class="v2-kicker v2-kicker--muted">${esc(trackType)}</div>
+          <h1 class="v2-h1" style="margin-bottom:4px">${isSpark ? 'Your week' : 'Your journey'}</h1>
           <p class="v2-sub" style="margin:0">${esc(track.goal || '')}</p>
-          ${weekGoal ? `<p class="v2-muted-text" style="margin:4px 0 0">By Day 7: ${esc(weekGoal)}</p>` : ''}
+          ${phaseLine ? `<p class="v2-muted-text" style="margin:4px 0 0">${phaseLine}</p>` : ''}
+          ${weekGoal ? `<p class="v2-muted-text" style="margin:4px 0 0">By Day ${totalDays}: ${esc(weekGoal)}</p>` : ''}
         </div>
         ${track.status === 'complete'
           ? `<button data-route="/recap" class="v2-btn v2-btn--primary">View Recap →</button>`
           : ''}
       </div>
-
-      ${renderRoadmap({
-        days: track.days.map((d) => ({ dayNumber: d.dayNumber, status: d.status || 'pending', title: d.title })),
-        currentDay: track.currentDayNumber || 1,
-        variant: 'full',
-      })}
 
       <div class="v2-card" style="margin-bottom:20px">
         <div class="v2-section-label" style="margin-bottom:12px">Completion</div>
@@ -58,12 +53,12 @@ export function render(container, state, actions) {
         <p class="v2-muted-text">${done} of ${total} days complete · ${pct}%</p>
       </div>
 
-      ${renderStats(stats)}
+      ${renderStats(stats, isSpark)}
 
-      <div class="v2-section-label" style="margin-bottom:12px;margin-top:24px">7-Day Timeline</div>
-      <div class="v2-timeline">
-        ${days.map(renderDayCard).join('')}
+      <div class="v2-section-label" style="margin-bottom:12px;margin-top:24px">
+        ${isSpark ? 'Your week, day by day' : 'Your journey, week by week'}
       </div>
+      ${renderJournal({ track, entries, currentDayNumber: currentDay, variant: 'full' })}
 
       ${renderPatternNote(patterns)}
 
@@ -75,162 +70,43 @@ export function render(container, state, actions) {
     el.addEventListener('click', () => actions.onNavigate?.(el.getAttribute('data-route')));
   });
 
-  wireRoadmapLabels(container);
-  wireExpandableDays(container);
+  wireJournal(container);
 }
 
-// Toggle milestone title on node click — one label visible at a time
-function wireRoadmapLabels(container) {
-  const svg = container.querySelector('.v2-roadmap svg');
-  if (!svg) return;
-  let activeDay = null;
-  svg.querySelectorAll('g[data-day]').forEach((g) => {
-    g.addEventListener('click', () => {
-      const day = g.getAttribute('data-day');
-      svg.querySelectorAll('text[data-label-day]').forEach((t) => t.setAttribute('visibility', 'hidden'));
-      if (activeDay === day) { activeDay = null; return; }
-      const label = svg.querySelector(`text[data-label-day="${day}"]`);
-      if (label) label.setAttribute('visibility', 'visible');
-      activeDay = day;
-    });
-  });
-}
+// ── Phase context line ────────────────────────────────────────────────────
 
-// ── Day cards ─────────────────────────────────────────────────────────────
-
-function buildDayRows(track, entries) {
-  return track.days.map((day) => {
-    const histEntry = entries.find((e) => e.dayNumber === day.dayNumber && e.trackId === track.id);
-    const status    = day.status || histEntry?.outcome || 'pending';
-    const isToday   = day.dayNumber === track.currentDayNumber;
-    return { day, status, isToday, histEntry };
-  });
-}
-
-function renderDayCard({ day, status, isToday, histEntry }) {
-  const meta      = STATUS_META[status] || STATUS_META.pending;
-  const todayCls  = isToday ? ' v2-day-card--today' : '';
-  const statusCls = meta.cardCls ? ` ${meta.cardCls}` : '';
-  const bracketEl = isToday ? '<span class="v2-br-tr"></span><span class="v2-br-bl"></span>' : '';
-  const expandable = Boolean(histEntry && (histEntry.proofValue || (histEntry.agentSteps || []).length));
-  const interactiveCls = expandable ? ' v2-day-card--clickable' : '';
-  const completed = histEntry?.createdAt
-    ? new Date(histEntry.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-    : '';
-
-  return `
-    <div class="v2-day-card${todayCls}${statusCls}${interactiveCls}${isToday ? ' v2-bracketed' : ''}"
-         data-day-card="${day.dayNumber}"
-         ${expandable ? 'role="button" tabindex="0" aria-expanded="false"' : ''}
-         style="overflow:visible">
-      ${bracketEl}
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span class="v2-section-label" style="margin:0">Day ${day.dayNumber}</span>
-          <span class="v2-badge ${meta.cls}">${esc(meta.label)}</span>
-        </div>
-        ${isToday ? `<span class="v2-badge v2-badge--today">Today</span>`
-                  : expandable ? `<span class="v2-day-card__chevron" aria-hidden="true">▾</span>` : ''}
-      </div>
-      <p class="v2-body-text" style="margin:0">${esc(day.title || '—')}</p>
-      ${day.date ? `<p class="v2-muted-text" style="margin:4px 0 0">${esc(day.date)}</p>` : ''}
-      ${expandable ? `
-        <div class="v2-day-card__details" data-day-details="${day.dayNumber}" hidden>
-          ${day.successCriteria
-            ? `<div class="v2-done-criteria" style="margin-top:12px;margin-bottom:10px">Done means: ${esc(day.successCriteria)}</div>`
-            : ''}
-          ${renderArtifactProof(histEntry)}
-          ${renderArtifactSteps(histEntry)}
-          ${completed ? `<p class="v2-muted-text" style="margin:10px 0 0;font-size:.78rem">Completed ${esc(completed)}</p>` : ''}
-        </div>` : ''}
-    </div>`;
-}
-
-function renderArtifactProof(entry) {
-  const value = String(entry?.proofValue || '').trim();
-  if (!value) return '';
-  const type = entry.proofType || 'text';
-  const isLink = type === 'link' && /^https?:\/\//i.test(value);
-  const body = isLink
-    ? `<a href="${esc(value)}" target="_blank" rel="noopener" class="v2-link">${esc(value)}</a>`
-    : `<p class="v2-body-text" style="margin:0;white-space:pre-wrap">${esc(value)}</p>`;
-  return `
-    <div class="v2-day-artifact">
-      <div class="v2-section-label" style="margin-bottom:6px">Proof</div>
-      ${body}
-    </div>`;
-}
-
-function renderArtifactSteps(entry) {
-  const steps = Array.isArray(entry?.agentSteps) ? entry.agentSteps : [];
-  if (!steps.length) return '';
-  return `
-    <div class="v2-day-artifact">
-      <div class="v2-section-label" style="margin-bottom:6px">Agent steps</div>
-      <ol class="v2-day-artifact__steps">
-        ${steps.map((s) => `
-          <li>
-            <div>${esc(s.text || '')}</div>
-            ${s.userOutput ? `<div class="v2-day-artifact__note">${esc(s.userOutput)}</div>` : ''}
-          </li>
-        `).join('')}
-      </ol>
-    </div>`;
-}
-
-function wireExpandableDays(container) {
-  container.querySelectorAll('[data-day-card]').forEach((card) => {
-    if (!card.hasAttribute('role')) return;
-    const dayNum  = card.getAttribute('data-day-card');
-    const details = container.querySelector(`[data-day-details="${dayNum}"]`);
-    if (!details) return;
-    const toggle = () => {
-      const open = details.hasAttribute('hidden') ? false : true;
-      if (open) {
-        details.setAttribute('hidden', '');
-        card.setAttribute('aria-expanded', 'false');
-        card.classList.remove('v2-day-card--open');
-      } else {
-        details.removeAttribute('hidden');
-        card.setAttribute('aria-expanded', 'true');
-        card.classList.add('v2-day-card--open');
-      }
-    };
-    card.addEventListener('click', (e) => {
-      // Don't toggle on link clicks inside the details
-      if (e.target.closest('a')) return;
-      toggle();
-    });
-    card.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
-    });
-  });
+function buildPhaseLine(track, currentDay, totalDays) {
+  const week = Math.ceil(currentDay / 7);
+  const phase = Array.isArray(track.phases) ? track.phases.find((p) => p.weekNumber === week) : null;
+  const name = phase?.name ? ` — ${esc(phase.name)}` : '';
+  return `Day ${currentDay} of ${totalDays} · Week ${week}${name}`;
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────
 
 function computeStats(track, entries, telegram) {
   const te = entries.filter((e) => e.trackId === track.id);
+  const restCount = (track.days || []).filter((d) => d.status === 'rest').length;
   return {
-    daysReturned:  te.length,
     done:          te.filter((e) => e.outcome === 'done').length,
     rescued:       te.filter((e) => e.outcome === 'rescued').length,
     missed:        te.filter((e) => e.outcome === 'missed').length,
     skipped:       te.filter((e) => e.outcome === 'skipped').length,
+    rest:          restCount,
     agentSessions: te.filter((e) => e.agentUsed).length,
     telegramPings: telegram?.lastPingSentAt ? 1 : 0,
   };
 }
 
-function renderStats(s) {
+function renderStats(s, isSpark) {
   const items = [
-    { label: 'Days returned',  value: s.daysReturned,  color: 'var(--v2-text)'   },
     { label: 'Done',           value: s.done,           color: 'var(--v2-green)'  },
     { label: 'Rescued',        value: s.rescued,        color: 'var(--v2-blue)'   },
     { label: 'Missed',         value: s.missed,         color: 'var(--v2-red)'    },
     { label: 'Skipped',        value: s.skipped,        color: 'var(--v2-muted)'  },
-    { label: 'Agent sessions', value: s.agentSessions,  color: 'var(--v2-violet)' },
   ];
+  if (!isSpark) items.push({ label: 'Rest days', value: s.rest, color: 'var(--v2-dim)' });
+  items.push({ label: 'Agent sessions', value: s.agentSessions, color: 'var(--v2-violet)' });
 
   return `
     <div class="v2-card">

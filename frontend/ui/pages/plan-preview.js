@@ -1,4 +1,5 @@
 // Plan preview — shown immediately after onboarding track generation.
+import { renderJournal, wireJournal } from '../components/journal.js';
 
 const INTENSITY_LABELS = {
   '0-1': '10 min/day', '1-2': '25 min/day', '2-4': '45 min/day', '4-6': '60+ min/day',
@@ -25,8 +26,6 @@ export function render(container, state, actions) {
   if (!track?.id || !days.length) { actions.onNavigate?.('/onboarding'); return; }
 
   const day1 = days[0] || {};
-  const day2 = days[1] || {};
-  const rest = days.slice(2);
 
   const tg          = state.telegram || {};
   const pingHour    = tg.pingHour ?? 9;
@@ -35,9 +34,11 @@ export function render(container, state, actions) {
     ? `${pingLabel} · ${pingHour}:00 UTC (@${esc(tg.username || 'you')})`
     : 'Not connected — add Telegram in Settings';
 
-  const intensity = INTENSITY_LABELS[state.user?.dailyHours] || state.user?.dailyHours || '2–4 hours/day';
-  const category  = CATEGORY_LABELS[track.goalCategory] || track.goalCategory || '';
-  const blocker   = BLOCKER_LABELS[track.blockerHint]   || track.blockerHint  || '';
+  const intensity  = INTENSITY_LABELS[state.user?.dailyHours] || state.user?.dailyHours || '2–4 hours/day';
+  const category   = CATEGORY_LABELS[track.goalCategory] || track.goalCategory || '';
+  const blocker    = BLOCKER_LABELS[track.blockerHint]   || track.blockerHint  || '';
+  const isSpark    = track.kind === 'spark';
+  const planLabel  = isSpark ? '7-day Spark' : `${track.totalDays || 28}-day Track`;
 
   container.innerHTML = `
     <div class="v2-page">
@@ -45,7 +46,7 @@ export function render(container, state, actions) {
       <div class="v2-kicker" style="margin-bottom:10px">
         <span class="v2-badge v2-badge--done">Plan ready</span>
       </div>
-      <h1 class="v2-h1" style="margin-bottom:6px">Your 7-day track is ready</h1>
+      <h1 class="v2-h1" style="margin-bottom:6px">Your ${planLabel} is ready</h1>
       <p class="v2-sub">${esc(track.goal)}</p>
 
       <div class="v2-card" style="margin-bottom:20px">
@@ -56,13 +57,11 @@ export function render(container, state, actions) {
         ${metaRow('Telegram ping', pingDisplay)}
       </div>
 
-      <div class="v2-section-label" style="margin-bottom:12px">Your plan</div>
-
+      <div class="v2-section-label" style="margin-bottom:12px">Day 1 — Start here</div>
       ${dayCard1(day1)}
-      ${dayCard2(day2)}
-      ${rest.length ? `<div class="v2-card" style="margin-bottom:20px;padding:14px">
-        ${rest.map((d) => dayLight(d)).join('')}
-      </div>` : ''}
+
+      <div class="v2-section-label" style="margin-bottom:12px;margin-top:24px">${isSpark ? 'The week ahead' : 'The 4 weeks ahead'}</div>
+      ${renderJournal({ track, entries: [], currentDayNumber: 1, variant: 'compact' })}
 
       ${promiseBlock()}
 
@@ -79,6 +78,7 @@ export function render(container, state, actions) {
   container.querySelectorAll('[data-route]').forEach((el) => {
     el.addEventListener('click', () => actions.onNavigate?.(el.getAttribute('data-route')));
   });
+  wireJournal(container);
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
@@ -101,27 +101,6 @@ function dayCard1(day) {
       ${day.why ? `<p class="v2-body-text" style="margin-bottom:10px">${esc(day.why)}</p>` : ''}
       ${day.successCriteria ? `<div class="v2-done-criteria">Done when: ${esc(day.successCriteria)}</div>` : ''}
       <p class="v2-muted-text" style="margin-top:8px">${day.estimateMinutes || 60} min · ${esc(day.category || 'task')}</p>
-    </div>`;
-}
-
-function dayCard2(day) {
-  if (!day.title) return '';
-  return `
-    <div class="v2-card" style="margin-bottom:10px">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-        <div style="width:26px;height:26px;border-radius:50%;background:var(--v2-surface-3);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.82rem;color:var(--v2-muted);flex-shrink:0;border:1px solid var(--v2-border)">2</div>
-        <span class="v2-section-label" style="margin:0">Day 2 — Up next</span>
-      </div>
-      <p class="v2-h3" style="margin-bottom:6px;color:var(--v2-text-2)">${esc(day.title)}</p>
-      ${day.why ? `<p class="v2-muted-text">${esc(day.why)}</p>` : ''}
-    </div>`;
-}
-
-function dayLight(day) {
-  return `
-    <div style="display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--v2-border);align-items:center">
-      <div style="width:22px;height:22px;border-radius:50%;background:var(--v2-surface-3);border:1px solid var(--v2-border);display:flex;align-items:center;justify-content:center;font-size:.75rem;color:var(--v2-dim);font-weight:700;flex-shrink:0">${day.dayNumber}</div>
-      <span class="v2-muted-text">${esc(day.title || '—')}</span>
     </div>`;
 }
 
