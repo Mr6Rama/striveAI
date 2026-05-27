@@ -18,27 +18,38 @@ commitment lengths, chosen during onboarding:
 
 - **Spark** — a **7-day probe cycle**. Linear, no phases, no rest days. Its
   purpose is proof-of-fit and producing a first artifact. Spark is optional
-  and is the lighter on-ramp for users who aren't ready to commit to 30 days.
-- **Track** — a **30-day execution cycle**. Structured into **4 weekly
-  phases** whose names are AI-generated per goal (e.g., fitness:
-  "Baseline / Build / Peak / Maintain"; project: "Foundations / Build /
-  Validate / Ship"). Includes exactly **1 rest day per week** on a weekday
-  the user picks during onboarding. Rest days never count as missed.
+  and is the lighter on-ramp for users who aren't ready to commit to 28 days.
+- **Track** — a **28-day execution cycle** (4 weeks × 7 days). Structured
+  into **4 weekly phases** whose names are AI-generated per goal (e.g.,
+  fitness: "Baseline / Build / Peak / Maintain"; project: "Foundations /
+  Build / Validate / Ship"). Includes exactly **1 rest day per week** on a
+  weekday the user picks during onboarding. Rest days never count as missed.
 
 StriveAI is not a planner, not a STEM app, not a billing product, and not a
 general chatbot.
 
 The product does not stop at generating a plan. Every day it:
 
-1. Surfaces one concrete daily action with a clear "done means" criterion.
-2. Helps the user execute that action inside the product via **Agent Mode**
-   (3–5 ordered micro-steps).
-3. Optionally produces an **Action Kit** of task-specific templates,
+1. **Sharpens the goal** during onboarding — turns vague intent into a
+   specific artifact-anchored sentence before the track is generated.
+2. Surfaces one concrete daily action with a clear "done means" criterion.
+   The **first agent step is previewed** on the Today screen to break inertia.
+3. Helps the user execute that action inside the product via **Agent Mode**
+   (3–5 ultra-specific micro-steps with exact commands, file names, snippets).
+   Users can tap **"Help with this step →"** for targeted inline unblocking.
+4. After each step: fires a **micro-coaching chip** (fire-and-forget) noting
+   whether the step output looks right.
+5. Optionally produces an **Action Kit** of task-specific templates,
    questions, and tips.
-4. Asks for **Proof of Progress** and judges it as met / partial / not-met.
-5. Runs a **Rescue Action** flow when the user is blocked or skipping.
-6. Updates **Failure Pattern Memory** based on the outcome.
-7. Adapts the next day's task to reflect what actually happened.
+6. Asks for **Proof of Progress** and judges it as met / partial / not-met.
+7. Runs a **Diagnosis-First Rescue** when blocked: asks where they got stuck
+   and what they tried, then answers the specific blocker (or shrinks the task
+   if no diagnosis was given).
+8. Updates **Failure Pattern Memory** based on the outcome.
+9. Adapts the next day's task to reflect what actually happened.
+10. On Track: delivers a **Weekly Ship Checkpoint** (what shipped, on-track flag,
+    next-week focus) after each completed week.
+11. Shows a **Pace Warning** when the user is behind 70% completion rate.
 
 Telegram is an optional accountability ping, not the core of the product.
 

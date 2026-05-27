@@ -42,9 +42,14 @@ interface UserV2 {
   createdAt: string;       // ISO-8601
   experienceLevel: 'beginner' | 'intermediate' | 'advanced';
   dailyHours: string;      // '1-2' | '2-4' | '4-6' | '6-8' | '8+'
-  preferredRestDay: number | null;  // weekday 0–6 (Sun=0). Set when user
-                                    // chose Track in onboarding; null when
-                                    // user chose Spark.
+  currentProject: string;  // user's active project name (used in AI prompts)
+  weekGoal: string;        // what the user wants to ship this week
+  whyItMatters: string;    // one-sentence motivation
+  triedBefore: string;     // what the user has tried and why it failed
+  preferredRestDay: number | null;  // 1–7: position within each 7-day week
+                                    // (1=first day, 7=last day). null for Spark.
+  goalArtifact: string;    // concrete artifact the user commits to building;
+                           // set during goal sharpening (onboarding Step 7)
 }
 
 type GoalCategory =
@@ -70,7 +75,12 @@ function createDefaultUserV2() {
     createdAt: isoDateNow(),
     experienceLevel: 'intermediate',
     dailyHours: '2-4',
+    currentProject: '',
+    weekGoal: '',
+    whyItMatters: '',
+    triedBefore: '',
     preferredRestDay: null,
+    goalArtifact: '',
   };
 }
 ```
@@ -80,7 +90,7 @@ function createDefaultUserV2() {
 ## Domain: `sv2_track`
 
 The active execution track. Two flavors: **Spark** (`kind: 'spark'`, 7 days,
-linear, no phases, no rest day) and **Track** (`kind: 'track'`, 30 days, 4
+linear, no phases, no rest day) and **Track** (`kind: 'track'`, 28 days, 4
 weekly phases, 1 rest day per week). Replaced (and archived) when a new
 track starts.
 
@@ -94,10 +104,10 @@ interface TrackV2 {
   generatedAt: string;     // ISO-8601
   startDate: string;       // ISO date of Day 1
   status: TrackStatus;
-  totalDays: 7 | 30;       // 7 for Spark, 30 for Track
+  totalDays: 7 | 28;       // 7 for Spark, 28 for Track (4 weeks × 7 days)
   currentDayNumber: number; // 1..totalDays
   currentWeekNumber: 1 | 2 | 3 | 4 | null;  // null for Spark
-  restDayOfWeek: number | null;             // 0–6 (Sun=0). null for Spark.
+  restDayPosition: number | null;           // 1–7: position within each 7-day week. null for Spark.
   phases: Phase[] | null;  // length 4 for Track. null for Spark.
   days: DayPlan[];
   continuationOf: string | null; // id of previous track if this is a continuation
@@ -143,7 +153,7 @@ type DayStatus =
                            // history.entries as an outcome.
 ```
 
-Default (track not yet generated — defaults to a 30-day Track):
+Default (track not yet generated — defaults to a 28-day Track):
 ```js
 function createDefaultTrackV2() {
   return {
@@ -155,11 +165,11 @@ function createDefaultTrackV2() {
     generatedAt: '',
     startDate: '',
     status: 'active',
-    totalDays: 30,
     currentDayNumber: 1,
     currentWeekNumber: 1,
-    restDayOfWeek: null,
+    totalDays: 28,
     phases: null,
+    restDayPosition: null,
     days: [],
     continuationOf: null,
   };
@@ -167,7 +177,7 @@ function createDefaultTrackV2() {
 ```
 
 When the user picks Spark in onboarding, the generator overrides:
-`kind: 'spark', totalDays: 7, currentWeekNumber: null, restDayOfWeek: null,
+`kind: 'spark', totalDays: 7, currentWeekNumber: null, restDayPosition: null,
 phases: null`.
 
 ---
@@ -187,10 +197,16 @@ interface TodayV2 {
   actionKit: ActionKitItem[] | null; // Generated Action Kit items, if any
   rescueAction: RescueAction | null;
   rescueRepeating: boolean;          // Set when the rescue surfaces a repeating pattern
-  blockerText: string;       // user's typed blocker description
+  blockerDiagnosis: BlockerDiagnosis | null; // Set during diagnosis phase on /blocked
+  blockerText: string;       // user's typed blocker description (reason label)
   skipReason: string;        // user's optional skip note
   outcomeAt: string;         // ISO timestamp when outcome was recorded
   adaptationNote: string;    // AI note explaining today's adaptation (if track was adapted)
+}
+
+interface BlockerDiagnosis {
+  stuckAt: string;  // "Where exactly did you get stuck?" (required, min 10 chars)
+  tried: string;    // "What have you tried?" (optional)
 }
 
 interface ProofEntry {
@@ -216,10 +232,14 @@ interface AgentSession {
 
 interface AgentStep {
   index: number;             // 0-based
-  text: string;              // step instruction
+  text: string;              // step instruction (action-verb start, ≤160 chars)
+  output: string;            // what concretely exists when done (≤120 chars)
+  hint: string;              // code snippet / command / template (≤180 chars)
   status: 'pending' | 'done' | 'skipped';
-  note: string;              // user's per-step textarea content
-  completedAt: string;
+  userOutput: string;        // user's note/log for this step
+  completedAt: string;       // ISO-8601
+  feedbackTip: string;       // async micro-coaching tip (from agent_step_feedback)
+  feedbackOk: boolean | null; // true = step looks good, false = needs attention
 }
 
 interface ActionKitItem {
@@ -254,6 +274,7 @@ function createDefaultTodayV2(date, dayNumber) {
     actionKit: null,
     rescueAction: null,
     rescueRepeating: false,
+    blockerDiagnosis: null,
     blockerText: '',
     skipReason: '',
     outcomeAt: '',
@@ -261,12 +282,6 @@ function createDefaultTodayV2(date, dayNumber) {
   };
 }
 ```
-
-### Planned / not implemented (`sv2_today`)
-
-- `agentSession.steps[].stuckNote` — `agent_hint` is allowlisted on the
-  backend but not yet wired in `frontend/services/ai-v2.js`. The per-step
-  `note` field is the current user input.
 
 ---
 
@@ -405,10 +420,21 @@ interface UIState {
   error: string;
   insight: string;            // Failure-pattern insight surfaced on /today
   agentLoading: boolean;      // /agent is fetching steps or judging proof
+  agentHint: string | null;   // Inline step hint from agent_hint (session-only)
+  agentHintLoading: boolean;  // Hint fetch in flight
   kitLoading: boolean;        // /action-kit is generating
   proofLoading: boolean;      // /proof is judging
   recapLoading: boolean;      // /recap reflection paragraph is generating
   trackContinuing: boolean;   // Spark→Track extension or Track +30 continuation is generating
+  weekRecapData: WeekRecapData | null; // Weekly ship checkpoint card data (session-only)
+}
+
+interface WeekRecapData {
+  weekNumber: number;
+  phaseName: string;
+  shipped: string;       // What the user shipped this week (≤120 chars)
+  onTrack: boolean;      // Are they on pace for the final day?
+  nextWeekFocus: string; // One focus for next week (≤120 chars)
 }
 ```
 
@@ -469,10 +495,13 @@ function createInitialState() {
       error:             '',
       insight:           '',
       agentLoading:      false,
+      agentHint:         null,   // session-only: inline step hint text
+      agentHintLoading:  false,
       kitLoading:        false,
       proofLoading:      false,
       recapLoading:      false,
       trackContinuing:   false,
+      weekRecapData:     null,   // session-only: weekly ship checkpoint card
     },
   };
 }

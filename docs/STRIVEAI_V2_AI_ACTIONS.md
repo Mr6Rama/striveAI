@@ -36,38 +36,46 @@ const AI_ACTIONS = new Set([
   'roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit',
   'goals_review', 'note_process', 'session_review', 'chat', 'goal_complete',
 
-  // v2 actions (called by frontend/services/ai-v2.js)
+  // v2 core actions (called by frontend/services/ai-v2.js)
   'spark_generate',        // Build 7-day Spark probe (linear, no phases)
-  'track_generate_30',     // Build 30-day Track (4 AI-named weekly phases, 1 rest day/week)
-  'spark_to_track_extend', // Convert completed Spark outcomes into a 30-day Track
-  'track_continue_30',     // Generate next 30-day Track (Extend +30) after Track Recap
+  'track_generate_30',     // Build 28-day Track (4 AI-named weekly phases, 1 rest day/week)
+  'spark_to_track_extend', // Convert completed Spark outcomes into a 28-day Track
+  'track_continue_30',     // Generate next 28-day Track after Track Recap
   'track_generate',        // DEPRECATED alias of spark_generate — kept for back-compat
   'track_continue',        // DEPRECATED — superseded by track_continue_30
   'agent_steps',           // Generate 3–5 micro-steps for today's action
-  'agent_hint',            // Inline hint for a stuck step (RESERVED — not yet called)
-  'rescue_action',         // Generate Rescue Action for a blocked day
-  'action_kit',            // Generate Action Kit (templates / references / questions / tools / tips)
+  'agent_hint',            // Inline hint for a stuck step (ai-v2-coaching.js)
+  'rescue_action',         // Rescue Action for a blocked day — context-aware
+  'action_kit',            // Action Kit (templates / references / questions / tools / tips)
   'v2_proof_check',        // Judge submitted proof: met | partial | not_met
   'day7_recap',            // Reflection paragraph for end-of-track recap (Spark + Track)
   'adapt_day',             // Adapt tomorrow's action; phase-aware on Track
+
+  // v2 coaching actions (called by frontend/services/ai-v2-coaching.js)
+  'sharpen_goal',          // Turn vague goal into specific artifact-anchored sentence
+  'agent_step_feedback',   // Micro-coaching chip after a step note is submitted
+  'week_recap',            // Weekly ship checkpoint: shipped, on-track, next focus
 ]);
 ```
 
 | Action | Called from | Status |
 |---|---|---|
-| `spark_generate` | `services/ai-v2.js · generateSpark()` (onboarding when `trackKind === 'spark'`) | Active |
-| `track_generate_30` | `services/ai-v2.js · generateTrack30()` (onboarding when `trackKind === 'track'`) | Active |
-| `spark_to_track_extend` | `services/ai-v2.js · extendSparkToTrack()` (Spark Recap → "Continue → 30-day Track") | Active |
-| `track_continue_30` | `services/ai-v2.js · continueTrack30()` (Track Recap → "Extend +30 days") | Active |
-| `track_generate` | — | Deprecated alias (back-compat; same spec as `spark_generate`) |
-| `track_continue` | — | Deprecated (superseded by `track_continue_30`) |
-| `agent_steps` | `services/ai-v2.js · generateAgentSteps()` (`/agent` init) | Active |
-| `agent_hint` | — | Reserved (allowlisted but not wired in v2 client) |
-| `rescue_action` | `services/ai-v2.js · diagnoseBlocker()` (`/blocked`) | Active |
-| `action_kit` | `services/ai-v2.js · generateActionKit()` (`/action-kit`) | Active |
-| `v2_proof_check` | `services/ai-v2.js · checkProof()` (`/proof`, `/agent` end) | Active |
-| `day7_recap` | `services/ai-v2.js · generateRecap()` (`/recap`, both variants) | Active |
-| `adapt_day` | `services/ai-v2.js · adaptNextDay()` (after a day outcome) | Active |
+| `spark_generate` | `ai-v2.js · generateExecutionTrack()` (Spark path) | Active |
+| `track_generate_30` | `ai-v2.js · generateExecutionTrack()` (Track path) | Active |
+| `spark_to_track_extend` | `ai-v2.js · generateSparkToTrackExtend()` | Active |
+| `track_continue_30` | `ai-v2.js · generateContinuationWeek()` | Active |
+| `track_generate` | — | Deprecated alias |
+| `track_continue` | — | Deprecated |
+| `agent_steps` | `ai-v2.js · generateAgentSteps()` (`/agent` init) | Active |
+| `agent_hint` | `ai-v2-coaching.js · getAgentHint()` (inline step help) | Active |
+| `rescue_action` | `ai-v2.js · diagnoseBlocker()` (`/blocked` diagnosis) | Active |
+| `action_kit` | `ai-v2.js · generateActionKit()` (`/action-kit`) | Active |
+| `v2_proof_check` | `ai-v2.js · checkProof()` (`/proof`, `/agent` end) | Active |
+| `day7_recap` | `ai-v2.js · generateDay7Recap()` (`/recap`) | Active |
+| `adapt_day` | `ai-v2.js · adaptNextDay()` (after any day outcome) | Active |
+| `sharpen_goal` | `ai-v2-coaching.js · sharpenGoal()` (onboarding Step 7) | Active |
+| `agent_step_feedback` | `ai-v2-coaching.js · getStepFeedback()` (fire-and-forget after step) | Active |
+| `week_recap` | `ai-v2-coaching.js · generateWeekRecap()` (after Day 7/14/21 on Track) | Active |
 
 ---
 
@@ -365,12 +373,14 @@ Response JSON schema: identical to `track_generate_30`.
 ### `agent_steps`
 
 Purpose: Generate 3–5 ordered micro-steps for today's specific action.
+Steps are ultra-specific: exact commands, file names, code snippets, URLs.
+Category-based tool hints are injected per prompt to get relevant tooling.
 
 Backend config:
 ```js
 agent_steps: {
-  model: 'gpt-5-nano',
-  maxCompletionTokens: 600,
+  model: OPENAI_MODEL,
+  maxCompletionTokens: 500,
   reasoningEffort: 'minimal',
   temperature: 0.8,
   topP: 1,
@@ -380,22 +390,47 @@ agent_steps: {
 
 System context:
 ```
-You are an execution assistant. Break one task into ordered micro-steps.
-Each step must be concrete, specific, and doable in 15–45 minutes.
-No motivational filler. No generic advice.
+You are an execution assistant. Break one task into 3–5 ordered micro-steps.
+
+Hard rules:
+- Each step is one concrete physical action with a specific, nameable output.
+- Each step is completable in 10–30 minutes.
+- The first step is the LOWEST-FRICTION real action — it must produce something tangible immediately.
+- Use the user's actual project name, tool names, and file names when given.
+- Name exact commands, exact file names, exact URLs — never say "your tool" or "the platform".
+
+NEVER start steps with: "Open", "Re-read", "Decide", "Think", "Consider", "Plan",
+"Define", "Set up your", "Get familiar with", "Review".
+
+For each step provide:
+  text: action-verb start, names the specific file/command/tool/output, max 160 chars
+  output: what concretely exists when done, max 120 chars
+  hint: actual code snippet, CLI command, or template the user can copy, max 180 chars
 Return JSON only.
 ```
 
 Prompt template:
 ```
 Today's task: {taskTitle}
+Done when: {successCriteria}
+Why: {why}
 Goal: {goal}
-Category: {goalCategory}
+Category: {category}
+Time budget: {estimateMinutes} min
+Recurring blockers: {patternSummary}
+Project name: {currentProject}
+Week target: {weekGoal}
 Experience: {experienceLevel}
+{toolLine}  ← category-specific tool hint
 
-Break this task into 3–5 sequential micro-steps.
-Each step: one sentence, action-verb start, specific output expected.
+Generate 3-5 sequential micro-steps. Step 1 = lowest-friction action producing something real in 10-15 min.
 ```
+
+`toolLine` examples by category:
+- `build`: "Tools likely in use: VS Code, terminal, npm/yarn, git. Steps must name exact commands and file paths."
+- `write`: "Tools likely in use: text editor or Google Docs. Steps must name exact filenames and word counts."
+- `research`: "Tools likely in use: browser. Steps must name exact search queries or sources to check."
+- `outreach`: "Tools likely in use: email or DM. Steps must include exact message templates or scripts."
 
 Response JSON schema:
 ```json
@@ -412,7 +447,9 @@ Response JSON schema:
         "required": ["index", "text"],
         "properties": {
           "index": { "type": "integer" },
-          "text": { "type": "string", "maxLength": 140 }
+          "text": { "type": "string", "maxLength": 160 },
+          "output": { "type": "string", "maxLength": 120 },
+          "hint": { "type": "string", "maxLength": 180 }
         }
       }
     }
@@ -420,25 +457,21 @@ Response JSON schema:
 }
 ```
 
-Deterministic fallback:
-```js
-[
-  { index: 0, text: `Open your work environment and review the task: "${title}"` },
-  { index: 1, text: 'Write down the single most important sub-task you need to complete first.' },
-  { index: 2, text: 'Complete that sub-task. Record the output before you stop.' },
-]
-```
+Deterministic fallback (from `frontend/services/ai-v2-fallbacks.js`):
+- 3-step generic scaffold tied to the day's task title.
 
 ---
 
 ### `agent_hint`
 
-Purpose: Inline hint when user is stuck on a specific agent step.
+Purpose: Inline hint shown when user taps "Help with this step →" in Agent
+Mode. Returns a short, direct answer in plain text. Called from
+`frontend/services/ai-v2-coaching.js · getAgentHint()`.
 
 Backend config:
 ```js
 agent_hint: {
-  model: 'gpt-5-nano',
+  model: OPENAI_MODEL,
   maxCompletionTokens: 200,
   reasoningEffort: 'minimal',
   temperature: 0.7,
@@ -450,26 +483,36 @@ agent_hint: {
 Prompt template:
 ```
 Task: {taskTitle}
-Step: {stepText}
-User stuck note: {stuckNote}
+Current step: {stepText}
 
-Give one concrete unblocking suggestion in 2–3 sentences.
-No preamble. No "great question". Direct answer only.
+The user is stuck on this step. Give one specific, actionable hint in 2-3 sentences.
+Name a concrete action, command, or example they can try right now.
+Do not repeat the step text. Do not give general advice.
 ```
 
 Response: `text/plain` (not JSON).
+
+Behavior: Hint is stored in `ui.agentHint` (session-only). Cleared automatically
+when the user advances to the next step. Silently absent if the AI call fails.
 
 ---
 
 ### `rescue_action`
 
-Purpose: Generate a smaller/rephrased version of a blocked task with concrete sub-steps.
+Purpose: Help the user past a specific blocker. **Context-aware**:
+- If `blockerDiagnosis.stuckAt` is present (user described exactly where they got stuck),
+  the rescue **answers the specific problem directly** — gives the command, code, or next
+  concrete action that unblocks them.
+- If no diagnosis, produces a smaller, more accessible version of the original task.
+
+Flow: `/blocked` → reason picker → diagnosis textareas (stuckAt required, tried optional) →
+`rescue_action` call → rescue card.
 
 Backend config:
 ```js
 rescue_action: {
-  model: 'gpt-5-nano',
-  maxCompletionTokens: 500,
+  model: OPENAI_MODEL,
+  maxCompletionTokens: 450,
   reasoningEffort: 'minimal',
   temperature: 0.8,
   topP: 1,
@@ -479,20 +522,23 @@ rescue_action: {
 
 System context:
 ```
-The user is blocked. Generate a rescue action: a smaller, more accessible version of the original task.
-The rescue must be completable in under 60 minutes.
-Steps must be concrete and specific.
-Return JSON only.
+The user is blocked. If they described exactly where they got stuck, answer that specific
+problem directly — give the command, code, or next concrete action that unblocks them.
+Otherwise generate a smaller, more accessible version of the original task completable in
+5–30 minutes. Steps must be concrete — no advice or motivation. Return JSON only.
 ```
 
 Prompt template:
 ```
 Original task: {taskTitle}
 Goal: {goal}
-Blocker description: {blockerText}
+Blocker: {blockerReason}
+Where they got stuck: {diagnosis.stuckAt}   ← included only when present
+What they tried: {diagnosis.tried}           ← included only when present
 Past blocker patterns: {patterns summary or 'none'}
 
-Generate a rescue action.
+{instruction}  ← "Answer the specific blocker directly..." or "Generate a rescue action..."
+Steps must be concrete, no advice or motivation.
 ```
 
 Response JSON schema:
@@ -744,6 +790,150 @@ Response JSON schema:
 If `changed = false`, the original title is used and `why` is shown as an adaptation note on the next day.
 
 Deterministic fallback: return `{ changed: false, title: tomorrowTitle, why: '' }`.
+
+---
+
+---
+
+### `sharpen_goal`
+
+Purpose: Turn a vague onboarding goal into a specific, artifact-anchored sentence.
+Called non-blocking during onboarding Step 7 (generate/setup page). Never throws —
+returns null on failure so onboarding is never blocked.
+
+Module: `frontend/services/ai-v2-coaching.js · sharpenGoal()`
+
+Backend config:
+```js
+sharpen_goal: {
+  model: OPENAI_MODEL,
+  maxCompletionTokens: 250,
+  reasoningEffort: 'minimal',
+  temperature: 0.7,
+  topP: 1,
+  contextLimits: { promptChars: 1200, systemChars: 400, totalChars: 1600 },
+},
+```
+
+Prompt template:
+```
+Goal: {goal}
+Category: {category}
+Day-28 target: {weekGoal}       ← if provided
+Current project: {currentProject} ← if provided
+
+Sharpen the goal into one specific, actionable sentence (≤80 chars).
+Name the one concrete artifact that exists at the end (≤100 chars).
+Write why it matters in one sentence (≤100 chars).
+```
+
+Response JSON schema:
+```json
+{
+  "sharpenedGoal": "string (≤80 chars)",
+  "artifactStatement": "string (≤100 chars)",
+  "whyItMatters": "string (≤100 chars)"
+}
+```
+
+Result is shown as a comparison card (original → sharpened). User can accept
+or skip. On accept: `draft.specificGoal = result.sharpenedGoal` and
+`draft.goalArtifact = result.artifactStatement` (stored in `sv2_user`).
+
+Fallback: null → auto-accept original goal unchanged.
+
+---
+
+### `agent_step_feedback`
+
+Purpose: Micro-coaching chip shown below a completed step in Agent Mode.
+Fired **fire-and-forget** after `handleAgentStepDone` when `note.length ≥ 10`.
+Silently absent if AI fails or note is too short.
+
+Module: `frontend/services/ai-v2-coaching.js · getStepFeedback()`
+
+Backend config:
+```js
+agent_step_feedback: {
+  model: OPENAI_MODEL,
+  maxCompletionTokens: 80,
+  reasoningEffort: 'minimal',
+  temperature: 0.5,
+  topP: 1,
+  contextLimits: { promptChars: 800, systemChars: 300, totalChars: 1100 },
+},
+```
+
+Prompt template:
+```
+Step: {step.text}
+Expected output: {step.output}
+User note: {userNote}
+
+Is the note a reasonable attempt at the expected output? ok: true/false.
+tip: one brief coaching note, max 100 chars.
+```
+
+Response JSON schema:
+```json
+{ "ok": boolean, "tip": "string (≤100 chars)" }
+```
+
+Chip display:
+- `ok: true` → green "✓ [tip]"
+- `ok: false` → amber "→ [tip]"
+- Empty note or AI fail → no chip
+
+---
+
+### `week_recap`
+
+Purpose: Weekly ship checkpoint shown at the start of a new week on Track runs.
+Triggered non-blocking from `handleDayDone` when `completedDayNumber % 7 === 0`
+and `completedDayNumber < totalDays` and `track.kind === 'track'`.
+
+Module: `frontend/services/ai-v2-coaching.js · generateWeekRecap()`
+
+Backend config:
+```js
+week_recap: {
+  model: OPENAI_MODEL,
+  maxCompletionTokens: 200,
+  reasoningEffort: 'minimal',
+  temperature: 0.7,
+  topP: 1,
+  contextLimits: { promptChars: 1500, systemChars: 500, totalChars: 2000 },
+},
+```
+
+Prompt template:
+```
+Week {weekNumber} of a 28-day Track just ended.
+Goal: {goal}
+Final artifact: {goalArtifact}  ← if set
+Phase: {phaseName}              ← if set
+Days this week:
+  Day N: {outcome} — {taskTitle}
+  ...
+
+What did the user ship this week (1 sentence, ≤120 chars)?
+Are they on track for the final day? (true/false)
+What is the one focus for next week (≤120 chars)?
+```
+
+Response JSON schema:
+```json
+{
+  "shipped": "string (≤120 chars)",
+  "onTrack": boolean,
+  "nextWeekFocus": "string (≤120 chars)"
+}
+```
+
+Result stored in `ui.weekRecapData` (session-only). Card shown at top of
+`/today` next render. Dismissed by user tapping "Got it →".
+
+Fallback: `{ shipped: "Week N done", onTrack: true, nextWeekFocus: "Keep building momentum" }`.
 
 ---
 
