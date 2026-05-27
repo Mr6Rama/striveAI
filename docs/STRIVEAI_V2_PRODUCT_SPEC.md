@@ -13,8 +13,20 @@ AI actions in `STRIVEAI_V2_AI_ACTIONS.md`.
 
 ## Core Principle
 
-StriveAI is a **7-day AI execution agent for builders.** It is not a planner,
-not a STEM app, not a billing product, and not a general chatbot.
+StriveAI is a **two-tier AI execution agent for builders.** It offers two
+commitment lengths, chosen during onboarding:
+
+- **Spark** — a **7-day probe cycle**. Linear, no phases, no rest days. Its
+  purpose is proof-of-fit and producing a first artifact. Spark is optional
+  and is the lighter on-ramp for users who aren't ready to commit to 30 days.
+- **Track** — a **30-day execution cycle**. Structured into **4 weekly
+  phases** whose names are AI-generated per goal (e.g., fitness:
+  "Baseline / Build / Peak / Maintain"; project: "Foundations / Build /
+  Validate / Ship"). Includes exactly **1 rest day per week** on a weekday
+  the user picks during onboarding. Rest days never count as missed.
+
+StriveAI is not a planner, not a STEM app, not a billing product, and not a
+general chatbot.
 
 The product does not stop at generating a plan. Every day it:
 
@@ -87,8 +99,34 @@ No STEM category. No locked-down per-category logic at MVP. The category feeds t
 | Database namespace | Fresh `sv2_*` keys. v1 `sa_*` keys are read-only (migration guard). |
 | Billing | None. Freemium. No pricing screens. No Stripe, no PayPal. |
 | Agent Mode | Required. Guided 3–5 micro-step execution. Not an open chatbot. |
-| Day 7 | Recap screen. User chooses: continue same goal for 7 more days, or start a new track. |
+| Track length | Two-tier model: optional **Spark** = 7 days (linear), default **Track** = 30 days (4 weekly phases). Chosen in onboarding "Commitment" step. |
+| Phase structure | Track only. 4 weekly phases. **Phase names are AI-generated per goal** (no fixed list). Spark has no phases. |
+| Rest day | Track only. Exactly 1 rest day per week, on a weekday the user picks during onboarding. Rest days are auto-set to `rest` status and never count as missed. Spark has no rest days. |
+| Spark Day 7 | Recap screen. Primary CTA "Continue → 30-day Track" (calls `spark_to_track_extend`). Secondary CTA "Start something new". |
+| Track Day 30 | Recap screen. CTAs: Extend +30 days (`track_continue_30`) / Pivot to new goal / Pause. |
 | STEM mode | Completely removed. No STEM labels, prompts, routes, fallbacks, or UI. |
+
+---
+
+## Track Models: Spark and Track
+
+Two commitment lengths. The user picks one in the onboarding Commitment step.
+The rest of the product (Today, Agent Mode, Action Kit, Proof, Blocked,
+Rescue, Failure Pattern Memory, Telegram) is identical between them — only
+the length, structure, and recap differ.
+
+| Dimension | Spark | Track |
+|---|---|---|
+| Length | 7 days | 30 days |
+| Structure | Linear, no phases | 4 weekly phases (weeks 1–4) |
+| Phase names | n/a | AI-generated per goal (e.g., "Baseline / Build / Peak / Maintain") |
+| Rest day | None — work every day | 1 per week, on a weekday the user picks during onboarding |
+| Rest-day handling | n/a | `day.status = 'rest'`; never recorded as missed |
+| Purpose | Proof-of-fit; produce a first artifact | Sustained execution; ship a real artifact by week 4 |
+| AI generator | `spark_generate` | `track_generate_30` |
+| Recap | Spark Recap (Day 7): short, upsell to Track | Track Recap (Day 30): full results by phase |
+| Primary next step | "Continue → 30-day Track" (`spark_to_track_extend`) | "Extend +30 days" (`track_continue_30`) |
+| Secondary next step | "Start something new" | "Pivot to new goal" / "Pause" |
 
 ---
 
@@ -97,11 +135,19 @@ No STEM category. No locked-down per-category logic at MVP. The category feeds t
 ```
 Landing  →  Auth  →  Onboarding
                         ↓
-              AI generates 7-day execution track
+              Commitment step: Spark (7d) or Track (30d)
                         ↓
-                   Plan Preview
+         ┌───────────────┴──────────────────┐
+         ▼                                  ▼
+  AI: spark_generate                AI: track_generate_30
+  (7 days, linear)                  (30 days, 4 AI-named phases,
+                                     1 rest day/week)
+         ↓                                  ↓
+              Plan Preview (Spark or Track variant)
                         ↓
               ┌────  Today's Action  ◀───────────────┐
+              │            ↓                          │
+              │  Rest day? → today.status = 'rest'    │
               │            ↓                          │
               │  User picks one of:                   │
               │    [Start with Agent] → Agent Mode    │
@@ -118,8 +164,12 @@ Landing  →  Auth  →  Onboarding
               │            ↓                          │
               └──  AI adapts tomorrow's task  ────────┘
                         ↓
-              Day 7 Recap  →  Continue same goal
-                          \\→ Start a new track
+         ┌──────────────┴──────────────┐
+         ▼                             ▼
+  Spark Recap (Day 7)           Track Recap (Day 30)
+   ├─ Continue → 30-day Track    ├─ Extend +30 (track_continue_30)
+   │  (spark_to_track_extend)    ├─ Pivot to new goal
+   └─ Start something new        └─ Pause
 ```
 
 ---
@@ -129,31 +179,48 @@ Landing  →  Auth  →  Onboarding
 ### New User
 
 1. **`/landing`** — paper-editorial front door with product-native preview card.
-   Single CTA: "Start 7-day track →".
+   Primary CTA: "Start your track →" (commitment is chosen in onboarding).
 2. **`/auth`** — email + password (Firebase Auth). Tab to switch sign-in /
    create-account. Inline errors.
-3. **`/onboarding`** — 8 steps (current implementation):
+3. **`/onboarding`** — multi-step setup wizard. The Commitment step
+   branches the rest of the journey:
    - Step 1: Goal category (9 categories)
    - Step 2: Goal template + specific goal text
    - Step 3: Main blocker (8 options)
    - Step 4: Daily intensity (4 levels)
-   - Step 5: If-then rules (pick 2–4 of 6)
-   - Step 6: Telegram ping time + optional bot connect
-   - Step 7: Escalation rule (what should happen after 2 missed days)
-   - Step 8: Confirm & generate
-   - The 8-step flow is on the long side; deferring Telegram + Escalation +
-     If-Then to Settings is a known improvement.
-4. **Track generation** — fires `track_generate` AI action. UI shows
-   "Building your track…" with deterministic fallback if AI fails.
-5. **`/plan-preview`** — setup summary + Day 1 hero card + Day 2 secondary
-   + Days 3–7 outline + "StriveAI helps you execute each day" promise block.
-6. **`/today`** — Day 1 action card with the bracketed focus styling.
-   Buttons: `Start with Agent` (primary), `Action Kit`, `I already did it`,
-   `I'm blocked`, `Skip today`.
+   - **Step 5 (NEW): Commitment** — Spark (7-day probe) or Track (30-day).
+   - **Step 6 (NEW, Track only): Rest day** — pick the weekday for the
+     weekly rest day (Sun–Sat). Skipped entirely when Spark was chosen.
+   - Step 7: If-then rules (pick 2–4 of 6)
+   - Step 8: Telegram ping time + optional bot connect
+   - Step 9: Escalation rule (what should happen after 2 missed days)
+   - Step 10: Confirm & generate
+   - Numbering shifts; canonical step table in
+     `STRIVEAI_V2_ROUTES_AND_SCREENS.md`.
+4. **Track generation** — branches on Commitment:
+   - Spark → `spark_generate` (7 days, linear).
+   - Track → `track_generate_30` (30 days, AI-named 4 weekly phases, rest
+     day woven in on the chosen weekday).
+   UI shows "Building your track…" with deterministic fallback if AI fails.
+5. **`/plan-preview`** — setup summary + Day 1 hero card + Day 2 secondary.
+   For Track: a one-line "story arc" narrative across the 4 phases.
+   For Spark: Days 3–7 outline. Both end with the "StriveAI helps you
+   execute each day" promise block.
+6. **`/today`** — Day 1 action card with bracketed focus styling. Header
+   breadcrumb is `Week {N} · Day {D} of {totalDays} — {phaseName}` (Track)
+   or `Day {D} of 7 — Spark` (Spark). Buttons: `Start with Agent` (primary),
+   `Action Kit`, `I already did it`, `I'm blocked`, `Skip today`.
 7. **Execution** — Agent Mode / Action Kit / Proof / Blocked flow.
-8. **Day closes** — outcome recorded; `adapt_day` is called for tomorrow.
-9. **Days 2–6** — same loop. Track adapts based on outcomes + failure patterns.
-10. **Day 7** — `/recap` screen. Continue or new track decision.
+8. **Day closes** — outcome recorded; `adapt_day` is called for tomorrow
+   (Track: phase-aware prompt — does not violate phase role boundaries).
+9. **Subsequent days** — same loop. Track adapts based on outcomes +
+   failure patterns. Rest days (Track) auto-set to `rest` and not counted
+   as missed.
+10. **End of cycle**:
+    - Spark Day 7 → `/recap` Spark Recap (short, upsell-focused) →
+      Continue to 30-day Track OR Start something new.
+    - Track Day 30 → `/recap` Track Recap (full, results by phase) →
+      Extend +30 / Pivot to new goal / Pause.
 
 ### Returning User
 
@@ -166,14 +233,26 @@ Landing  →  Auth  →  Onboarding
 
 ## Status System
 
+### Track-level fields
+
+Every active cycle (Spark or Track) lives at `sv2_track` with:
+
+- `track.kind: 'spark' | 'track'` — which model is running.
+- `track.totalDays: 7 | 30` — derived from `kind`.
+- `track.phases: Phase[] | null` — `null` for Spark; length 4 for Track
+  (one per week, AI-named).
+- `track.currentWeekNumber: 1–4 | null` — `null` for Spark.
+- `track.restDayOfWeek: 0–6 | null` — weekday (Sun=0) chosen during
+  onboarding; `null` for Spark.
+
 ### Track-level statuses
 
 | Status | Meaning |
 |---|---|
-| `generating` | AI is building the 7-day track |
+| `generating` | AI is building the track (Spark or Track) |
 | `active` | Track is running |
-| `paused` | User manually paused (day is frozen) [LATER] |
-| `complete` | Day 7 recap reached |
+| `paused` | User manually paused (day is frozen). For Track, used by the "Pause" recap CTA. |
+| `complete` | End-of-cycle recap reached (Day 7 for Spark, Day 30 for Track) |
 | `abandoned` | User started a new track mid-run [LATER] |
 
 ### Day-level statuses
@@ -187,10 +266,14 @@ Landing  →  Auth  →  Onboarding
 | `skipped` | User explicitly skipped |
 | `missed` | Day passed without action (auto-set on rollover) |
 | `rescued` | Blocked but completed rescue action |
+| `rest` | Track only. Auto-set on the weekly rest day. **Never counts as missed.** Not recorded in `history.entries` as an outcome. |
 
 ### Action outcomes (recorded in history)
 
 `done` | `blocked` | `skipped` | `missed` | `rescued`
+
+`rest` is a day status only — it is **not** an action outcome and is **not**
+appended to `sv2_history.entries`.
 
 ---
 
@@ -317,40 +400,92 @@ action falls back to `partial` when AI is unavailable.
 
 ---
 
-## Day 7 Recap
+## End-of-Track Recap
 
-Shown when all 7 days have passed (or user has acted on Day 7).
+The `/recap` screen has **two variants**, selected by `track.kind`.
 
-Recap screen shows:
+### Variant A — Spark Recap (Day 7, `track.kind === 'spark'`)
+
+Short, upsell-focused. Designed to convert a successful Spark into a Track.
+
+Shows:
 - Days completed vs missed vs blocked vs skipped (7-cell grid)
 - Streak count
-- Number of proof submissions
-- Number of rescue completions
+- Proof submissions count
+- Rescue completions count
 - Failure patterns encountered (brief summary)
 - Goal text restated
-- AI-generated 1-paragraph reflection: what patterns emerged, what to carry forward
+- AI-generated 1-paragraph reflection (`day7_recap` action)
+- Short inline value-prop block explaining what a 30-day Track adds
+  (phase structure, weekly rest day, shippable artifact by week 4)
 
-Then: choice card.
+CTAs:
 
 ```
 What's next?
 
-[Continue this goal for another 7 days]
-[Start a new 7-day track with a different goal]
+[ Continue → 30-day Track ]    ← primary, calls spark_to_track_extend
+[ Start something new ]        ← secondary, returns to onboarding Step 1
 ```
 
-### Continue same goal
+**Continue → 30-day Track**
+- Calls `spark_to_track_extend` with the original goal, all 7 days of
+  outcomes, all proof texts, failure patterns.
+- AI generates a 30-day Track that explicitly continues the user's
+  progress from Spark — does not restart from scratch.
+- Old Spark archived to `sv2_history.archivedTracks[]` (with `kind: 'spark'`).
+- New active `track.kind = 'track'`, `totalDays = 30`, `phases` populated,
+  `restDayOfWeek` set from `user.preferredRestDay` (prompt the user to pick
+  if it wasn't set during Spark onboarding).
+- `today = createDefaultTodayV2(today's date, 1)`.
 
-- AI receives: original goal, day 7 outcomes, failure patterns, proof entries.
-- Generates a new 7-day track that picks up where day 7 left off.
-- Old track archived to `sv2_archivedTracks[]`.
-- New track becomes active with `dayNumber = 1` but goal text unchanged.
+**Start something new**
+- Current Spark archived.
+- Onboarding restarts from Step 1 (Goal category).
 
-### Start new track
+### Variant B — Track Recap (Day 30, `track.kind === 'track'`)
 
-- Current track archived.
-- Onboarding Step 1 and Step 2 presented again (goal + constraints).
-- New track generated.
+Full reflection. Designed for a "what now" decision after a real
+30-day execution cycle.
+
+Shows:
+- Goal text + 4 phase cards (one per week) with completion %, top
+  outcome, and the AI-generated phase name.
+- Results grid across the full 30 days: done / missed / blocked /
+  skipped / rescued counts + rest-day count (excluded from "missed").
+- Streak / proof / rescue stats.
+- Artifact timeline grouped by week (links + text from `today.proof`
+  across the 30 days).
+- Failure patterns summary.
+- AI-generated reflection paragraph (see `day7_recap` action — receives
+  30-day data including phase performance; document parametrizes the
+  same action for both variants).
+
+CTAs:
+
+```
+What's next?
+
+[ Extend +30 days ]            ← primary, calls track_continue_30
+[ Pivot to a new goal ]        ← secondary, restarts onboarding from Step 1
+[ Pause ]                      ← tertiary, sets track.status = 'paused'
+```
+
+**Extend +30 days**
+- Calls `track_continue_30` with phase performance, all proofs,
+  failure patterns from the just-finished Track.
+- AI generates the next 30-day Track with a fresh 4-phase arc that
+  builds on what was shipped.
+- Old Track archived to `sv2_history.archivedTracks[]` (with `kind: 'track'`).
+- New active Track inherits `restDayOfWeek` and `user.preferredRestDay`.
+
+**Pivot to a new goal**
+- Current Track archived.
+- Onboarding restarts from Step 1; Commitment step defaults to Track.
+
+**Pause**
+- `track.status = 'paused'`. Today screen shows a "Track paused" state
+  with a "Resume Track" button. No outcome rollovers fire while paused.
 
 ---
 
@@ -372,9 +507,14 @@ Summary:
 ### In MVP (implemented)
 
 - Email/password auth (Firebase Auth)
-- 8-step onboarding with 9 goal categories
-- 7-day track generation (`track_generate` + deterministic fallback)
-- Plan Preview screen
+- Multi-step onboarding with 9 goal categories, Commitment step (Spark vs Track), and Rest-day picker (Track only)
+- Two-tier track model:
+  - Spark generation (`spark_generate`, 7 days, linear)
+  - Track generation (`track_generate_30`, 30 days, 4 AI-named weekly phases, 1 user-picked rest day per week)
+  - Spark → Track extension (`spark_to_track_extend`)
+  - Track → Track extension (`track_continue_30`)
+- Vertical Journal Spine roadmap UI (collapsible weeks, always-visible day titles) — replaces the v2 SVG sinusoid roadmap component
+- Plan Preview screen with phase narrative (Track) or 7-day outline (Spark)
 - Today's Action screen with bracketed focus card
 - Agent Mode (3–5 guided micro-steps with per-step notes)
 - Action Kit (AI-generated templates / references / questions / tips)
@@ -382,8 +522,8 @@ Summary:
 - Blocked + Skip flows producing a Rescue Action
 - Auto-missed rollover on a new day
 - Failure Pattern Memory (stored; feeds `adapt_day` and `/today` insight)
-- Day 7 Recap with stats + AI reflection + pattern export
-- Continue same goal (`track_continue`) / Start new track
+- End-of-Track Recap: Spark Recap (Day 7, short upsell) and Track Recap (Day 30, full results by phase + artifact timeline)
+- Spark → 30-day Track CTA, Track → Extend +30 / Pivot / Pause CTAs
 - Telegram ping (one per day at 09:00 UTC, optional)
 - Settings: email, experience level, Telegram connect/disconnect, sign out
 - Fresh `sv2_*` state namespace, crash-safe v1 read-only guard
@@ -398,7 +538,6 @@ Summary:
 - Web push notifications
 - Email notifications
 - Analytics dashboard
-- Roadmap/milestone view (replaced by 7-day linear track)
 - STEM-specific mode
 - Public proof sharing
 - AI chat as a general assistant

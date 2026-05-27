@@ -2,7 +2,7 @@
 
 ## Product
 
-**StriveAI MVP v2** — a 7-day AI execution agent for young builders: students, indie builders, young founders, creators, portfolio builders, and people developing skills or projects.
+**StriveAI MVP v2** — a 30-day AI execution agent with an optional 7-day Spark probe, for young builders: students, indie builders, young founders, creators, portfolio builders, and people developing skills or projects.
 
 **Source of truth**: `docs/STRIVEAI_V2_PRODUCT_SPEC.md`
 
@@ -46,7 +46,11 @@ The product helps users execute today's specific step inside the app — not jus
 | STEM mode | **Completely removed.** No STEM labels, prompts, routes, fallbacks, or UI. |
 | AI chat | **No generic open-ended chatbot.** Agent Mode only — guided, task-scoped execution. |
 | Agent Mode | 3–5 ordered micro-steps for today's specific task. Not a free-form chat. |
-| Day 7 | Recap screen → user chooses: continue same goal (new 7-day run) or start a new track. |
+| Track length | Two-tier: optional 7-day **Spark** probe, default 30-day **Track**. User picks during onboarding (Commitment step). |
+| Phase structure | Track only. 4 weekly phases per 30-day Track; phase **names are AI-generated per goal** (e.g., fitness: "Baseline / Build / Peak / Maintain"). Spark is linear, no phases. |
+| Rest day | Track only. Exactly 1 rest day per week, user picks the weekday during onboarding. Rest days never count as missed. Spark has no rest days. |
+| Spark → Track | Spark Day 7 recap CTA "Continue → 30-day Track" calls `spark_to_track_extend`. Secondary CTA "Start something new". |
+| Track → Recap | Track Day 30 recap CTAs: Extend +30 (`track_continue_30`) / Pivot to new goal / Pause. |
 | Data namespace | Fresh `sv2_*` keys. Do not write to `sa_*` v1 keys. Read them only for migration guard. |
 | Deployment | Vercel. `vercel.json` required before any deploy. |
 | AI backend | Existing Express proxy at `POST /api/openai/generate`. Reuse — do not replace. |
@@ -77,6 +81,7 @@ runtime references them.
 - `frontend/services/persistence.js` — localStorage + Firestore dual-write under `sv2_*`
 - `frontend/ui/router.js` — pushState router with `V2_ROUTES` allowlist
 - `frontend/ui/pages/*.js` — one module per route
+- Roadmap UI: the v2 SVG sinusoid roadmap component is conceptually replaced by a **Vertical Journal Spine** (collapsible weekly sections with always-visible day titles). See `docs/STRIVEAI_V2_ROUTES_AND_SCREENS.md` for the spec; implementation pending.
 - `vercel.json` — canonical deployment config (daily cron `0 9 * * *`)
 - `firebase.json` — kept as a record; Firebase Hosting is not the active host
 
@@ -148,15 +153,18 @@ through `POST /api/openai/generate`. None of these is a generic chatbot —
 each is task-scoped with a JSON schema and a deterministic fallback.
 
 ```
-track_generate   — build initial 7-day track from onboarding data
-track_continue   — generate continuation track after Day 7 recap
-agent_steps      — generate 3–5 micro-steps for today's task
-agent_hint       — inline hint for a stuck agent step (allowlisted; not yet wired in v2 client)
-rescue_action    — generate Rescue Action for a blocked day
-action_kit       — generate Action Kit (templates / questions / tips)
-v2_proof_check   — judge submitted proof: met / partial / not_met
-day7_recap       — generate Day 7 reflection paragraph
-adapt_day        — adapt tomorrow's task based on today's outcome
+spark_generate          — build initial 7-day Spark probe (linear, no phases)
+track_generate_30       — build initial 30-day Track with 4 AI-named weekly phases
+spark_to_track_extend   — convert completed Spark outcomes into a 30-day Track
+track_continue_30       — generate next 30-day Track (Extend +30) after Track recap
+track_generate          — DEPRECATED alias of spark_generate, kept for back-compat
+agent_steps             — generate 3–5 micro-steps for today's task
+agent_hint              — inline hint for a stuck agent step (allowlisted; not yet wired in v2 client)
+rescue_action           — generate Rescue Action for a blocked day
+action_kit              — generate Action Kit (templates / questions / tips)
+v2_proof_check          — judge submitted proof: met / partial / not_met
+day7_recap              — generate reflection paragraph for end-of-track recap (Spark + Track)
+adapt_day               — adapt tomorrow's task based on today's outcome (phase-aware on Track)
 ```
 
 Full prompt specs and fallbacks in `docs/STRIVEAI_V2_AI_ACTIONS.md`.
@@ -173,8 +181,8 @@ All v2 state lives under `sv2_*` localStorage keys, mirrored to Firestore `users
 
 | Key | Domain |
 |---|---|
-| `sv2_user` | User profile (name, email, goal category, experience) |
-| `sv2_track` | Active 7-day track |
+| `sv2_user` | User profile (name, email, goal category, experience, preferred rest day) |
+| `sv2_track` | Active track (Spark = 7 days or Track = 30 days with 4 phases) |
 | `sv2_today` | Current day's execution state |
 | `sv2_history` | Outcome log, failure patterns, archived tracks |
 | `sv2_telegram` | Telegram connection state |

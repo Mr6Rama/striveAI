@@ -42,6 +42,9 @@ interface UserV2 {
   createdAt: string;       // ISO-8601
   experienceLevel: 'beginner' | 'intermediate' | 'advanced';
   dailyHours: string;      // '1-2' | '2-4' | '4-6' | '6-8' | '8+'
+  preferredRestDay: number | null;  // weekday 0–6 (Sun=0). Set when user
+                                    // chose Track in onboarding; null when
+                                    // user chose Spark.
 }
 
 type GoalCategory =
@@ -67,6 +70,7 @@ function createDefaultUserV2() {
     createdAt: isoDateNow(),
     experienceLevel: 'intermediate',
     dailyHours: '2-4',
+    preferredRestDay: null,
   };
 }
 ```
@@ -75,30 +79,52 @@ function createDefaultUserV2() {
 
 ## Domain: `sv2_track`
 
-The active 7-day execution track. Replaced (and archived) when a new track starts.
+The active execution track. Two flavors: **Spark** (`kind: 'spark'`, 7 days,
+linear, no phases, no rest day) and **Track** (`kind: 'track'`, 30 days, 4
+weekly phases, 1 rest day per week). Replaced (and archived) when a new
+track starts.
 
 ```ts
 interface TrackV2 {
   id: string;              // 'track-{timestamp}'
-  goal: string;            // User's stated goal for this 7-day run
+  kind: 'spark' | 'track'; // Which model. Drives totalDays, phases, restDayOfWeek.
+  goal: string;            // User's stated goal for this run
   goalCategory: GoalCategory;
   blockerHint: string;     // User's biggest current blocker (from onboarding)
   generatedAt: string;     // ISO-8601
   startDate: string;       // ISO date of Day 1
   status: TrackStatus;
-  currentDayNumber: number; // 1–7
+  totalDays: 7 | 30;       // 7 for Spark, 30 for Track
+  currentDayNumber: number; // 1..totalDays
+  currentWeekNumber: 1 | 2 | 3 | 4 | null;  // null for Spark
+  restDayOfWeek: number | null;             // 0–6 (Sun=0). null for Spark.
+  phases: Phase[] | null;  // length 4 for Track. null for Spark.
   days: DayPlan[];
   continuationOf: string | null; // id of previous track if this is a continuation
 }
 
-type TrackStatus = 'generating' | 'active' | 'complete' | 'abandoned';
+type TrackStatus = 'generating' | 'active' | 'paused' | 'complete' | 'abandoned';
+
+interface Phase {
+  weekNumber: 1 | 2 | 3 | 4;
+  name: string;            // AI-generated, goal-specific. e.g. "Baseline",
+                           // "Foundations", "Validate", "Ship".
+  role: 'setup' | 'build' | 'validate' | 'ship' | 'recover' | 'review';
+  dayNumbers: number[];    // The 7 day numbers that belong to this week
+                           // (e.g., week 1 = [1,2,3,4,5,6,7]).
+}
 
 interface DayPlan {
-  dayNumber: number;       // 1–7
-  title: string;           // Action title: short, concrete, specific
+  dayNumber: number;       // 1..track.totalDays
+  weekNumber: 1 | 2 | 3 | 4 | null; // null for Spark; 1–4 for Track
+  role: 'setup' | 'build' | 'validate' | 'ship' | 'review' | 'rest';
+  isRestDay: boolean;      // true on the weekly rest day (Track only)
+  title: string;           // Action title: short, concrete, specific.
+                           // For rest days: a short rest prompt (e.g.
+                           // "Rest day — recover and reflect").
   why: string;             // One sentence: why this day's task matters
-  successCriteria: string; // Concrete done condition
-  estimateMinutes: number; // 30 | 45 | 60 | 90 | 120
+  successCriteria: string; // Concrete done condition (empty/n-a on rest days)
+  estimateMinutes: number; // 30 | 45 | 60 | 90 | 120 (0 on rest days)
   category: string;        // e.g. 'research' | 'build' | 'outreach' | 'review' | 'test'
   status: DayStatus;
   date: string;            // ISO date this day is assigned to
@@ -111,26 +137,38 @@ type DayStatus =
   | 'blocked'
   | 'skipped'
   | 'missed'
-  | 'rescued';
+  | 'rescued'
+  | 'rest';                // Auto-set on the weekly rest day. NEVER counts
+                           // as missed and is NOT appended to
+                           // history.entries as an outcome.
 ```
 
-Default (track not yet generated):
+Default (track not yet generated — defaults to a 30-day Track):
 ```js
 function createDefaultTrackV2() {
   return {
     id: '',
+    kind: 'track',
     goal: '',
     goalCategory: 'other',
     blockerHint: '',
     generatedAt: '',
     startDate: '',
     status: 'active',
+    totalDays: 30,
     currentDayNumber: 1,
+    currentWeekNumber: 1,
+    restDayOfWeek: null,
+    phases: null,
     days: [],
     continuationOf: null,
   };
 }
 ```
+
+When the user picks Spark in onboarding, the generator overrides:
+`kind: 'spark', totalDays: 7, currentWeekNumber: null, restDayOfWeek: null,
+phases: null`.
 
 ---
 
@@ -141,8 +179,8 @@ State for the current day's execution session. Reset each day at rollover.
 ```ts
 interface TodayV2 {
   date: string;              // ISO date this record applies to
-  dayNumber: number;         // which day in the track (1–7)
-  status: DayStatus;
+  dayNumber: number;         // which day in the track (1..track.totalDays)
+  status: DayStatus;         // includes 'rest' on the weekly rest day (Track)
   proof: ProofEntry | null;
   proofResult: ProofResult | null;   // AI verdict on the latest proof submission
   agentSession: AgentSession | null;
@@ -281,11 +319,12 @@ type BlockerCategory =
 
 interface ArchivedTrack {
   trackId: string;
+  kind: 'spark' | 'track';
   goal: string;
   goalCategory: GoalCategory;
   startDate: string;
   endDate: string;
-  totalDays: number;
+  totalDays: number;       // 7 (Spark) or 30 (Track)
   doneCount: number;
   missedCount: number;
   blockedCount: number;
@@ -369,7 +408,7 @@ interface UIState {
   kitLoading: boolean;        // /action-kit is generating
   proofLoading: boolean;      // /proof is judging
   recapLoading: boolean;      // /recap reflection paragraph is generating
-  trackContinuing: boolean;   // Day 7 continuation track is generating
+  trackContinuing: boolean;   // Spark→Track extension or Track +30 continuation is generating
 }
 ```
 
@@ -392,6 +431,9 @@ interface OnboardingDraft {
   specificGoal: string;
   blocker: string;
   dailyHours: string;       // '0-1' | '1-2' | '2-4' | '4-6'
+  trackKind: 'spark' | 'track';  // Commitment step (new)
+  restDay: number;          // 0–6 (Sun=0). Captured only when trackKind === 'track'.
+                            // Mirrored to user.preferredRestDay on submit.
   ifThenRules: string[];    // 2–4 selected rule IDs
   pingSelection: string;    // 'morning' | 'afternoon' | 'evening' | 'custom'
   pingHour: number;         // 0–23 UTC
@@ -442,10 +484,17 @@ function createInitialState() {
 
 ### New user completing onboarding
 ```
-user → saved  
-track.status = 'generating'  
-→ AI track_generate call  
-→ track.days[] populated, track.status = 'active'  
+user → saved (includes preferredRestDay if Track was chosen)
+track.kind = onboarding.trackKind          // 'spark' | 'track'
+track.totalDays = (kind === 'spark') ? 7 : 30
+track.restDayOfWeek = (kind === 'track') ? user.preferredRestDay : null
+track.status = 'generating'
+→ AI call:
+    kind === 'spark' → spark_generate     (linear, no phases)
+    kind === 'track' → track_generate_30  (4 AI-named phases, rest day woven in)
+→ track.days[] populated (each DayPlan has weekNumber, role, isRestDay),
+  track.phases[] populated (Track only),
+  track.status = 'active'
 → today set to day 1
 ```
 
@@ -487,26 +536,66 @@ history.entries.push({ outcome: 'skipped', ... })
 ### Auto-missed (rollover)
 ```
 IF today.date < currentDate AND today.status === 'pending'
-  today.status = 'missed'
-  history.entries.push({ outcome: 'missed', ... })
-  history.successStreak = 0
+  IF dayPlan.isRestDay  // Track only
+    today.status = 'rest'
+    // NOT appended to history.entries; streak NOT broken
+  ELSE
+    today.status = 'missed'
+    history.entries.push({ outcome: 'missed', ... })
+    history.successStreak = 0
 ```
 
-### Day 7 complete: continue
+### Rest day rollover (Track only)
 ```
-history.archivedTracks.push({ ...currentTrack summary })
-track = new track (AI-generated continuation)
-track.continuationOf = old track id
+On day advance, IF dayPlan.isRestDay === true
+  today.status = 'rest'
+  today.outcomeAt = '' (no outcome recorded)
+  // No history.entries push. No streak impact. No adapt_day call.
+```
+
+### Spark complete: extend to Track (Spark Recap CTA "Continue → 30-day Track")
+```
+history.archivedTracks.push({ kind: 'spark', ...currentTrack summary })
+→ AI spark_to_track_extend call (receives all 7 days outcomes + proofs +
+  patterns)
+track = new track {
+  kind: 'track',
+  totalDays: 30,
+  phases: [4 AI-named phases],
+  restDayOfWeek: user.preferredRestDay,    // prompt user to pick if null
+  continuationOf: old Spark id,
+}
 today = createDefaultTodayV2(today's date, 1)
 ```
 
-### Day 7 complete: new track
+### Track complete: extend +30 (Track Recap CTA "Extend +30 days")
 ```
-history.archivedTracks.push({ ...currentTrack summary })
+history.archivedTracks.push({ kind: 'track', ...currentTrack summary })
+→ AI track_continue_30 call (receives phase performance + proofs + patterns)
+track = new track {
+  kind: 'track',
+  totalDays: 30,
+  phases: [4 AI-named phases, new arc],
+  restDayOfWeek: previous track's restDayOfWeek,
+  continuationOf: old Track id,
+}
+today = createDefaultTodayV2(today's date, 1)
+```
+
+### End-of-track: start new (pivot)
+```
+history.archivedTracks.push({ kind, ...currentTrack summary })
 user.goal = new goal
 user.goalCategory = new category
-track = new track (new goal, AI-generated)
+// Onboarding restarts from Step 1; Commitment + Rest day re-picked.
+track = new track (new goal, AI-generated for chosen kind)
 today = createDefaultTodayV2(today's date, 1)
+```
+
+### Track Recap: pause
+```
+track.status = 'paused'
+// Rollover skipped while paused. /today shows "Track paused" with Resume.
 ```
 
 ---
