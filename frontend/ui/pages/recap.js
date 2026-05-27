@@ -1,5 +1,6 @@
 // Day 7 Recap — /recap
 // Shown when track.status === 'complete'.
+import { renderJournal, wireJournal } from '../components/journal.js';
 
 let reflectionRequestedFor = '';
 
@@ -59,28 +60,11 @@ function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoa
 }
 
 function renderTimeline(days, entries, track) {
-  const rows = days.map((day) => {
-    const entry = entries.find((e) => e.trackId === track.id && e.dayNumber === day.dayNumber);
-    const status = entry?.outcome || day.status || 'pending';
-    const proof  = String(entry?.proofValue || '').trim();
-    const isLink = entry?.proofType === 'link' && /^https?:\/\//i.test(proof);
-    const proofBlock = !proof ? '' : isLink
-      ? `<a href="${esc(proof)}" target="_blank" rel="noopener" class="v2-link">${esc(proof)}</a>`
-      : `<p class="v2-body-text" style="margin:0;white-space:pre-wrap">${esc(proof)}</p>`;
-    return `
-      <div class="v2-recap-day v2-recap-day--${esc(status)}">
-        <div class="v2-recap-day__head">
-          <span class="v2-section-label">Day ${day.dayNumber}</span>
-          <span class="v2-recap-day__status">${esc(status)}</span>
-        </div>
-        <p class="v2-body-text" style="margin:6px 0 0;font-weight:600">${esc(day.title || '—')}</p>
-        ${proofBlock ? `<div class="v2-recap-day__proof">${proofBlock}</div>` : ''}
-      </div>`;
-  }).join('');
+  const isSpark = track.kind === 'spark';
   return `
-    <div class="v2-card" style="margin-bottom:16px">
-      <div class="v2-section-label" style="margin-bottom:12px">Your week, day by day</div>
-      <div class="v2-recap-timeline">${rows}</div>
+    <div style="margin-bottom:16px">
+      <div class="v2-section-label" style="margin-bottom:12px">${isSpark ? 'Your week, day by day' : 'Your journey, week by week'}</div>
+      ${renderJournal({ track, entries, currentDayNumber: track.currentDayNumber || days.length, variant: 'full' })}
     </div>`;
 }
 
@@ -239,6 +223,8 @@ function wireEvents(container, state, actions, track, recapText, patterns) {
   container.querySelectorAll('[data-route]').forEach((el) => {
     el.addEventListener('click', () => actions.onNavigate?.(el.getAttribute('data-route')));
   });
+
+  wireJournal(container);
 
   container.querySelector('#recap-continue')?.addEventListener('click', () => {
     if (state.ui?.trackContinuing) return;
