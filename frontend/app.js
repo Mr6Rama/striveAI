@@ -270,6 +270,40 @@ async function handleTelegramRefresh() {
   } catch (_e) { /* non-fatal */ }
 }
 
+async function handleTelegramDisconnect() {
+  try {
+    const token = await currentUser?.getIdToken();
+    await fetch('/api/v2/telegram/disconnect', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (_e) { /* non-fatal */ }
+  updateState((s) => {
+    s.telegram = { ...s.telegram, connected: false, username: '', chatId: '', connectedAt: '' };
+    return s;
+  });
+  await saveDomain('telegram', getState().telegram, { userId: currentUser?.uid, db: getDb() });
+}
+
+async function handleTelegramPingUpdate(hour) {
+  const h = Math.max(0, Math.min(23, Number(hour) || 9));
+  updateState((s) => { s.telegram = { ...s.telegram, pingHour: h }; return s; });
+  await saveDomain('telegram', getState().telegram, { userId: currentUser?.uid, db: getDb() });
+  await scheduleTelegramPing(getState(), h);
+}
+
+async function handleTelegramTestPing() {
+  const token = await currentUser?.getIdToken();
+  const res = await fetch('/api/v2/telegram/test-ping', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Could not send test ping.');
+  }
+}
+
 function addDays(isoDate, n) {
   const d = new Date(isoDate + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + n);
@@ -880,6 +914,9 @@ function renderApp(state) {
     onStartDay1:              handleStartDay1,
     onTelegramLink:           handleTelegramLink,
     onTelegramRefresh:        handleTelegramRefresh,
+    onTelegramDisconnect:     handleTelegramDisconnect,
+    onTelegramPingUpdate:     handleTelegramPingUpdate,
+    onTelegramTestPing:       handleTelegramTestPing,
     onKitGenerate:            handleKitGenerate,
     onAgentInit:              handleAgentInit,
     onAgentStepDone:          handleAgentStepDone,
