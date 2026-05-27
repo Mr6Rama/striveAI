@@ -27,7 +27,7 @@ export function render(container, state, actions) {
   container.innerHTML = `
     <div class="v2-page">
 
-      <div class="v2-kicker v2-kicker--muted" style="margin-bottom:8px">Action Kit · Day ${dayNum} of 7</div>
+      <div class="v2-kicker v2-kicker--muted" style="margin-bottom:8px">Action Kit · Day ${dayNum} of ${track.totalDays || 7}</div>
       <h1 class="v2-h1" style="margin-bottom:6px">Tools for today</h1>
       <p class="v2-sub">${esc(dayPlan.title || 'your task')}</p>
 

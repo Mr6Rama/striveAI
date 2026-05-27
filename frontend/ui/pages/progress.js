@@ -8,6 +8,7 @@ const STATUS_META = Object.freeze({
   blocked:     { label: 'Blocked',     cls: 'v2-badge--blocked',  cardCls: 'v2-day-card--blocked' },
   skipped:     { label: 'Skipped',     cls: 'v2-badge--skipped',  cardCls: 'v2-day-card--skipped' },
   missed:      { label: 'Missed',      cls: 'v2-badge--missed',   cardCls: 'v2-day-card--missed'  },
+  rest:        { label: 'Rest day',    cls: 'v2-badge--pending',  cardCls: ''                     },
   in_progress: { label: 'In progress', cls: 'v2-badge--in-prog',  cardCls: ''                     },
   pending:     { label: 'Pending',     cls: 'v2-badge--pending',  cardCls: ''                     },
 });
@@ -30,16 +31,19 @@ export function render(container, state, actions) {
 
   const user      = state.user || {};
   const weekGoal  = String(user.weekGoal || '').trim();
+  const isSpark   = track.kind === 'spark';
+  const totalDays = track.totalDays || (isSpark ? 7 : 28);
+  const trackType = isSpark ? '7-Day Spark' : `${totalDays}-Day Track`;
 
   container.innerHTML = `
     <div class="v2-page">
 
       <div class="v2-section-head" style="margin-bottom:20px">
         <div>
-          <div class="v2-kicker v2-kicker--muted">7-Day Track</div>
+          <div class="v2-kicker v2-kicker--muted">${trackType}</div>
           <h1 class="v2-h1" style="margin-bottom:4px">Your progress</h1>
           <p class="v2-sub" style="margin:0">${esc(track.goal || '')}</p>
-          ${weekGoal ? `<p class="v2-muted-text" style="margin:4px 0 0">By Day 7: ${esc(weekGoal)}</p>` : ''}
+          ${weekGoal ? `<p class="v2-muted-text" style="margin:4px 0 0">By Day ${totalDays}: ${esc(weekGoal)}</p>` : ''}
         </div>
         ${track.status === 'complete'
           ? `<button data-route="/recap" class="v2-btn v2-btn--primary">View Recap →</button>`
@@ -60,7 +64,7 @@ export function render(container, state, actions) {
 
       ${renderStats(stats)}
 
-      <div class="v2-section-label" style="margin-bottom:12px;margin-top:24px">7-Day Timeline</div>
+      <div class="v2-section-label" style="margin-bottom:12px;margin-top:24px">${trackType} Timeline</div>
       <div class="v2-timeline">
         ${days.map(renderDayCard).join('')}
       </div>

@@ -267,7 +267,7 @@ function contextPanel(dayPlan, track, today, insight, user) {
   return `
     <div class="v2-context-panel">
       <div class="v2-kicker v2-kicker--muted" style="margin-bottom:8px">
-        Day ${dayNum} of 7
+        Day ${dayNum} of ${track.totalDays || 7}
       </div>
       <p class="v2-muted-text" style="margin-bottom:10px">${esc(project ? `Working on: ${focus}` : focus)}</p>
       <p class="v2-h3" style="margin-bottom:8px">${esc(dayPlan.title || '—')}</p>

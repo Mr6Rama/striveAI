@@ -11,8 +11,10 @@ export const STORAGE_KEYS_V2 = Object.freeze({
 // Backward-compat alias so stale imports don't crash at parse time.
 export const STORAGE_KEYS = STORAGE_KEYS_V2;
 
-export const TRACK_STATUSES     = Object.freeze(['generating', 'active', 'complete', 'abandoned']);
-export const DAY_STATUSES       = Object.freeze(['pending', 'in_progress', 'done', 'blocked', 'skipped', 'missed', 'rescued']);
+export const TRACK_STATUSES     = Object.freeze(['generating', 'active', 'complete', 'paused', 'abandoned']);
+export const TRACK_KINDS        = Object.freeze(['spark', 'track']);
+export const DAY_STATUSES       = Object.freeze(['pending', 'in_progress', 'done', 'blocked', 'skipped', 'missed', 'rescued', 'rest']);
+export const DAY_ROLES          = Object.freeze(['setup', 'build', 'validate', 'ship', 'review', 'rest']);
 export const GOAL_CATEGORIES    = Object.freeze(['project', 'startup', 'content', 'skill', 'career', 'study', 'habit', 'fitness', 'other']);
 export const BLOCKER_CATEGORIES = Object.freeze(['time', 'skill_gap', 'no_access', 'unclear', 'motivation', 'external', 'other']);
 
@@ -20,32 +22,38 @@ export const BLOCKER_CATEGORIES = Object.freeze(['time', 'skill_gap', 'no_access
 
 export function createDefaultUserV2() {
   return {
-    id:              '',
-    email:           '',
-    name:            '',
-    goalCategory:    'other',
-    createdAt:       isoDateNow(),
-    experienceLevel: 'intermediate',
-    dailyHours:      '2-4',
-    currentProject:  '',
-    weekGoal:        '',
-    whyItMatters:    '',
-    triedBefore:     '',
+    id:               '',
+    email:            '',
+    name:             '',
+    goalCategory:     'other',
+    createdAt:        isoDateNow(),
+    experienceLevel:  'intermediate',
+    dailyHours:       '2-4',
+    currentProject:   '',
+    weekGoal:         '',
+    whyItMatters:     '',
+    triedBefore:      '',
+    preferredRestDay: null,   // 1–7: position within each 7-day week (1=first day, 7=last). null = no rest day (Spark).
   };
 }
 
 export function createDefaultTrackV2() {
   return {
-    id:               '',
-    goal:             '',
-    goalCategory:     'other',
-    blockerHint:      '',
-    generatedAt:      '',
-    startDate:        '',
-    status:           'active',
-    currentDayNumber: 1,
-    days:             [],
-    continuationOf:   null,
+    id:                '',
+    goal:              '',
+    goalCategory:      'other',
+    blockerHint:       '',
+    generatedAt:       '',
+    startDate:         '',
+    status:            'active',
+    currentDayNumber:  1,
+    currentWeekNumber: 1,      // 1–4 for Track, null for Spark
+    kind:              'track', // 'spark' | 'track'
+    totalDays:         28,     // 7 for Spark, 28 for Track (4 weeks × 7 days)
+    phases:            null,   // Phase[] for Track, null for Spark
+    restDayPosition:   null,   // 1–7: which day within each week is rest. null = no rest days (Spark).
+    days:              [],
+    continuationOf:    null,
   };
 }
 
@@ -131,6 +139,7 @@ const DAY_TRANSITIONS = Object.freeze({
   rescued:     [],
   skipped:     [],
   missed:      [],
+  rest:        [], // rest days are fixed; they never transition to another status
 });
 
 export function canTransitionDayStatus(from, to) {
@@ -145,6 +154,11 @@ export function normalizeDayStatus(value) {
 export function normalizeTrackStatus(value) {
   const s = String(value || '').toLowerCase();
   return TRACK_STATUSES.includes(s) ? s : 'active';
+}
+
+export function normalizeTrackKind(value) {
+  const s = String(value || '').toLowerCase();
+  return TRACK_KINDS.includes(s) ? s : 'track';
 }
 
 export function normalizeGoalCategory(value) {

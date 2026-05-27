@@ -31,18 +31,21 @@ export function render(container, state, actions) {
 // ── Page builder ──────────────────────────────────────────────────────────────
 
 function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoading, continuing, telegram, user, entries, days) {
-  const why      = String(user?.whyItMatters || '').trim();
-  const weekGoal = String(user?.weekGoal     || '').trim();
+  const why       = String(user?.whyItMatters || '').trim();
+  const weekGoal  = String(user?.weekGoal     || '').trim();
+  const isSpark   = track.kind === 'spark';
+  const totalDays = track.totalDays || (isSpark ? 7 : 28);
+  const typeLabel = isSpark ? '7-day Spark' : `${totalDays}-day Track`;
 
   return `
     <div class="v2-page">
 
       <div class="v2-kicker" style="margin-bottom:8px">
-        <span class="v2-badge v2-badge--done">Week complete</span>
+        <span class="v2-badge v2-badge--done">${isSpark ? 'Spark complete' : 'Track complete'}</span>
       </div>
-      <h1 class="v2-h1" style="margin-bottom:6px">Your 7-day track is complete.</h1>
+      <h1 class="v2-h1" style="margin-bottom:6px">Your ${typeLabel} is complete.</h1>
       <p class="v2-sub">${esc(track.goal || '')}</p>
-      ${weekGoal ? `<p class="v2-muted-text" style="margin-top:4px">By Day 7 you wanted: ${esc(weekGoal)}</p>` : ''}
+      ${weekGoal ? `<p class="v2-muted-text" style="margin-top:4px">By Day ${totalDays} you wanted: ${esc(weekGoal)}</p>` : ''}
       ${why ? `<blockquote class="v2-recap-why">${esc(why)}</blockquote>` : ''}
 
       ${renderResultGrid(stats)}
@@ -50,7 +53,7 @@ function buildPage(track, stats, patternSummary, bestFormat, recapText, recapLoa
       ${bestFormat     ? renderFormatCard(bestFormat)      : ''}
       ${renderAIReflection(recapText, recapLoading)}
       ${renderTimeline(days, entries, track)}
-      ${renderCTAs(continuing, telegram)}
+      ${renderCTAs(continuing, telegram, isSpark)}
 
     </div>`;
 }
@@ -86,7 +89,7 @@ function renderTimeline(days, entries, track) {
 function computeStats(track, entries, days) {
   const te = entries.filter((e) => e.trackId === track.id);
   return {
-    total:         days.length || 7,
+    total:         days.length || track.totalDays || 7,
     daysReturned:  te.length,
     done:          te.filter((e) => e.outcome === 'done').length,
     rescued:       te.filter((e) => e.outcome === 'rescued').length,
@@ -200,14 +203,19 @@ function renderAIReflection(text, loading) {
 
 // ── CTAs ──────────────────────────────────────────────────────────────────────
 
-function renderCTAs(continuing, telegram) {
+function renderCTAs(continuing, telegram, isSpark) {
+  const continueLbl = continuing
+    ? (isSpark ? 'Building your 28-day Track…' : 'Generating next 30 days…')
+    : (isSpark ? 'Continue → 28-day Track' : 'Extend +30 days →');
+  const newLbl = isSpark ? 'Start something new' : 'Pivot to new goal';
+
   return `
     <div class="v2-row v2-row--col" style="gap:10px;margin-bottom:12px">
       <button id="recap-continue" ${continuing ? 'disabled' : ''} class="v2-btn v2-btn--primary v2-btn--lg v2-btn--full">
-        ${esc(continuing ? 'Generating next week…' : 'Continue this goal — next 7 days →')}
+        ${esc(continueLbl)}
       </button>
       <button id="recap-new" class="v2-btn v2-btn--secondary v2-btn--full">
-        Start a new 7-day track
+        ${esc(newLbl)}
       </button>
     </div>
 
@@ -272,8 +280,9 @@ function buildExportText(track, history) {
     return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} (×${n})`).join(', ');
   })();
 
+  const exportKind = track.kind === 'spark' ? '7-day Spark' : `${track.totalDays || 28}-day Track`;
   return [
-    'StriveAI — 7-Day Pattern Export',
+    `StriveAI — ${exportKind} Export`,
     `Goal: ${track.goal || '—'}`,
     `Category: ${track.goalCategory || '—'}`,
     `Start: ${track.startDate || '—'}`,

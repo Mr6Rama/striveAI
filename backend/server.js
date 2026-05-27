@@ -124,7 +124,10 @@ const AI_ACTIONS = new Set([
   // v1 actions — kept for compatibility
   'roadmap', 'tasks', 'tasks_skeleton', 'task_detail', 'task_audit', 'goals_review', 'note_process', 'session_review', 'chat', 'goal_complete',
   // v2 actions
-  'track_generate', 'track_continue', 'agent_steps', 'agent_hint', 'rescue_action', 'action_kit', 'day7_recap', 'adapt_day', 'v2_proof_check',
+  'track_generate', 'track_continue',           // deprecated aliases, kept for back-compat
+  'spark_generate', 'track_generate_30',         // new generation actions
+  'spark_to_track_extend', 'track_continue_30',  // new continuation actions
+  'agent_steps', 'agent_hint', 'rescue_action', 'action_kit', 'day7_recap', 'adapt_day', 'v2_proof_check',
 ]);
 const ACTION_AI_CONFIG = Object.freeze({
   default: {
@@ -288,13 +291,50 @@ const ACTION_AI_CONFIG = Object.freeze({
     topP: 1,
     contextLimits: { promptChars: 1500, systemChars: 600, totalChars: 2000 },
   },
+  spark_generate: {
+    model: OPENAI_MODEL,
+    maxCompletionTokens: 1100,
+    reasoningEffort: 'minimal',
+    temperature: 0.9,
+    topP: 1,
+    contextLimits: { promptChars: 5000, systemChars: 1400, totalChars: 6000 },
+  },
+  track_generate_30: {
+    model: OPENAI_MODEL,
+    maxCompletionTokens: 3500,
+    reasoningEffort: 'minimal',
+    temperature: 0.7,
+    topP: 1,
+    contextLimits: { promptChars: 6000, systemChars: 1600, totalChars: 7400 },
+  },
+  spark_to_track_extend: {
+    model: OPENAI_MODEL,
+    maxCompletionTokens: 3500,
+    reasoningEffort: 'minimal',
+    temperature: 0.7,
+    topP: 1,
+    contextLimits: { promptChars: 6000, systemChars: 1600, totalChars: 7400 },
+  },
+  track_continue_30: {
+    model: OPENAI_MODEL,
+    maxCompletionTokens: 3500,
+    reasoningEffort: 'minimal',
+    temperature: 0.7,
+    topP: 1,
+    contextLimits: { promptChars: 6000, systemChars: 1600, totalChars: 7400 },
+  },
 });
 const OPENAI_RESPONSE_CACHE_TTL_MS = 15 * 60 * 1000;
 const OPENAI_RESPONSE_CACHE_MAX_SIZE = 200;
 const openAIResponseCache = new Map();
 const TASK_GENERATION_ACTIONS = new Set(['tasks', 'tasks_skeleton', 'task_detail']);
 // v2 actions that return JSON (eligible for deterministic fallback)
-const V2_JSON_ACTIONS = new Set(['track_generate', 'track_continue', 'agent_steps', 'rescue_action', 'action_kit', 'adapt_day', 'v2_proof_check']);
+const V2_JSON_ACTIONS = new Set([
+  'track_generate', 'track_continue',          // deprecated aliases
+  'spark_generate', 'track_generate_30',
+  'spark_to_track_extend', 'track_continue_30',
+  'agent_steps', 'rescue_action', 'action_kit', 'adapt_day', 'v2_proof_check',
+]);
 // v2 actions that return plain text
 const V2_PLAINTEXT_ACTIONS = new Set(['agent_hint', 'day7_recap']);
 
@@ -394,7 +434,9 @@ function parseV2PromptField(prompt, fieldName) {
 function buildV2Fallback(action, prompt) {
   const safePrompt = String(prompt || '');
 
-  if (action === 'track_generate' || action === 'track_continue') {
+  if (action === 'track_generate' || action === 'track_continue' ||
+      action === 'spark_generate' || action === 'track_generate_30' ||
+      action === 'spark_to_track_extend' || action === 'track_continue_30') {
     const goal = parseV2PromptField(safePrompt, 'Goal') || 'your goal';
     const rawCat = parseV2PromptField(safePrompt, 'Category').toLowerCase();
     const cat = Object.prototype.hasOwnProperty.call(V2_TRACK_FALLBACK_DAYS, rawCat) ? rawCat : 'other';

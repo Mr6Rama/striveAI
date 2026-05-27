@@ -1,5 +1,4 @@
 // v2 Today's Action screen — primary daily execution screen.
-import { renderRoadmap } from '../components/roadmap.js';
 import { buildMorningBrief } from '../../domain/morning-brief.js';
 import { computeStreaks, consecutiveMissedDays } from '../../domain/streak.js';
 import { isoDateNow } from '../../core/state-model.js';
@@ -129,7 +128,7 @@ function renderActive(container, track, today, dayPlan, state, actions) {
 
 function renderComplete(container, track, today, dayPlan, status, actions) {
   const dayNum  = dayPlan.dayNumber || 1;
-  const isLast  = dayNum >= 7;
+  const isLast  = dayNum >= (track.totalDays || 7);
   const cardCls = status === 'rescued' ? 'v2-card v2-card--blue' : 'v2-card v2-card--green';
   const label   = status === 'rescued' ? 'Rescued ✓' : 'Done ✓';
 
@@ -223,22 +222,24 @@ function renderInactive(container, track, today, dayPlan, status, actions) {
 // ── Shared components ──────────────────────────────────────────────────────
 
 function topBar(dayNum, status, goal, track) {
-  const days  = Array.isArray(track?.days) ? track.days.map((d) => ({
-    dayNumber: d.dayNumber,
-    status: d.status || 'pending',
-    title: d.title,
-  })) : [];
-  const roadmap = days.length ? renderRoadmap({ days, currentDay: dayNum, variant: 'compact' }) : '';
-  // Hide the redundant "PENDING" badge on Today — when the page is in its
-  // active state the context already says "do this now". Only show a badge
-  // for non-default outcomes (done / rescued / blocked / skipped / missed).
+  const totalDays  = track?.totalDays || 7;
+  const kind       = track?.kind || 'spark';
+  const weekNum    = track?.currentWeekNumber || null;
+  const phases     = Array.isArray(track?.phases) ? track.phases : [];
+  const phase      = weekNum ? phases.find((p) => p.weekNumber === weekNum) : null;
+
+  // Compact breadcrumb: "Week 2 · Day 9 of 28 — Build" for Track, "Day 3 of 7 — Spark" for Spark
+  const breadcrumb = kind === 'track' && weekNum
+    ? `Week ${weekNum} · Day ${dayNum} of ${totalDays}${phase ? ` — ${esc(phase.name)}` : ''}`
+    : `Day ${dayNum} of ${totalDays} — Spark`;
+
+  // Only show badge for non-default, non-trivial outcomes
   const showBadge = status && status !== 'pending' && status !== 'in_progress';
   const cls   = STATUS_CLASS[status] || 'v2-badge--pending';
   const label = STATUS_LABEL[status] || String(status).toUpperCase();
   return `
-    ${roadmap}
     <div class="v2-kicker" style="margin-bottom:6px">
-      <span>Day ${dayNum} of 7</span>
+      <span>${breadcrumb}</span>
       ${showBadge ? `<span class="v2-badge ${cls}">${esc(label)}</span>` : ''}
     </div>
     <p class="v2-muted-text" style="margin-bottom:16px">${esc(goal || '')}</p>`;

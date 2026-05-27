@@ -35,9 +35,11 @@ export function render(container, state, actions) {
     ? `${pingLabel} · ${pingHour}:00 UTC (@${esc(tg.username || 'you')})`
     : 'Not connected — add Telegram in Settings';
 
-  const intensity = INTENSITY_LABELS[state.user?.dailyHours] || state.user?.dailyHours || '2–4 hours/day';
-  const category  = CATEGORY_LABELS[track.goalCategory] || track.goalCategory || '';
-  const blocker   = BLOCKER_LABELS[track.blockerHint]   || track.blockerHint  || '';
+  const intensity  = INTENSITY_LABELS[state.user?.dailyHours] || state.user?.dailyHours || '2–4 hours/day';
+  const category   = CATEGORY_LABELS[track.goalCategory] || track.goalCategory || '';
+  const blocker    = BLOCKER_LABELS[track.blockerHint]   || track.blockerHint  || '';
+  const isSpark    = track.kind === 'spark';
+  const planLabel  = isSpark ? '7-day Spark' : `${track.totalDays || 28}-day Track`;
 
   container.innerHTML = `
     <div class="v2-page">
@@ -45,7 +47,7 @@ export function render(container, state, actions) {
       <div class="v2-kicker" style="margin-bottom:10px">
         <span class="v2-badge v2-badge--done">Plan ready</span>
       </div>
-      <h1 class="v2-h1" style="margin-bottom:6px">Your 7-day track is ready</h1>
+      <h1 class="v2-h1" style="margin-bottom:6px">Your ${planLabel} is ready</h1>
       <p class="v2-sub">${esc(track.goal)}</p>
 
       <div class="v2-card" style="margin-bottom:20px">

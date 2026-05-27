@@ -21,8 +21,8 @@ export function rolloverIfNeeded(state, nowIso) {
     return { state, didRollover: false, missedDayNumbers: [] };
   }
 
-  // Find all past-due days still pending
-  const overdue = track.days.filter((d) => d.date && d.date < now && d.status === 'pending');
+  // Find all past-due days still pending (exclude rest days — they never count as missed)
+  const overdue = track.days.filter((d) => d.date && d.date < now && d.status === 'pending' && !d.isRestDay);
 
   // Find what today's day plan should be
   const todayDayPlan = track.days.find((d) => d.date === now);
@@ -213,8 +213,11 @@ export function deriveInsight(history, adaptationNote) {
 // app.js checks nextDayPlan.adaptedAt before calling AI to prevent duplicates.
 
 export function shouldTriggerAdaptation(outcome, analysis, nextDayPlan) {
-  // No next day plan provided (Day 7 or end of track)
+  // No next day plan provided (end of track)
   if (!nextDayPlan) return { should: false, trigger: '' };
+
+  // Never adapt rest days
+  if (nextDayPlan.isRestDay || nextDayPlan.role === 'rest') return { should: false, trigger: '' };
 
   // Already adapted for this day — do not call AI again
   if (nextDayPlan.adaptedAt) return { should: false, trigger: 'already_adapted' };
@@ -294,7 +297,7 @@ export function buildPatternContext(history) {
 export function isTrackComplete(track) {
   if (!track?.days?.length) return false;
   return track.days.every((d) =>
-    ['done', 'rescued', 'missed', 'skipped', 'blocked'].includes(d.status)
+    ['done', 'rescued', 'missed', 'skipped', 'blocked', 'rest'].includes(d.status)
   );
 }
 

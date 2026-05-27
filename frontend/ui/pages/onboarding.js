@@ -58,20 +58,30 @@ const GOAL_EXAMPLES = {
 
 const DRAFT_KEY    = 'sv2_onboarding_draft';
 const STEP_KEY     = 'sv2_onboarding_step';
-const TOTAL_STEPS  = 5;
+const TOTAL_STEPS  = 7;
+
+// Position within each 7-day week that becomes a rest day (1 = first day, 7 = last)
+const REST_DAY_OPTIONS = [
+  { id: 4, label: 'Mid-week',  sub: 'Day 4 of each week' },
+  { id: 5, label: 'Day 5',     sub: 'One before weekend' },
+  { id: 6, label: 'Day 6',     sub: 'Second-to-last day' },
+  { id: 7, label: 'End of week', sub: 'Day 7 — last day' },
+];
 
 function defaultDraft() {
   return {
-    goalCategory:  '',
-    specificGoal:  '',
-    weekGoal:      '',
-    currentProject:'',
-    triedBefore:   '',
-    blocker:       '',
-    dailyHours:    '2-4',
-    ifThenRules:   [],
-    pingSelection: 'morning',
-    pingHour:      9,
+    goalCategory:   '',
+    specificGoal:   '',
+    weekGoal:       '',
+    currentProject: '',
+    triedBefore:    '',
+    blocker:        '',
+    dailyHours:     '2-4',
+    ifThenRules:    [],
+    pingSelection:  'morning',
+    pingHour:       9,
+    trackKind:      'track', // 'spark' | 'track'
+    restDayPosition: 6,      // 1–7: which day position within each 7-day week is rest
     // kept for API compat — not shown in UI
     escalationRule: 'none',
     whyItMatters:   '',
@@ -123,10 +133,12 @@ export function render(container, state, actions) {
 
 function renderStep(container) {
   switch (currentStep) {
-    case 1: renderGoal(container);     break;
-    case 2: renderOutcome(container);  break;
-    case 3: renderObstacle(container); break;
-    case 4: renderRules(container);    break;
+    case 1: renderGoal(container);       break;
+    case 2: renderOutcome(container);    break;
+    case 3: renderObstacle(container);   break;
+    case 4: renderRules(container);      break;
+    case 5: renderCommitment(container); break;
+    case 6: renderRestDay(container);    break;
     default: renderSetup(container);
   }
 }
@@ -238,9 +250,9 @@ function renderGoal(container) {
 
 function renderOutcome(container) {
   container.innerHTML = wrap(`
-    ${hdr(2, 'What would make this week a success?', 'This is the target your 7-day plan will be built toward.')}
+    ${hdr(2, 'What would make this a success?', 'This becomes the target your plan is built toward.')}
     <div class="v2-field">
-      <label class="v2-label">By day 7, I want to have…</label>
+      <label class="v2-label">By the end of my track, I want to have…</label>
       <input id="ob-week" type="text" class="v2-input" value="${esc(draft.weekGoal)}"
         placeholder="e.g. A working login page deployed and accessible online"/>
     </div>
@@ -317,16 +329,81 @@ function renderRules(container) {
   container.querySelector('#ob-back')?.addEventListener('click', () => go(3, container));
 }
 
-// ── Step 5: Setup + Confirm ────────────────────────────────────────────────
+// ── Step 5: Commitment (Spark vs Track) ────────────────────────────────────
+
+function renderCommitment(container) {
+  container.innerHTML = wrap(`
+    ${hdr(5, 'How long do you want to commit?')}
+
+    <div class="v2-sel-grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
+      <button data-kind="spark" class="v2-sel-card${draft.trackKind === 'spark' ? ' v2-sel-card--on' : ''}"
+              style="padding:18px 14px;text-align:left">
+        <div style="font-size:1.05rem;font-weight:700;margin-bottom:6px">7-day Spark</div>
+        <div style="font-size:.8rem;color:var(--v2-muted);line-height:1.45">
+          Try the format for a week. Low commitment — see if it fits before going deeper.
+        </div>
+      </button>
+      <button data-kind="track" class="v2-sel-card${draft.trackKind === 'track' ? ' v2-sel-card--on' : ''}"
+              style="padding:18px 14px;text-align:left">
+        <div style="font-size:1.05rem;font-weight:700;margin-bottom:6px">28-day Track ✦</div>
+        <div style="font-size:.8rem;color:var(--v2-muted);line-height:1.45">
+          Four structured phases. One rest day per week. Built to produce a real artifact.
+        </div>
+      </button>
+    </div>
+    ${errDiv()}${nextBtn()}${backBtn()}`);
+
+  container.querySelectorAll('[data-kind]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      draft.trackKind = btn.getAttribute('data-kind');
+      saveDraft();
+      container.querySelectorAll('[data-kind]').forEach((b) => {
+        b.classList.toggle('v2-sel-card--on', b.getAttribute('data-kind') === draft.trackKind);
+      });
+    });
+  });
+
+  container.querySelector('#ob-next')?.addEventListener('click', () => {
+    // Spark skips rest-day step
+    go(draft.trackKind === 'spark' ? 7 : 6, container);
+  });
+  container.querySelector('#ob-back')?.addEventListener('click', () => go(4, container));
+}
+
+// ── Step 6: Rest day (Track only) ─────────────────────────────────────────
+
+function renderRestDay(container) {
+  container.innerHTML = wrap(`
+    ${hdr(6, 'Which day each week is your rest day?',
+             'Active days build toward your goal. The rest day recharges without counting as missed.')}
+    ${selGrid(REST_DAY_OPTIONS.map((o) => ({ ...o, id: String(o.id), label: o.label, sub: o.sub })),
+              String(draft.restDayPosition), 'data-rest', 4)}
+    ${errDiv()}${nextBtn()}${backBtn()}`);
+
+  bindCards(container, 'data-rest',
+    () => String(draft.restDayPosition),
+    (v) => { draft.restDayPosition = Number(v); });
+
+  container.querySelector('#ob-next')?.addEventListener('click', () => {
+    go(7, container);
+  });
+  container.querySelector('#ob-back')?.addEventListener('click', () => go(5, container));
+}
+
+// ── Step 7: Setup + Confirm ────────────────────────────────────────────────
 
 function renderSetup(container) {
   const tg      = lastState?.telegram || {};
   const loading = Boolean(lastState?.ui?.trackGenerating || lastState?.ui?.loading);
   const errText = String(lastState?.ui?.error || '');
 
-  const catLabel = CATEGORIES.find((c) => c.id === draft.goalCategory)?.label || draft.goalCategory;
-  const blkLabel = BLOCKERS.find((b) => b.id === draft.blocker)?.label || draft.blocker;
-  const intLabel = INTENSITIES.find((i) => i.id === draft.dailyHours)?.label || draft.dailyHours;
+  const catLabel  = CATEGORIES.find((c) => c.id === draft.goalCategory)?.label || draft.goalCategory;
+  const blkLabel  = BLOCKERS.find((b) => b.id === draft.blocker)?.label || draft.blocker;
+  const intLabel  = INTENSITIES.find((i) => i.id === draft.dailyHours)?.label || draft.dailyHours;
+  const kindLabel = draft.trackKind === 'spark' ? '7-day Spark' : '28-day Track';
+  const restLabel = draft.trackKind === 'track'
+    ? (REST_DAY_OPTIONS.find((r) => r.id === draft.restDayPosition)?.label || `Day ${draft.restDayPosition}`)
+    : null;
 
   const pingCards = PING_OPTIONS.map((opt) => {
     const on = draft.pingSelection === opt.id;
@@ -343,15 +420,17 @@ function renderSetup(container) {
     </div>`;
 
   container.innerHTML = wrap(`
-    ${hdr(5, 'Review and generate')}
+    ${hdr(7, 'Review and generate')}
 
     <div class="v2-card" style="margin-bottom:20px">
       ${row('Category',     catLabel)}
       ${row('Goal',         (draft.specificGoal || '—').slice(0, 80))}
-      ${row('Day 7 target', (draft.weekGoal     || '—').slice(0, 80))}
+      ${row('Target',       (draft.weekGoal     || '—').slice(0, 80))}
       ${draft.currentProject ? row('Starting from', draft.currentProject.slice(0, 80)) : ''}
       ${row('Main obstacle', blkLabel)}
       ${row('Daily time',    intLabel)}
+      ${row('Track type',   kindLabel)}
+      ${restLabel ? row('Rest day', `${restLabel} each week`) : ''}
     </div>
 
     <div class="v2-section-label" style="margin-bottom:10px">Telegram check-ins <span class="v2-muted-text">(optional)</span></div>
@@ -373,7 +452,8 @@ function renderSetup(container) {
          </div>`}
 
     ${errText ? `<p class="v2-err" style="margin-bottom:12px">${esc(errText)}</p>` : ''}
-    ${nextBtn(loading ? 'Building your track…' : 'Build my 7-day track →', loading)}
+    ${nextBtn(loading ? 'Building your track…' :
+      draft.trackKind === 'spark' ? 'Build my 7-day Spark →' : 'Build my 28-day Track →', loading)}
     ${backBtn()}`);
 
   container.querySelectorAll('[data-ping]').forEach((btn) => {
@@ -414,14 +494,18 @@ function renderSetup(container) {
       await lastActions?.onGenerate?.({
         ...draft,
         goal,
-        // fix: pass blocker under the key that buildTrackPrompt reads
-        blockerHint: draft.blocker,
+        blockerHint:     draft.blocker,
+        trackKind:       draft.trackKind || 'track',
+        restDayPosition: draft.trackKind === 'track' ? (draft.restDayPosition || 6) : null,
       });
       clearOnboardingDraft();
     } catch (_e) { /* error shown via ui.error */ }
   });
 
-  container.querySelector('#ob-back')?.addEventListener('click', () => go(4, container));
+  container.querySelector('#ob-back')?.addEventListener('click', () => {
+    // If Spark was chosen, step 6 was skipped — go back to step 5
+    go(draft.trackKind === 'spark' ? 5 : 6, container);
+  });
 }
 
 // ── Utils ──────────────────────────────────────────────────────────────────

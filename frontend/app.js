@@ -4,7 +4,7 @@ import { createInitialState, createDefaultTodayV2, isoDateNow } from './core/sta
 import { getState, replaceState, subscribe, updateState } from './core/store.js';
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain, clearProgressData } from './services/persistence.js';
-import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay, generateDay7Recap, generateContinuationWeek } from './services/ai-v2.js';
+import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay, generateDay7Recap, generateContinuationWeek, generateSparkToTrackExtend } from './services/ai-v2.js';
 import { rolloverIfNeeded, analyzePatterns, deriveInsight, shouldTriggerAdaptation, applyAdaptResult, isTrackComplete } from './domain/today-engine.js';
 import { resetProofState } from './ui/pages/proof.js';
 import { resetBlockedState } from './ui/pages/blocked.js';
@@ -122,7 +122,10 @@ async function handleGenerate(draft) {
   updateState((s) => { s.ui.trackGenerating = true; s.ui.loading = true; s.ui.error = ''; return s; });
 
   try {
-    const state = getState();
+    const state          = getState();
+    const trackKind      = draft.trackKind || 'track';
+    const restDayPosition = trackKind === 'track' ? (draft.restDayPosition || 6) : null;
+
     const aiData = await generateExecutionTrack({
       goal:             draft.goal,
       goalCategory:     draft.goalCategory,
@@ -133,38 +136,49 @@ async function handleGenerate(draft) {
       weekGoal:         draft.weekGoal || '',
       whyItMatters:     draft.whyItMatters || '',
       triedBefore:      draft.triedBefore || '',
+      trackKind,
+      restDayPosition,
     });
 
     const startDate = isoDateNow();
     const trackId   = `track-${Date.now()}`;
+    const totalDays = trackKind === 'track' ? 28 : 7;
+
     const track = {
-      id:               trackId,
-      goal:             draft.goal,
-      goalCategory:     draft.goalCategory,
-      blockerHint:      draft.blocker,
-      generatedAt:      new Date().toISOString(),
+      id:                trackId,
+      goal:              draft.goal,
+      goalCategory:      draft.goalCategory,
+      blockerHint:       draft.blocker,
+      generatedAt:       new Date().toISOString(),
       startDate,
-      status:           'active',
-      currentDayNumber: 1,
-      days:             aiData.days.map((d, i) => ({
+      status:            'active',
+      currentDayNumber:  1,
+      currentWeekNumber: 1,
+      kind:              trackKind,
+      totalDays,
+      phases:            aiData.phases || null,
+      restDayPosition,
+      days:              aiData.days.map((d, i) => ({
         ...d,
-        dayNumber:  i + 1,
-        status:     'pending',
-        date:       addDays(startDate, i),
+        dayNumber: i + 1,
+        // rest days keep their 'rest' status; active days start pending
+        status:    d.isRestDay ? 'rest' : 'pending',
+        date:      addDays(startDate, i),
       })),
       continuationOf: null,
     };
 
     const today   = createDefaultTodayV2(startDate, 1);
     const domains = {
-      user:     {
+      user: {
         ...state.user,
-        goalCategory:   draft.goalCategory,
-        dailyHours:     draft.dailyHours,
-        currentProject: draft.currentProject || state.user.currentProject || '',
-        weekGoal:       draft.weekGoal || state.user.weekGoal || '',
-        whyItMatters:   draft.whyItMatters || state.user.whyItMatters || '',
-        triedBefore:    draft.triedBefore || state.user.triedBefore || '',
+        goalCategory:     draft.goalCategory,
+        dailyHours:       draft.dailyHours,
+        currentProject:   draft.currentProject || state.user.currentProject || '',
+        weekGoal:         draft.weekGoal || state.user.weekGoal || '',
+        whyItMatters:     draft.whyItMatters || state.user.whyItMatters || '',
+        triedBefore:      draft.triedBefore || state.user.triedBefore || '',
+        preferredRestDay: restDayPosition,
       },
       track,
       today,
@@ -572,7 +586,7 @@ async function maybeAdaptNextDay(outcome) {
     const state       = getState();
     const { track, history } = state;
     const nextDayNum  = (track.currentDayNumber || 1) + 1;
-    if (nextDayNum > 7) return;
+    if (nextDayNum > (track.totalDays || 7)) return;
 
     const nextDayPlan = track.days.find((d) => d.dayNumber === nextDayNum);
     const analysis    = analyzePatterns(history);
@@ -611,36 +625,46 @@ async function handleRecapLoadReflection() {
 
 async function handleRecapContinue({ recapText }) {
   const state = getState();
-  const { track, history } = state;
+  const { track } = state;
 
   updateState((s) => { s.ui.trackContinuing = true; return s; });
   try {
-    const aiData = await generateContinuationWeek(
-      track,
-      track.days,
-      recapText || state.recapText || '',
-      'continue'
-    );
+    const isSpark = track.kind === 'spark';
+
+    // Spark → upgrade to 28-day Track; Track → extend same kind with continuation
+    const aiData = isSpark
+      ? await generateSparkToTrackExtend(track, track.days, state.history)
+      : await generateContinuationWeek(track, track.days, recapText || state.recapText || '', 'continue');
 
     // Archive the current track
-    const archived = buildArchivedTrack(track, state.history.entries);
+    const archived  = buildArchivedTrack(track, state.history.entries);
     const startDate = isoDateNow();
     const trackId   = `track-${Date.now()}`;
 
+    // When upgrading Spark→Track, always create a 28-day Track
+    const newKind       = isSpark ? 'track' : (track.kind || 'track');
+    const newTotalDays  = isSpark ? 28 : (track.totalDays || 28);
+    const newRestPos    = isSpark ? (state.user?.preferredRestDay || 6) : (track.restDayPosition || null);
+
     const newTrack = {
-      id:               trackId,
-      goal:             track.goal,
-      goalCategory:     track.goalCategory,
-      blockerHint:      track.blockerHint,
-      generatedAt:      new Date().toISOString(),
+      id:                trackId,
+      goal:              track.goal,
+      goalCategory:      track.goalCategory,
+      blockerHint:       track.blockerHint,
+      generatedAt:       new Date().toISOString(),
       startDate,
-      status:           'active',
-      currentDayNumber: 1,
-      days:             aiData.days.map((d, i) => ({
+      status:            'active',
+      currentDayNumber:  1,
+      currentWeekNumber: 1,
+      kind:              newKind,
+      totalDays:         newTotalDays,
+      phases:            aiData.phases || null,
+      restDayPosition:   newRestPos,
+      days:              aiData.days.map((d, i) => ({
         ...d,
-        dayNumber:  i + 1,
-        status:     'pending',
-        date:       addDays(startDate, i),
+        dayNumber: i + 1,
+        status:    d.isRestDay ? 'rest' : 'pending',
+        date:      addDays(startDate, i),
       })),
       continuationOf: track.id,
     };
