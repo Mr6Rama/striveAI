@@ -69,6 +69,7 @@ export function createDefaultTodayV2(date, dayNumber) {
     actionKit:       null,
     rescueAction:    null,
     rescueRepeating: false,
+    blockerDiagnosis: null,  // { stuckAt, tried } — set during diagnosis phase
     blockerText:    '',
     skipReason:     '',
     outcomeAt:      '',

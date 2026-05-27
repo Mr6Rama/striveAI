@@ -226,9 +226,9 @@ export async function checkProof(day, proofInput, track) {
   } catch (_e) { return fallbackProofCheck(); }
 }
 
-export async function diagnoseBlocker(day, blockerReason, track, failureMemory) {
+export async function diagnoseBlocker(day, blockerReason, track, failureMemory, diagnosis) {
   try {
-    const data = await requestJson({ action: 'rescue_action', prompt: buildRescuePrompt(day, blockerReason, track, failureMemory), systemCtx: RESCUE_CTX, schema: rescueSchema(), maxTokens: 500 });
+    const data = await requestJson({ action: 'rescue_action', prompt: buildRescuePrompt(day, blockerReason, track, failureMemory, diagnosis), systemCtx: RESCUE_CTX, schema: rescueSchema(), maxTokens: 500 });
     if (!data?.rescueTitle || !Array.isArray(data?.steps)) throw new Error('invalid rescue');
     return { rescueTitle: String(data.rescueTitle).slice(0, 100), steps: data.steps.slice(0, 3).map(String), reframeNote: String(data.reframeNote || '').slice(0, 160), source: 'ai' };
   } catch (_e) { return fallbackRescue(day); }
@@ -413,10 +413,13 @@ Verdict: met (clearly satisfies criteria) | partial (real progress, not fully me
 Be practical. Partial credit is fine if genuine progress is visible. Return JSON only.`;
 }
 
-function buildRescuePrompt(day, blockerReason, track, failureMemory) {
+function buildRescuePrompt(day, blockerReason, track, failureMemory, diagnosis) {
+  const diagCtx = diagnosis?.stuckAt
+    ? `\nWhere they got stuck: ${String(diagnosis.stuckAt).slice(0, 200)}\nWhat they tried: ${String(diagnosis.tried || 'nothing mentioned').slice(0, 200)}`
+    : '';
   return `Original task: ${String(day?.title || '').trim()}
 Goal: ${String(track?.goal || '').trim()}
-Blocker: ${String(blockerReason || 'not specified').trim()}
+Blocker: ${String(blockerReason || 'not specified').trim()}${diagCtx}
 Past blocker patterns: ${buildPatternSummary(failureMemory)}
 
 Generate a rescue action completable in 5–30 minutes — smaller and more accessible than the original. Steps must be concrete, no advice or motivation.`;

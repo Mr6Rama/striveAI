@@ -5,7 +5,7 @@ import { getState, replaceState, subscribe, updateState } from './core/store.js'
 import { initAuth, onAuthChanged, signIn, signUp, signOut, sendPasswordReset, authErrorMessage, getDb } from './services/auth.js';
 import { loadPersistedDomains, saveDomains, saveDomain, clearProgressData } from './services/persistence.js';
 import { generateExecutionTrack, generateAgentSteps, checkProof, generateActionKit, diagnoseBlocker, adaptNextDay, generateDay7Recap, generateContinuationWeek, generateSparkToTrackExtend } from './services/ai-v2.js';
-import { sharpenGoal, generateWeekRecap } from './services/ai-v2-coaching.js';
+import { sharpenGoal, generateWeekRecap, getStepFeedback } from './services/ai-v2-coaching.js';
 import { rolloverIfNeeded, analyzePatterns, deriveInsight, shouldTriggerAdaptation, applyAdaptResult, isTrackComplete, isWeekBoundary } from './domain/today-engine.js';
 import { resetProofState } from './ui/pages/proof.js';
 import { resetBlockedState } from './ui/pages/blocked.js';
@@ -389,6 +389,19 @@ async function handleAgentStepDone({ stepIndex, note }) {
     return s;
   });
   await saveDomain('today', getState().today, { userId: currentUser?.uid, db: getDb() });
+
+  // Fire-and-forget micro feedback chip (non-blocking, non-fatal)
+  const step = getState().today.agentSession?.steps?.[stepIndex];
+  if (step && String(note || '').trim().length >= 10) {
+    getStepFeedback(step, note).then((feedback) => {
+      if (!feedback) return;
+      updateState((s) => {
+        const st = s.today.agentSession?.steps?.[stepIndex];
+        if (st) { st.feedbackTip = String(feedback.tip || ''); st.feedbackOk = Boolean(feedback.ok); }
+        return s;
+      });
+    }).catch(() => {});
+  }
 }
 
 async function handleAgentProofSubmit({ type, value }) {
@@ -458,7 +471,7 @@ function handleProofReset() {
 
 // ── Blocked / Skipped handlers ─────────────────────────────────────────────
 
-async function handleBlockerDiagnose({ reasonText, category, isSkip }) {
+async function handleBlockerDiagnose({ reasonText, category, isSkip, diagnosis }) {
   const state  = getState();
   const { track, today, history } = state;
   const dayNum  = track.currentDayNumber || today.dayNumber || 1;
@@ -467,9 +480,10 @@ async function handleBlockerDiagnose({ reasonText, category, isSkip }) {
   // Mark today as blocked/skipped in state so it persists
   const todayStatus = isSkip ? 'skipped' : 'blocked';
   updateState((s) => {
-    s.today.status      = todayStatus;
-    s.today.blockerText = reasonText;
-    s.ui.rescueLoading  = true;
+    s.today.status           = todayStatus;
+    s.today.blockerText      = reasonText;
+    s.today.blockerDiagnosis = diagnosis || null;
+    s.ui.rescueLoading       = true;
     return s;
   });
 
@@ -481,7 +495,7 @@ async function handleBlockerDiagnose({ reasonText, category, isSkip }) {
   const repeating = recentSameCategory.length >= 1;
 
   try {
-    const rescue = await diagnoseBlocker(dayPlan, reasonText, track, history.failurePatterns);
+    const rescue = await diagnoseBlocker(dayPlan, reasonText, track, history.failurePatterns, diagnosis);
 
     // Build and persist failure pattern entry
     const pattern = {

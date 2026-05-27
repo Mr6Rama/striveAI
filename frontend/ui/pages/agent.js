@@ -319,9 +319,14 @@ function stepList(steps, currentIndex, note, loading) {
 
   steps.forEach((step, i) => {
     if (i < currentIndex) {
+      const tip     = String(step.feedbackTip || '').trim();
+      const tipOk   = Boolean(step.feedbackOk);
+      const tipChip = tip
+        ? `<span style="font-size:.75rem;color:${tipOk ? 'var(--v2-green)' : 'var(--v2-amber)'};display:block;margin-top:2px">${tipOk ? '✓ ' : '→ '}${esc(tip)}</span>`
+        : '';
       parts.push(`<div class="v2-step-done-row">
         <span style="color:var(--v2-green);flex-shrink:0">✓</span>
-        <span style="color:var(--v2-muted)">${esc(step.text)}</span>
+        <div><span style="color:var(--v2-muted)">${esc(step.text)}</span>${tipChip}</div>
       </div>`);
       return;
     }
